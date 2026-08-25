@@ -10,6 +10,21 @@ from apps.accounts.models import UserRole
 pytestmark = pytest.mark.django_db
 
 
+def test_create_user_requires_username(user_data):
+    user_data["username"] = ""
+
+    with pytest.raises(ValueError, match="username"):
+        get_user_model().objects.create_user(**user_data)
+
+
+def test_create_user_normalizes_username(user_data):
+    user_data["username"] = "ａｌｉｃｅ"
+
+    user = get_user_model().objects.create_user(**user_data)
+
+    assert user.username == "alice"
+
+
 def test_create_user_requires_email(user_data):
     user_data["email"] = ""
 
