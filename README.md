@@ -32,9 +32,13 @@ Create a PostgreSQL database and login role. For example, from `psql` as a
 database administrator:
 
 ```sql
-CREATE USER salesmind WITH PASSWORD 'choose-a-local-password';
+CREATE USER salesmind WITH PASSWORD 'choose-a-local-password' CREATEDB;
 CREATE DATABASE salesmind OWNER salesmind;
 ```
+
+`CREATEDB` is required for this local development role because Django's test
+runner creates a temporary PostgreSQL test database. A production application
+role should follow least privilege and must not receive `CREATEDB`.
 
 Create the virtual environment and install the pinned dependencies:
 
