@@ -1,8 +1,8 @@
-"""Explicit, safe serializers for Customer APIs."""
+"""Explicit, safe serializers for sales-domain APIs."""
 
 from rest_framework import serializers
 
-from apps.accounts.models import UserRole
+from apps.accounts.models import User, UserRole
 
 from ..models import Customer, Opportunity
 
@@ -78,3 +78,85 @@ class CustomerSearchSerializer(_CustomerReadSerializer):
 
 class CustomerDetailSerializer(_CustomerReadSerializer):
     """Safe Customer shape returned from retrieve."""
+
+
+class RejectForbiddenFieldsMixin:
+    """Turn client attempts to set server-controlled fields into 400 errors."""
+
+    forbidden_fields = ()
+
+    def to_internal_value(self, data):
+        errors = {
+            field: "This field is controlled by the server."
+            for field in self.forbidden_fields
+            if field in data
+        }
+        if errors:
+            raise serializers.ValidationError(errors)
+        return super().to_internal_value(data)
+
+
+class OpportunityListSerializer(serializers.ModelSerializer):
+    """Compact safe representation for an Opportunity collection."""
+
+    class Meta:
+        model = Opportunity
+        fields = (
+            "id",
+            "project_name",
+            "customer",
+            "sales_owner",
+            "presales_owner",
+            "stage",
+            "status",
+            "budget",
+            "expected_launch_date",
+            "updated_at",
+        )
+        read_only_fields = fields
+
+
+class OpportunityDetailSerializer(serializers.ModelSerializer):
+    """Full read shape for an Opportunity visible to an authorized user."""
+
+    class Meta:
+        model = Opportunity
+        fields = (
+            "id",
+            "project_name",
+            "customer",
+            "sales_owner",
+            "presales_owner",
+            "raw_requirement",
+            "budget",
+            "stage",
+            "status",
+            "expected_launch_date",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields
+
+
+class OpportunityCreateSerializer(RejectForbiddenFieldsMixin, serializers.ModelSerializer):
+    """Accept only Sales-controlled creation fields for an Opportunity."""
+
+    presales_owner = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.filter(is_active=True, role=UserRole.PRESALES),
+        allow_null=True,
+        required=False,
+    )
+    forbidden_fields = ("sales_owner", "created_by", "stage", "status")
+
+    class Meta:
+        model = Opportunity
+        fields = (
+            "id",
+            "project_name",
+            "customer",
+            "presales_owner",
+            "raw_requirement",
+            "budget",
+            "expected_launch_date",
+        )
+        read_only_fields = ("id",)

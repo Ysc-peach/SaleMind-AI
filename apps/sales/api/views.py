@@ -5,12 +5,17 @@ from rest_framework import mixins, viewsets
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
+from apps.accounts.models import UserRole
+
 from .pagination import DefaultPageNumberPagination
-from .permissions import CustomerPermission
+from .permissions import CustomerPermission, OpportunityPermission
 from .serializers import (
     CustomerCreateSerializer,
     CustomerDetailSerializer,
     CustomerSearchSerializer,
+    OpportunityCreateSerializer,
+    OpportunityDetailSerializer,
+    OpportunityListSerializer,
 )
 from ..models import Customer, Opportunity, OpportunityStatus
 
@@ -77,3 +82,43 @@ class CustomerViewSet(
             return self.get_paginated_response(serializer.data)
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
+
+
+class OpportunityViewSet(
+    mixins.ListModelMixin,
+    mixins.CreateModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Expose only role-filtered Opportunity reads and Sales creation."""
+
+    queryset = Opportunity.objects.all()
+    permission_classes = (OpportunityPermission,)
+    pagination_class = DefaultPageNumberPagination
+    http_method_names = ["get", "post", "head", "options"]
+
+    def get_serializer_class(self):
+        action = getattr(self, "action", None)
+        if action == "create":
+            return OpportunityCreateSerializer
+        if action == "list":
+            return OpportunityListSerializer
+        return OpportunityDetailSerializer
+
+    def get_queryset(self):
+        queryset = Opportunity.objects.select_related(
+            "customer", "sales_owner", "presales_owner", "created_by"
+        )
+        role = self.request.user.role
+
+        if role == UserRole.SALES:
+            queryset = queryset.filter(sales_owner=self.request.user)
+        elif role == UserRole.PRESALES:
+            queryset = queryset.filter(presales_owner=self.request.user)
+        elif role != UserRole.ADMIN:
+            queryset = queryset.none()
+
+        return queryset.order_by("-updated_at", "-id")
+
+    def perform_create(self, serializer):
+        serializer.save(sales_owner=self.request.user, created_by=self.request.user)

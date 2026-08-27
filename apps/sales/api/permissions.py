@@ -13,3 +13,20 @@ class CustomerPermission(BasePermission):
             request.user.is_authenticated
             and request.user.role in (UserRole.ADMIN, UserRole.SALES)
         )
+
+
+class OpportunityPermission(BasePermission):
+    """Allow read access by business role and creation by Sales only."""
+
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+
+        if request.method == "POST":
+            return request.user.role == UserRole.SALES
+
+        return request.user.role in (
+            UserRole.ADMIN,
+            UserRole.SALES,
+            UserRole.PRESALES,
+        )
