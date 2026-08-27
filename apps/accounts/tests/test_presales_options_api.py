@@ -4,6 +4,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
+from apps.accounts.api.views import PresalesOptionListView
 from apps.accounts.models import UserRole
 
 
@@ -84,6 +85,12 @@ def test_sales_can_list_only_active_presales_with_exact_fields_and_stable_order(
             "last_name": "Presales",
         },
     ]
+
+
+def test_presales_options_query_orders_by_username_then_id():
+    queryset = PresalesOptionListView().get_queryset()
+
+    assert queryset.query.order_by == ("username", "id")
 
 
 @pytest.mark.parametrize("role", [UserRole.ADMIN, UserRole.PRESALES])
