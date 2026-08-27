@@ -16,6 +16,7 @@ from .serializers import (
     OpportunityCreateSerializer,
     OpportunityDetailSerializer,
     OpportunityListSerializer,
+    OpportunityUpdateSerializer,
 )
 from ..models import Customer, Opportunity, OpportunityStatus
 
@@ -88,6 +89,7 @@ class OpportunityViewSet(
     mixins.ListModelMixin,
     mixins.CreateModelMixin,
     mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
     viewsets.GenericViewSet,
 ):
     """Expose only role-filtered Opportunity reads and Sales creation."""
@@ -95,12 +97,14 @@ class OpportunityViewSet(
     queryset = Opportunity.objects.all()
     permission_classes = (OpportunityPermission,)
     pagination_class = DefaultPageNumberPagination
-    http_method_names = ["get", "post", "head", "options"]
+    http_method_names = ["get", "post", "patch", "head", "options"]
 
     def get_serializer_class(self):
         action = getattr(self, "action", None)
         if action == "create":
             return OpportunityCreateSerializer
+        if action == "partial_update":
+            return OpportunityUpdateSerializer
         if action == "list":
             return OpportunityListSerializer
         return OpportunityDetailSerializer

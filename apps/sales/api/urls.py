@@ -11,7 +11,9 @@ customer_search_view = CustomerViewSet.as_view({"get": "search"})
 opportunity_collection_view = OpportunityViewSet.as_view(
     {"get": "list", "post": "create"}
 )
-opportunity_detail_view = OpportunityViewSet.as_view({"get": "retrieve"})
+opportunity_detail_view = OpportunityViewSet.as_view(
+    {"get": "retrieve", "patch": "partial_update"}
+)
 
 
 urlpatterns = [

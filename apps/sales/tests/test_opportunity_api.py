@@ -347,18 +347,244 @@ def test_opportunity_list_uses_twenty_item_pages_and_updated_at_id_descending_or
     assert [item["id"] for item in second_page.data["results"]] == expected_ids[20:]
 
 
-def test_opportunity_update_and_delete_methods_are_not_exposed(
+def test_sales_can_patch_every_allowed_opportunity_field(
+    api_client, user_factory, opportunity_factory
+):
+    actor = user_factory(UserRole.SALES)
+    presales = user_factory(UserRole.PRESALES)
+    opportunity = opportunity_factory(sales_owner=actor)
+    api_client.force_authenticate(user=actor)
+
+    response = api_client.patch(
+        f"{OPPORTUNITIES_URL}{opportunity.id}/",
+        {
+            "project_name": "Revised rollout",
+            "presales_owner": presales.id,
+            "raw_requirement": "Revised discovery requirements",
+            "budget": "999999.99",
+            "stage": OpportunityStage.SOLUTION,
+            "status": OpportunityStatus.WON,
+            "expected_launch_date": "2027-03-15",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 200
+    opportunity.refresh_from_db()
+    assert opportunity.project_name == "Revised rollout"
+    assert opportunity.presales_owner_id == presales.id
+    assert opportunity.raw_requirement == "Revised discovery requirements"
+    assert opportunity.budget == Decimal("999999.99")
+    assert opportunity.stage == OpportunityStage.SOLUTION
+    assert opportunity.status == OpportunityStatus.WON
+    assert str(opportunity.expected_launch_date) == "2027-03-15"
+
+
+def test_sales_can_patch_null_presales_owner_to_remove_assignment(
+    api_client, user_factory, opportunity_factory
+):
+    actor = user_factory(UserRole.SALES)
+    presales = user_factory(UserRole.PRESALES)
+    opportunity = opportunity_factory(sales_owner=actor, presales_owner=presales)
+    api_client.force_authenticate(user=actor)
+
+    response = api_client.patch(
+        f"{OPPORTUNITIES_URL}{opportunity.id}/",
+        {"presales_owner": None},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    opportunity.refresh_from_db()
+    assert opportunity.presales_owner is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("customer", lambda users, customer: customer.id),
+        ("sales_owner", lambda users, customer: users[0].id),
+        ("created_by", lambda users, customer: users[1].id),
+        ("created_at", lambda users, customer: "2027-01-01T00:00:00Z"),
+        ("updated_at", lambda users, customer: "2027-01-02T00:00:00Z"),
+    ],
+)
+def test_patch_rejects_each_server_controlled_field_without_partial_update(
+    api_client, user_factory, customer_factory, opportunity_factory, field, value
+):
+    actor = user_factory(UserRole.SALES)
+    other_customer = customer_factory(created_by=actor, name="Other customer")
+    opportunity = opportunity_factory(sales_owner=actor)
+    before = {
+        "project_name": opportunity.project_name,
+        "customer_id": opportunity.customer_id,
+        "sales_owner_id": opportunity.sales_owner_id,
+        "presales_owner_id": opportunity.presales_owner_id,
+        "created_by_id": opportunity.created_by_id,
+        "raw_requirement": opportunity.raw_requirement,
+        "budget": opportunity.budget,
+        "stage": opportunity.stage,
+        "status": opportunity.status,
+        "expected_launch_date": opportunity.expected_launch_date,
+        "created_at": opportunity.created_at,
+        "updated_at": opportunity.updated_at,
+    }
+    api_client.force_authenticate(user=actor)
+
+    response = api_client.patch(
+        f"{OPPORTUNITIES_URL}{opportunity.id}/",
+        {
+            "project_name": "This must not persist",
+            field: value((user_factory(), user_factory()), other_customer),
+        },
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert field in response.data
+    opportunity.refresh_from_db()
+    assert opportunity.project_name == before["project_name"]
+    assert opportunity.customer_id == before["customer_id"]
+    assert opportunity.sales_owner_id == before["sales_owner_id"]
+    assert opportunity.presales_owner_id == before["presales_owner_id"]
+    assert opportunity.created_by_id == before["created_by_id"]
+    assert opportunity.raw_requirement == before["raw_requirement"]
+    assert opportunity.budget == before["budget"]
+    assert opportunity.stage == before["stage"]
+    assert opportunity.status == before["status"]
+    assert opportunity.expected_launch_date == before["expected_launch_date"]
+    assert opportunity.created_at == before["created_at"]
+    assert opportunity.updated_at == before["updated_at"]
+
+
+@pytest.mark.parametrize(
+    "field", ["customer", "sales_owner", "created_by", "created_at", "updated_at"]
+)
+def test_patch_rejects_null_server_controlled_keys_without_partial_update(
+    api_client, user_factory, opportunity_factory, field
+):
+    actor = user_factory(UserRole.SALES)
+    opportunity = opportunity_factory(sales_owner=actor)
+    before = {
+        "project_name": opportunity.project_name,
+        "customer_id": opportunity.customer_id,
+        "sales_owner_id": opportunity.sales_owner_id,
+        "created_by_id": opportunity.created_by_id,
+        "presales_owner_id": opportunity.presales_owner_id,
+        "raw_requirement": opportunity.raw_requirement,
+        "budget": opportunity.budget,
+        "stage": opportunity.stage,
+        "status": opportunity.status,
+        "expected_launch_date": opportunity.expected_launch_date,
+        "created_at": opportunity.created_at,
+        "updated_at": opportunity.updated_at,
+    }
+    api_client.force_authenticate(user=actor)
+
+    response = api_client.patch(
+        f"{OPPORTUNITIES_URL}{opportunity.id}/",
+        {"project_name": "This must not persist", field: None},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert field in response.data
+    opportunity.refresh_from_db()
+    assert opportunity.project_name == before["project_name"]
+    assert opportunity.customer_id == before["customer_id"]
+    assert opportunity.sales_owner_id == before["sales_owner_id"]
+    assert opportunity.created_by_id == before["created_by_id"]
+    assert opportunity.presales_owner_id == before["presales_owner_id"]
+    assert opportunity.raw_requirement == before["raw_requirement"]
+    assert opportunity.budget == before["budget"]
+    assert opportunity.stage == before["stage"]
+    assert opportunity.status == before["status"]
+    assert opportunity.expected_launch_date == before["expected_launch_date"]
+    assert opportunity.created_at == before["created_at"]
+    assert opportunity.updated_at == before["updated_at"]
+
+
+@pytest.mark.parametrize(
+    "invalid_presales",
+    [
+        pytest.param(lambda factory: factory(UserRole.SALES), id="non-presales-user"),
+        pytest.param(
+            lambda factory: factory(UserRole.PRESALES, is_active=False),
+            id="inactive-presales-user",
+        ),
+    ],
+)
+def test_patch_rejects_non_active_presales_assignment(
+    api_client, user_factory, opportunity_factory, invalid_presales
+):
+    actor = user_factory(UserRole.SALES)
+    opportunity = opportunity_factory(sales_owner=actor)
+    invalid_user = invalid_presales(user_factory)
+    original_project_name = opportunity.project_name
+    original_updated_at = opportunity.updated_at
+    api_client.force_authenticate(user=actor)
+
+    response = api_client.patch(
+        f"{OPPORTUNITIES_URL}{opportunity.id}/",
+        {"project_name": "This must not persist", "presales_owner": invalid_user.id},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert "presales_owner" in response.data
+    opportunity.refresh_from_db()
+    assert opportunity.project_name == original_project_name
+    assert opportunity.presales_owner is None
+    assert opportunity.updated_at == original_updated_at
+
+
+def test_other_sales_cannot_patch_an_opportunity_they_do_not_own(
+    api_client, user_factory, opportunity_factory
+):
+    owner = user_factory(UserRole.SALES)
+    other_sales = user_factory(UserRole.SALES, is_staff=True, is_superuser=True)
+    opportunity = opportunity_factory(sales_owner=owner)
+    api_client.force_authenticate(user=other_sales)
+
+    response = api_client.patch(
+        f"{OPPORTUNITIES_URL}{opportunity.id}/",
+        {"project_name": "Unauthorized change"},
+        format="json",
+    )
+
+    assert response.status_code == 404
+    opportunity.refresh_from_db()
+    assert opportunity.project_name == "Platform rollout"
+
+
+@pytest.mark.parametrize(
+    "role", [UserRole.ADMIN, UserRole.PRESALES]
+)
+def test_admin_and_presales_cannot_patch_opportunities(
+    api_client, user_factory, opportunity_factory, role
+):
+    actor = user_factory(role, is_staff=True, is_superuser=True)
+    opportunity = opportunity_factory()
+    api_client.force_authenticate(user=actor)
+
+    response = api_client.patch(
+        f"{OPPORTUNITIES_URL}{opportunity.id}/",
+        {"project_name": "Unauthorized change"},
+        format="json",
+    )
+
+    assert response.status_code == 403
+    opportunity.refresh_from_db()
+    assert opportunity.project_name == "Platform rollout"
+
+
+def test_opportunity_put_and_delete_methods_remain_unavailable(
     api_client, user_factory, opportunity_factory
 ):
     actor = user_factory(UserRole.SALES)
     opportunity = opportunity_factory(sales_owner=actor)
     api_client.force_authenticate(user=actor)
 
-    patch_response = api_client.patch(
-        f"{OPPORTUNITIES_URL}{opportunity.id}/",
-        {"project_name": "Changed"},
-        format="json",
-    )
     put_response = api_client.put(
         f"{OPPORTUNITIES_URL}{opportunity.id}/",
         {"project_name": "Changed"},
@@ -366,7 +592,6 @@ def test_opportunity_update_and_delete_methods_are_not_exposed(
     )
     delete_response = api_client.delete(f"{OPPORTUNITIES_URL}{opportunity.id}/")
 
-    assert patch_response.status_code == 405
     assert put_response.status_code == 405
     assert delete_response.status_code == 405
     assert Opportunity.objects.get(pk=opportunity.id).project_name == "Platform rollout"

@@ -160,3 +160,32 @@ class OpportunityCreateSerializer(RejectForbiddenFieldsMixin, serializers.ModelS
             "expected_launch_date",
         )
         read_only_fields = ("id",)
+
+
+class OpportunityUpdateSerializer(RejectForbiddenFieldsMixin, serializers.ModelSerializer):
+    """Accept only the Sales-controlled fields of an existing Opportunity."""
+
+    presales_owner = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.filter(is_active=True, role=UserRole.PRESALES),
+        allow_null=True,
+        required=False,
+    )
+    forbidden_fields = (
+        "customer",
+        "sales_owner",
+        "created_by",
+        "created_at",
+        "updated_at",
+    )
+
+    class Meta:
+        model = Opportunity
+        fields = (
+            "project_name",
+            "presales_owner",
+            "raw_requirement",
+            "budget",
+            "stage",
+            "status",
+            "expected_launch_date",
+        )
