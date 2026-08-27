@@ -10,6 +10,44 @@ from apps.accounts.models import UserRole
 pytestmark = pytest.mark.django_db
 
 
+def test_django_admin_login_page_uses_simplified_chinese(client):
+    response = client.get(reverse("admin:login"))
+
+    assert response.status_code == 200
+    assert "登录" in response.content.decode()
+
+
+def test_custom_user_admin_uses_chinese_labels_with_english_role_values(
+    client,
+    user_data,
+):
+    admin_user = get_user_model().objects.create_superuser(**user_data)
+    managed_user = get_user_model().objects.create_user(
+        username="bob",
+        email="bob@example.com",
+        role=UserRole.PRESALES,
+        password="AnotherStrongPassword123!",
+    )
+    client.force_login(admin_user)
+
+    add_response = client.get(reverse("admin:accounts_user_add"))
+    change_response = client.get(
+        reverse("admin:accounts_user_change", args=[managed_user.pk])
+    )
+
+    assert add_response.status_code == 200
+    assert change_response.status_code == 200
+
+    add_content = add_response.content.decode()
+    change_content = change_response.content.decode()
+    assert "个人信息" in add_content
+    assert "业务角色" in change_content
+    assert "邮箱地址" in add_content
+    assert '<option value="admin">管理员</option>' in add_content
+    assert '<option value="sales">销售</option>' in add_content
+    assert '<option value="presales">售前</option>' in add_content
+
+
 def test_business_admin_without_staff_cannot_access_django_admin(client, user_data):
     user_data["role"] = UserRole.ADMIN
     user = get_user_model().objects.create_user(**user_data)

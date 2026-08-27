@@ -2,6 +2,7 @@
 
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
+from django.utils.translation import gettext_lazy as _
 
 from .forms import UserChangeForm, UserCreationForm
 from .models import User
@@ -27,11 +28,11 @@ class UserAdmin(DjangoUserAdmin):
     ordering = ("username",)
 
     fieldsets = DjangoUserAdmin.fieldsets + (
-        ("Business role", {"fields": ("role",)}),
+        (_("业务角色"), {"fields": ("role",)}),
     )
     add_fieldsets = DjangoUserAdmin.add_fieldsets + (
         (
-            "Profile",
+            _("个人信息"),
             {
                 "classes": ("wide",),
                 "fields": ("email", "role", "first_name", "last_name"),
