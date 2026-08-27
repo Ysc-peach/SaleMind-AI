@@ -148,6 +148,26 @@ def test_create_rejects_each_server_controlled_field_without_creating_a_record(
     assert Opportunity.objects.count() == count_before
 
 
+@pytest.mark.parametrize("field", ["sales_owner", "created_by", "stage", "status"])
+def test_create_rejects_null_server_controlled_fields_without_creating_a_record(
+    api_client, user_factory, customer_factory, field
+):
+    actor = user_factory(UserRole.SALES)
+    customer = customer_factory(created_by=actor)
+    api_client.force_authenticate(user=actor)
+    count_before = Opportunity.objects.count()
+
+    response = api_client.post(
+        OPPORTUNITIES_URL,
+        {"project_name": "Null protected field", "customer": customer.id, field: None},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert field in response.data
+    assert Opportunity.objects.count() == count_before
+
+
 @pytest.mark.parametrize(
     "presales_setup",
     [
@@ -296,19 +316,29 @@ def test_opportunity_list_uses_twenty_item_pages_and_updated_at_id_descending_or
     api_client, user_factory, opportunity_factory
 ):
     actor = user_factory(UserRole.SALES)
-    timestamp = timezone.now() - timedelta(days=1)
-    opportunities = [
-        opportunity_factory(sales_owner=actor, project_name=f"Paged {index:02d}")
-        for index in range(21)
+    older_timestamp = timezone.now() - timedelta(days=2)
+    newer_timestamp = older_timestamp + timedelta(days=1)
+    newer_opportunities = [
+        opportunity_factory(sales_owner=actor, project_name=f"Newer {index:02d}")
+        for index in range(5)
     ]
-    Opportunity.objects.filter(pk__in=[item.id for item in opportunities]).update(
-        updated_at=timestamp
-    )
+    older_opportunities = [
+        opportunity_factory(sales_owner=actor, project_name=f"Older {index:02d}")
+        for index in range(16)
+    ]
+    Opportunity.objects.filter(
+        pk__in=[item.id for item in newer_opportunities]
+    ).update(updated_at=newer_timestamp)
+    Opportunity.objects.filter(
+        pk__in=[item.id for item in older_opportunities]
+    ).update(updated_at=older_timestamp)
     api_client.force_authenticate(user=actor)
 
     first_page = api_client.get(OPPORTUNITIES_URL)
     second_page = api_client.get(OPPORTUNITIES_URL, {"page": 2})
-    expected_ids = sorted((item.id for item in opportunities), reverse=True)
+    expected_ids = sorted(
+        (item.id for item in newer_opportunities), reverse=True
+    ) + sorted((item.id for item in older_opportunities), reverse=True)
 
     assert first_page.status_code == 200
     assert first_page.data["count"] == 21
