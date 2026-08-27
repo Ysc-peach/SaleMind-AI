@@ -9,3 +9,10 @@ class CurrentUserSerializer(serializers.ModelSerializer):
         model = get_user_model()
         fields = ("id", "username", "email", "first_name", "last_name", "role")
         read_only_fields = fields
+
+
+class PresalesOptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = get_user_model()
+        fields = ("id", "username", "first_name", "last_name")
+        read_only_fields = fields
