@@ -40,4 +40,8 @@ def test_knowledge_document_error_codes_are_stable_and_complete():
         "embedding_invalid_response",
         "embedding_dimension_mismatch",
         "embedding_empty_input",
+        "invalid_indexing_state",
+        "indexing_failed",
+        "no_indexable_content",
+        "indexing_run_conflict",
     }

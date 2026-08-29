@@ -19,6 +19,10 @@ class KnowledgeDocumentErrorCode(StrEnum):
     EMBEDDING_INVALID_RESPONSE = "embedding_invalid_response"
     EMBEDDING_DIMENSION_MISMATCH = "embedding_dimension_mismatch"
     EMBEDDING_EMPTY_INPUT = "embedding_empty_input"
+    INVALID_INDEXING_STATE = "invalid_indexing_state"
+    INDEXING_FAILED = "indexing_failed"
+    NO_INDEXABLE_CONTENT = "no_indexable_content"
+    INDEXING_RUN_CONFLICT = "indexing_run_conflict"
 
 
 _SAFE_ERROR_MESSAGES = {
@@ -58,6 +62,18 @@ _SAFE_ERROR_MESSAGES = {
     ),
     KnowledgeDocumentErrorCode.EMBEDDING_EMPTY_INPUT: (
         "Embedding input must contain non-empty text."
+    ),
+    KnowledgeDocumentErrorCode.INVALID_INDEXING_STATE: (
+        "The document is not pending initial indexing."
+    ),
+    KnowledgeDocumentErrorCode.INDEXING_FAILED: (
+        "The document could not be indexed."
+    ),
+    KnowledgeDocumentErrorCode.NO_INDEXABLE_CONTENT: (
+        "The document contains no indexable content."
+    ),
+    KnowledgeDocumentErrorCode.INDEXING_RUN_CONFLICT: (
+        "The indexing run is no longer current."
     ),
 }
 
