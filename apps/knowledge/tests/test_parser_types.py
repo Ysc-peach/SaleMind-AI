@@ -41,7 +41,10 @@ def test_knowledge_document_error_codes_are_stable_and_complete():
         "embedding_dimension_mismatch",
         "embedding_empty_input",
         "invalid_indexing_state",
+        "invalid_reindex_state",
+        "indexing_already_in_progress",
         "indexing_failed",
+        "reindex_failed",
         "no_indexable_content",
         "indexing_run_conflict",
     }

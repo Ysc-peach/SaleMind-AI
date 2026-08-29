@@ -42,7 +42,7 @@ def test_knowledge_runtime_dependencies_are_importable(module_name, public_attri
         ("KNOWLEDGE_MAX_CHUNKS", 500),
         ("KNOWLEDGE_CHUNK_SIZE", 1200),
         ("KNOWLEDGE_CHUNK_OVERLAP", 150),
-        ("KNOWLEDGE_INDEXING_STALE_SECONDS", 3600),
+        ("KNOWLEDGE_INDEXING_STALE_TIMEOUT_SECONDS", 3600),
     ],
 )
 def test_knowledge_settings_have_documented_defaults(setting_name, expected_value):

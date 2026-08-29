@@ -20,7 +20,10 @@ class KnowledgeDocumentErrorCode(StrEnum):
     EMBEDDING_DIMENSION_MISMATCH = "embedding_dimension_mismatch"
     EMBEDDING_EMPTY_INPUT = "embedding_empty_input"
     INVALID_INDEXING_STATE = "invalid_indexing_state"
+    INVALID_REINDEX_STATE = "invalid_reindex_state"
+    INDEXING_ALREADY_IN_PROGRESS = "indexing_already_in_progress"
     INDEXING_FAILED = "indexing_failed"
+    REINDEX_FAILED = "reindex_failed"
     NO_INDEXABLE_CONTENT = "no_indexable_content"
     INDEXING_RUN_CONFLICT = "indexing_run_conflict"
 
@@ -66,8 +69,17 @@ _SAFE_ERROR_MESSAGES = {
     KnowledgeDocumentErrorCode.INVALID_INDEXING_STATE: (
         "The document is not pending initial indexing."
     ),
+    KnowledgeDocumentErrorCode.INVALID_REINDEX_STATE: (
+        "The document does not have a ready index to rebuild."
+    ),
+    KnowledgeDocumentErrorCode.INDEXING_ALREADY_IN_PROGRESS: (
+        "The document is already being indexed."
+    ),
     KnowledgeDocumentErrorCode.INDEXING_FAILED: (
         "The document could not be indexed."
+    ),
+    KnowledgeDocumentErrorCode.REINDEX_FAILED: (
+        "The document index could not be rebuilt."
     ),
     KnowledgeDocumentErrorCode.NO_INDEXABLE_CONTENT: (
         "The document contains no indexable content."
