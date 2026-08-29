@@ -13,3 +13,8 @@ from .base import *  # noqa: E402,F401,F403
 
 
 DEBUG = False
+
+DATABASES["default"].setdefault("TEST", {})["TEMPLATE"] = env(
+    "TEST_DATABASE_TEMPLATE",
+    default="salesmind_test_template",
+)

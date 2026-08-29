@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     "apps.accounts",
+    "apps.knowledge",
     "apps.sales",
 ]
 
@@ -73,7 +74,30 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
+MEDIA_ROOT = BASE_DIR / "media"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+EMBEDDING_PROVIDER = env("EMBEDDING_PROVIDER", default="openai_compatible")
+EMBEDDING_MODEL = env("EMBEDDING_MODEL", default="BAAI/bge-m3")
+EMBEDDING_DIMENSIONS = env.int("EMBEDDING_DIMENSIONS", default=1024)
+EMBEDDING_API_KEY = env("EMBEDDING_API_KEY", default="")
+EMBEDDING_BASE_URL = env("EMBEDDING_BASE_URL", default="")
+EMBEDDING_TIMEOUT_SECONDS = env.int("EMBEDDING_TIMEOUT_SECONDS", default=30)
+EMBEDDING_MAX_RETRIES = env.int("EMBEDDING_MAX_RETRIES", default=2)
+EMBEDDING_BATCH_SIZE = env.int("EMBEDDING_BATCH_SIZE", default=32)
+
+KNOWLEDGE_MAX_FILE_SIZE_BYTES = env.int(
+    "KNOWLEDGE_MAX_FILE_SIZE_BYTES",
+    default=20 * 1024 * 1024,
+)
+KNOWLEDGE_MAX_PDF_PAGES = env.int("KNOWLEDGE_MAX_PDF_PAGES", default=300)
+KNOWLEDGE_MAX_CHUNKS = env.int("KNOWLEDGE_MAX_CHUNKS", default=500)
+KNOWLEDGE_CHUNK_SIZE = env.int("KNOWLEDGE_CHUNK_SIZE", default=1200)
+KNOWLEDGE_CHUNK_OVERLAP = env.int("KNOWLEDGE_CHUNK_OVERLAP", default=150)
+KNOWLEDGE_INDEXING_STALE_SECONDS = env.int(
+    "KNOWLEDGE_INDEXING_STALE_SECONDS",
+    default=3600,
+)
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
