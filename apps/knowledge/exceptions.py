@@ -13,6 +13,12 @@ class KnowledgeDocumentErrorCode(StrEnum):
     INVALID_TEXT_ENCODING = "invalid_text_encoding"
     INVALID_CHUNK_CONFIGURATION = "invalid_chunk_configuration"
     CHUNK_LIMIT_EXCEEDED = "chunk_limit_exceeded"
+    UNSUPPORTED_EMBEDDING_PROVIDER = "unsupported_embedding_provider"
+    EMBEDDING_NOT_CONFIGURED = "embedding_not_configured"
+    EMBEDDING_PROVIDER_ERROR = "embedding_provider_error"
+    EMBEDDING_INVALID_RESPONSE = "embedding_invalid_response"
+    EMBEDDING_DIMENSION_MISMATCH = "embedding_dimension_mismatch"
+    EMBEDDING_EMPTY_INPUT = "embedding_empty_input"
 
 
 _SAFE_ERROR_MESSAGES = {
@@ -34,6 +40,24 @@ _SAFE_ERROR_MESSAGES = {
     ),
     KnowledgeDocumentErrorCode.CHUNK_LIMIT_EXCEEDED: (
         "The document exceeds the allowed chunk count."
+    ),
+    KnowledgeDocumentErrorCode.UNSUPPORTED_EMBEDDING_PROVIDER: (
+        "The embedding provider is not supported."
+    ),
+    KnowledgeDocumentErrorCode.EMBEDDING_NOT_CONFIGURED: (
+        "The embedding provider is not configured."
+    ),
+    KnowledgeDocumentErrorCode.EMBEDDING_PROVIDER_ERROR: (
+        "The embedding provider request failed."
+    ),
+    KnowledgeDocumentErrorCode.EMBEDDING_INVALID_RESPONSE: (
+        "The embedding provider returned an invalid response."
+    ),
+    KnowledgeDocumentErrorCode.EMBEDDING_DIMENSION_MISMATCH: (
+        "The embedding vector dimensions do not match the configuration."
+    ),
+    KnowledgeDocumentErrorCode.EMBEDDING_EMPTY_INPUT: (
+        "Embedding input must contain non-empty text."
     ),
 }
 

@@ -34,4 +34,10 @@ def test_knowledge_document_error_codes_are_stable_and_complete():
         "invalid_text_encoding",
         "invalid_chunk_configuration",
         "chunk_limit_exceeded",
+        "unsupported_embedding_provider",
+        "embedding_not_configured",
+        "embedding_provider_error",
+        "embedding_invalid_response",
+        "embedding_dimension_mismatch",
+        "embedding_empty_input",
     }
