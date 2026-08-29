@@ -11,6 +11,8 @@ class KnowledgeDocumentErrorCode(StrEnum):
     PDF_PAGE_LIMIT_EXCEEDED = "pdf_page_limit_exceeded"
     NO_EXTRACTABLE_TEXT = "no_extractable_text"
     INVALID_TEXT_ENCODING = "invalid_text_encoding"
+    INVALID_CHUNK_CONFIGURATION = "invalid_chunk_configuration"
+    CHUNK_LIMIT_EXCEEDED = "chunk_limit_exceeded"
 
 
 _SAFE_ERROR_MESSAGES = {
@@ -26,6 +28,12 @@ _SAFE_ERROR_MESSAGES = {
     ),
     KnowledgeDocumentErrorCode.INVALID_TEXT_ENCODING: (
         "The text file must use UTF-8 encoding."
+    ),
+    KnowledgeDocumentErrorCode.INVALID_CHUNK_CONFIGURATION: (
+        "The chunking configuration is invalid."
+    ),
+    KnowledgeDocumentErrorCode.CHUNK_LIMIT_EXCEEDED: (
+        "The document exceeds the allowed chunk count."
     ),
 }
 

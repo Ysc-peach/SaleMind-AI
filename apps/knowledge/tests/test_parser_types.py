@@ -21,7 +21,7 @@ def test_parsed_segment_preserves_content_and_source_metadata():
     assert segment.metadata == {"file_type": "pdf"}
 
 
-def test_parser_error_codes_are_stable_and_complete():
+def test_knowledge_document_error_codes_are_stable_and_complete():
     exceptions = import_module("apps.knowledge.exceptions")
 
     assert set(exceptions.KnowledgeDocumentErrorCode) == {
@@ -32,4 +32,6 @@ def test_parser_error_codes_are_stable_and_complete():
         "pdf_page_limit_exceeded",
         "no_extractable_text",
         "invalid_text_encoding",
+        "invalid_chunk_configuration",
+        "chunk_limit_exceeded",
     }
