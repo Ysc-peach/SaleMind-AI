@@ -176,6 +176,64 @@ def test_prompt_only_advertises_citation_labels_that_have_real_sources(monkeypat
     assert "[S3]" not in user_prompt["content"]
 
 
+@pytest.mark.parametrize(
+    ("raw_answer", "expected"),
+    [
+        ("结论（S1）。", "结论[S1]。"),
+        ("结论(S1)。", "结论[S1]。"),
+        ("结论（S1、S2）。", "结论[S1][S2]。"),
+        ("结论(S1, S2)。", "结论[S1][S2]。"),
+        ("结论[S1, S2]。", "结论[S1][S2]。"),
+        ("结论[S1][S2]。", "结论[S1][S2]。"),
+    ],
+)
+def test_citation_normalization_only_changes_supported_syntax(
+    raw_answer,
+    expected,
+):
+    from apps.rag.services.answering import normalize_citations
+
+    assert normalize_citations(raw_answer, source_count=2) == expected
+
+
+def test_citation_normalization_does_not_create_missing_sources():
+    from apps.rag.services.answering import normalize_citations
+
+    assert normalize_citations("未知来源（S3）。", source_count=2) == "未知来源（S3）。"
+    assert normalize_citations("非真实标签（S01）。", source_count=2) == (
+        "非真实标签（S01）。"
+    )
+    assert normalize_citations("混合来源(S1, S3)。", source_count=2) == (
+        "混合来源(S1, S3)。"
+    )
+
+
+def test_citation_normalization_does_not_modify_ordinary_body_text():
+    from apps.rag.services.answering import normalize_citations
+
+    text = "这是普通正文，采用方案(S1版本)，产品编号是 S123。"
+
+    assert normalize_citations(text, source_count=2) == text
+
+
+def test_answer_question_normalizes_generation_without_changing_sources(monkeypatch):
+    from apps.llm.base import LLMGeneration
+    from apps.rag.services import answering
+
+    retrieved = [search_result(chunk_id=1), search_result(chunk_id=2)]
+    monkeypatch.setattr(answering, "search_knowledge", lambda **kwargs: retrieved)
+
+    class CitationLLM(DeterministicFakeLLM):
+        def generate(self, messages):
+            super().generate(messages)
+            return LLMGeneration(content="结论（S1、S2），未知（S3）。")
+
+    result = answering.answer_question("引用格式", llm_provider=CitationLLM())
+
+    assert result.answer == "结论[S1][S2]，未知（S3）。"
+    assert [source.chunk_id for source in result.sources] == [1, 2]
+
+
 def test_prompt_injection_stays_inside_untrusted_user_evidence(monkeypatch):
     from apps.rag.services import answering
 
