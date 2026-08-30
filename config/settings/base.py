@@ -86,6 +86,15 @@ EMBEDDING_TIMEOUT_SECONDS = env.int("EMBEDDING_TIMEOUT_SECONDS", default=30)
 EMBEDDING_MAX_RETRIES = env.int("EMBEDDING_MAX_RETRIES", default=2)
 EMBEDDING_BATCH_SIZE = env.int("EMBEDDING_BATCH_SIZE", default=32)
 
+LLM_PROVIDER = env("LLM_PROVIDER", default="deepseek")
+LLM_MODEL = env("LLM_MODEL", default="deepseek-v4-flash")
+LLM_API_KEY = env("LLM_API_KEY", default="")
+LLM_BASE_URL = env("LLM_BASE_URL", default="https://api.deepseek.com")
+LLM_TIMEOUT_SECONDS = env.int("LLM_TIMEOUT_SECONDS", default=60)
+LLM_MAX_RETRIES = env.int("LLM_MAX_RETRIES", default=2)
+LLM_MAX_OUTPUT_TOKENS = env.int("LLM_MAX_OUTPUT_TOKENS", default=1024)
+LLM_THINKING_ENABLED = env.bool("LLM_THINKING_ENABLED", default=False)
+
 KNOWLEDGE_MAX_FILE_SIZE_BYTES = env.int(
     "KNOWLEDGE_MAX_FILE_SIZE_BYTES",
     default=20 * 1024 * 1024,
