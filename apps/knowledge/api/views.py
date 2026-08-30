@@ -1,22 +1,25 @@
-"""Views for Admin-only Knowledge Document management."""
+"""Views for Knowledge Document management and authenticated search."""
 
 from rest_framework import mixins, status, viewsets
-from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from apps.knowledge.exceptions import (
     KnowledgeDocumentError,
     KnowledgeDocumentErrorCode,
 )
 from apps.knowledge.models import KnowledgeDocument
-from apps.knowledge.services import indexing
+from apps.knowledge.services import indexing, search
 
 from .errors import KnowledgeAPIError
 from .pagination import KnowledgeDocumentPagination
-from .permissions import IsBusinessAdmin
+from .permissions import IsBusinessAdmin, IsKnowledgeSearchUser
 from .serializers import (
     KnowledgeDocumentCreateSerializer,
     KnowledgeDocumentReadSerializer,
+    KnowledgeSearchRequestSerializer,
+    KnowledgeSearchResultSerializer,
 )
 
 
@@ -28,6 +31,10 @@ _REINDEX_CONFLICT_CODES = {
 _INITIAL_INDEX_CONFLICT_CODES = {
     KnowledgeDocumentErrorCode.INVALID_INDEXING_STATE.value,
     KnowledgeDocumentErrorCode.INDEXING_RUN_CONFLICT.value,
+}
+_EMBEDDING_CONFIGURATION_CODES = {
+    KnowledgeDocumentErrorCode.EMBEDDING_NOT_CONFIGURED.value,
+    KnowledgeDocumentErrorCode.UNSUPPORTED_EMBEDDING_PROVIDER.value,
 }
 
 
@@ -91,3 +98,27 @@ class KnowledgeDocumentViewSet(
             context=self.get_serializer_context(),
         )
         return Response(output.data, status=status.HTTP_200_OK)
+
+
+class KnowledgeSearchView(APIView):
+    """Return exact vector matches with citation-safe source metadata."""
+
+    permission_classes = (IsKnowledgeSearchUser,)
+    parser_classes = (JSONParser,)
+
+    def post(self, request):
+        serializer = KnowledgeSearchRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            results = search.search_knowledge(**serializer.validated_data)
+        except KnowledgeDocumentError as error:
+            error_status = (
+                status.HTTP_503_SERVICE_UNAVAILABLE
+                if error.code in _EMBEDDING_CONFIGURATION_CODES
+                else status.HTTP_502_BAD_GATEWAY
+            )
+            raise KnowledgeAPIError(error, status_code=error_status) from None
+
+        output = KnowledgeSearchResultSerializer(results, many=True)
+        return Response({"results": output.data}, status=status.HTTP_200_OK)

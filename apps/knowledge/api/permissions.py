@@ -13,3 +13,17 @@ class IsBusinessAdmin(BasePermission):
             request.user.is_authenticated
             and request.user.role == UserRole.ADMIN
         )
+
+
+class IsKnowledgeSearchUser(BasePermission):
+    """Allow only the three authenticated V1 business roles to search."""
+
+    allowed_roles = frozenset(
+        {UserRole.ADMIN, UserRole.SALES, UserRole.PRESALES}
+    )
+
+    def has_permission(self, request, view):
+        return bool(
+            request.user.is_authenticated
+            and request.user.role in self.allowed_roles
+        )

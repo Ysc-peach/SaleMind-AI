@@ -5,7 +5,7 @@ from hashlib import sha256
 from rest_framework import serializers
 
 from apps.knowledge.exceptions import KnowledgeDocumentError
-from apps.knowledge.models import KnowledgeDocument
+from apps.knowledge.models import KnowledgeDocument, KnowledgeDocumentType
 from apps.knowledge.parsers.validation import validate_document_file
 
 from .errors import KnowledgeAPIError
@@ -121,3 +121,34 @@ class KnowledgeDocumentCreateSerializer(
             file_size=len(validated_file.data),
             checksum_sha256=sha256(validated_file.data).hexdigest(),
         )
+
+
+class KnowledgeSearchRequestSerializer(serializers.Serializer):
+    """Validate the deliberately small V1 vector-search surface."""
+
+    query = serializers.CharField(
+        required=True,
+        allow_blank=False,
+        trim_whitespace=True,
+        max_length=2000,
+    )
+    top_k = serializers.IntegerField(default=5, min_value=1, max_value=20)
+    document_type = serializers.ChoiceField(
+        choices=KnowledgeDocumentType.choices,
+        required=False,
+    )
+
+
+class KnowledgeSearchResultSerializer(serializers.Serializer):
+    """Serialize citation-safe search results without vectors or file paths."""
+
+    chunk_id = serializers.IntegerField(read_only=True)
+    document_id = serializers.IntegerField(read_only=True)
+    document_title = serializers.CharField(read_only=True)
+    document_type = serializers.CharField(read_only=True)
+    original_filename = serializers.CharField(read_only=True)
+    content = serializers.CharField(read_only=True)
+    page_number = serializers.IntegerField(read_only=True, allow_null=True)
+    section_title = serializers.CharField(read_only=True, allow_null=True)
+    source_reference = serializers.CharField(read_only=True)
+    similarity = serializers.FloatField(read_only=True)

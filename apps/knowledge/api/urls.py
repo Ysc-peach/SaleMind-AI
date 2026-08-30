@@ -2,7 +2,7 @@
 
 from django.urls import path
 
-from .views import KnowledgeDocumentViewSet
+from .views import KnowledgeDocumentViewSet, KnowledgeSearchView
 
 
 document_collection_view = KnowledgeDocumentViewSet.as_view(
@@ -13,6 +13,11 @@ document_reindex_view = KnowledgeDocumentViewSet.as_view({"post": "reindex"})
 
 
 urlpatterns = [
+    path(
+        "knowledge/search/",
+        KnowledgeSearchView.as_view(),
+        name="knowledge-search",
+    ),
     path(
         "knowledge/documents/<int:pk>/reindex/",
         document_reindex_view,
