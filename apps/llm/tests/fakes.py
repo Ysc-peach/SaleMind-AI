@@ -13,9 +13,17 @@ class DeterministicFakeLLM(LLMProvider):
     provider_name = "fake"
     model_name = "sha256-test-llm"
 
+    def __init__(self):
+        self.calls: list[tuple[LLMMessage, ...]] = []
+
     def generate(self, messages: Sequence[LLMMessage]) -> LLMGeneration:
+        normalized_messages = tuple(
+            {"role": message["role"], "content": message["content"]}
+            for message in messages
+        )
+        self.calls.append(normalized_messages)
         serialized = json.dumps(
-            list(messages),
+            normalized_messages,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
