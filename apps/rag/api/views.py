@@ -1,6 +1,7 @@
 """Grounded RAG Answer API view."""
 
 from rest_framework import status
+from rest_framework.exceptions import ParseError
 from rest_framework.parsers import JSONParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -35,7 +36,12 @@ class RAGAnswerView(APIView):
     parser_classes = (JSONParser,)
 
     def post(self, request):
-        request_serializer = RAGAnswerRequestSerializer(data=request.data)
+        try:
+            request_data = request.data
+        except ParseError:
+            raise RAGRequestValidationError() from None
+
+        request_serializer = RAGAnswerRequestSerializer(data=request_data)
         if not request_serializer.is_valid():
             raise RAGRequestValidationError()
 

@@ -194,6 +194,34 @@ def test_invalid_request_returns_safe_400_without_answering(
     }
 
 
+def test_malformed_json_returns_safe_400_without_answering(
+    api_client,
+    user_factory,
+    monkeypatch,
+):
+    from apps.rag.services import answering
+
+    monkeypatch.setattr(
+        answering,
+        "answer_question",
+        lambda **kwargs: pytest.fail("Malformed JSON must not call RAG."),
+    )
+    api_client.force_authenticate(user=user_factory())
+
+    response = api_client.generic(
+        "POST",
+        ANSWER_URL,
+        data=b'{"query":',
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert response.data == {
+        "code": "invalid_request",
+        "message": "The RAG answer request is invalid.",
+    }
+
+
 @pytest.mark.parametrize(
     "forbidden_field",
     ["top_k", "provider", "model", "system_prompt", "messages", "api_key", "sources"],
