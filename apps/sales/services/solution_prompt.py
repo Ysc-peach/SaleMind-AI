@@ -26,8 +26,37 @@ Customer Requirements 描述客户想要什么；Enterprise Evidence 描述企�
 错误：proposal 声称系统将基于知识证据自动生成采购合同草案。
 不得通过改写为 proposal 或 customer_fact 偷渡没有证据的企业承诺。
 
-未确认不等于不支持。未确认OA协议、未确认SSO、未声明Kubernetes时，应写当前资料未确认，
-不得写“不支持OA”“不具备SSO”“不支持Kubernetes”，除非企业证据明确表示不支持。
+企业能力必须区分三种证据状态，摘要与全部章节同样适用：
+A. 已确认能力：只有企业证据明确证明支持、具备或可提供，
+才允许 enterprise_fact / proposal 对该能力作正向陈述，并引用真正支持该能力的来源。
+B. 明确否定能力：只有企业证据明确写明不支持、不提供、当前无法或明确不可用，
+才允许确定性否定。允许 enterprise_fact 如实表达该限制，并必须引用对应的明确负面证据。
+例如证据明确写“当前版本不支持扫描型 PDF OCR”，可以原样表达该限制并附真实 citation；
+不得把这种明确否定改成未确认，也不得把某一能力的否定推广到其他能力。
+C. 未确认能力：未确认、未声明支持、当前资料没有说明、资料不足以判断，都是证据未知，
+不是能力不存在。未确认能力必须使用 type=unresolved；只能写当前资料未确认、资料不足以确认
+是否支持或仍需进一步确认。不得以 enterprise_fact 或 proposal 把未知改写为否定能力。
+未确认不等于不支持；“未确认”不等于“不支持”，“未声明”不等于“未提供”，“资料不足”不等于“不具备”。
+"not confirmed" does NOT mean "unsupported".
+"not stated" does NOT mean "not provided".
+"insufficient evidence" does NOT mean "unavailable".
+除非企业证据明确表示不支持或其他明确否定，否则禁止将未确认能力写成：
+不支持、未提供、不具备、无法、不能、没有该能力、不接入。引用未知证据不会把否定变成事实。
+一句话同时涉及已确认和未确认能力时，应拆成不同类型的 statements，不得混写。
+
+OA 反例：证据只说当前未确认OA具体集成协议和适配能力。
+正确（unresolved）：当前企业资料未确认OA集成能力，需要进一步确认。
+错误：当前不支持OA；当前未提供OA集成能力；系统不具备OA对接能力。
+SSO 反例：证据只说当前资料未确认企业SSO集成能力。
+正确（unresolved）：当前资料不足以确认是否支持企业SSO。
+错误：系统不提供SSO；系统不具备SSO或统一身份认证能力。
+Kubernetes 反例：证据只说当前资料未声明Kubernetes部署支持。
+正确（unresolved）：当前企业资料未确认Kubernetes部署能力。
+错误：当前不支持Kubernetes。
+同理，未确认高可用集群或自动扩缩容，不得写成“未提供高可用集群或自动扩缩容的现成能力”。
+客户要求某项能力而企业证据未确认时，不能反推支持，也不能反推不支持：
+customer_fact 只记录客户需求；unresolved 记录企业能力仍待确认，不用 proposal 承诺实现。
+
 已有Linux服务器不等于已验证运行环境：不得推断资源充足，不得推断Kubernetes已安装，
 不得推断网络满足要求；没有明确输入证据时不得声称环境已验证、配置足够或可部署运行。
 客户希望Kubernetes也不等于客户已有Kubernetes环境。
@@ -54,6 +83,7 @@ text 是非空字符串，只写一种来源类型的陈述，不混合客户事
 citations 是不重复的来源label字符串数组，只能引用本次实际提供的 S1...Sn，精确匹配。
 customer_fact 只描述 Requirement Analysis 中的客户事实或要求，citations 必须为 []。
 enterprise_fact 描述资料已确认的企业产品、技术、兼容性、案例或部署能力，citations 至少1项。
+有明确负面证据的能力限制也使用 enterprise_fact；仅未确认的能力必须使用 unresolved。
 proposal 是客户需求结合已确认企业能力的建议，所有 proposal 的 citations 至少1项。
 unresolved 只写未知、模糊或未确认边界，citations 可以为空；若引用企业资料则必须真实有效。
 text 中禁止任何引用编号，包括 [S1]、（S1）、(S1)、S1 或组合引用。
