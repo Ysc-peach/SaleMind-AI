@@ -6,13 +6,14 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from apps.sales.tests.solution_fakes import solution_payload
+from apps.sales.tests.solution_fakes import solution_payload, typed_analysis
 
 
 def parse(payload, source_count=3):
     from apps.sales.services.solution_schema import parse_solution_draft
 
-    return parse_solution_draft(json.dumps(payload, ensure_ascii=False), source_count=source_count)
+    return parse_solution_draft(json.dumps(payload, ensure_ascii=False), source_count=source_count,
+                                analysis=typed_analysis(existing_environment="unclear"))
 
 
 def test_valid_result_is_typed_immutable_and_preserves_five_sections():
@@ -20,7 +21,9 @@ def test_valid_result_is_typed_immutable_and_preserves_five_sections():
     assert result.title == "企业知识服务内部草稿"
     assert isinstance(result.solution_sections, tuple)
     assert [s.key for s in result.solution_sections] == ["overall_approach","deployment","data_security","integration","implementation"]
-    assert result.assumptions == ("服务器资源未确认，不承诺具体配置。",)
+    assert result.assumptions == ()
+    assert isinstance(result.executive_summary, tuple)
+    assert isinstance(result.solution_sections[0].statements, tuple)
     with pytest.raises(FrozenInstanceError):
         result.title = "changed"
 
@@ -40,17 +43,19 @@ def invalid_payloads():
     for sections in ([], original["solution_sections"][:-1], original["solution_sections"]*2,
                      list(reversed(original["solution_sections"])), {}, None):
         cases.append({**deepcopy(original), "solution_sections": sections})
-    for field, value in (("key", "unknown"), ("title", "错误标题"), ("content", " \n"),
-                         ("content", {}), ("source", "S1")):
+    for field, value in (("key", "unknown"), ("title", "错误标题"), ("statements", " \n"),
+                         ("statements", {}), ("content", "旧版自由文本"), ("source", "S1")):
         item = deepcopy(original)
         item["solution_sections"][0][field] = value
         cases.append(item)
     item = deepcopy(original)
     item["solution_sections"][1] = deepcopy(item["solution_sections"][0])
     cases.append(item)
-    for name in ("assumptions", "unresolved_items"):
-        for value in (None, "text", {}, [""], [None], [1], ["条目"]*11):
-            cases.append({**deepcopy(original), name: value})
+    assumption = {"text": "环境未确认，不承诺配置。", "related_fields": ["existing_environment"]}
+    for value in (None, "text", {}, [""], [None], [1], [assumption]*11,
+                  [{"text": ""}], [{"text": " ", "related_fields": ["existing_environment"]}],
+                  [{**assumption, "extra": True}]):
+        cases.append({**deepcopy(original), "assumptions": value})
     return cases
 
 
@@ -71,7 +76,7 @@ def test_json_errors_are_safe_and_not_repaired(content, caplog):
     from apps.sales.services.solution_schema import parse_solution_draft
 
     with pytest.raises(SolutionDraftError) as exc:
-        parse_solution_draft(content, source_count=3)
+        parse_solution_draft(content, source_count=3, analysis=typed_analysis())
     assert exc.value.code == "solution_draft_invalid_response"
     assert "secret-api-key" not in str(exc.value) + caplog.text
     assert exc.value.__cause__ is None
@@ -81,31 +86,33 @@ def test_single_whole_response_json_fence_and_empty_lists_are_supported():
     from apps.sales.services.solution_schema import parse_solution_draft
 
     payload = solution_payload()
-    payload["assumptions"] = payload["unresolved_items"] = []
-    result = parse_solution_draft("```json\n"+json.dumps(payload, ensure_ascii=False)+"\n```", source_count=1)
-    assert result.assumptions == result.unresolved_items == ()
+    result = parse_solution_draft("```json\n"+json.dumps(payload, ensure_ascii=False)+"\n```", source_count=1,
+                                  analysis=typed_analysis())
+    assert result.assumptions == ()
 
 
 @pytest.mark.parametrize("citation,expected", [
     ("[S1]", "[S1]"), ("[S1][S2]", "[S1][S2]"), ("（S1）", "[S1]"), ("(S1)", "[S1]"),
     ("[S1, S2]", "[S1][S2]"), ("（S1、S2）", "[S1][S2]"), ("(S1, S2)", "[S1][S2]"),
 ])
-def test_real_citations_normalize_without_changing_prose(citation, expected):
-    payload = solution_payload()
-    payload["executive_summary"] = "普通正文（部署待确认）。"+citation
-    assert parse(payload).executive_summary == "普通正文（部署待确认）。"+expected
+def test_phase4_real_citations_still_normalize_without_changing_prose(citation, expected):
+    from apps.rag.services.answering import normalize_citations
+
+    assert normalize_citations("普通正文（部署待确认）。"+citation, source_count=3) == "普通正文（部署待确认）。"+expected
 
 
-@pytest.mark.parametrize("location", ["executive_summary", "section", "assumptions", "unresolved_items", "title"])
+@pytest.mark.parametrize("location", ["executive_summary", "section", "assumptions", "title"])
 @pytest.mark.parametrize("citation", ["[S9]", "（S9）", "(S1, S9)", "[S01]", "[S1, S9]"])
 def test_unknown_citation_in_any_text_field_is_rejected(location, citation):
     from apps.sales.services.solution_errors import SolutionDraftError
 
     payload = solution_payload()
     if location == "section":
-        payload["solution_sections"][2]["content"] += citation
-    elif location in ("assumptions", "unresolved_items"):
-        payload[location].append("测试"+citation)
+        payload["solution_sections"][2]["statements"][0]["text"] += citation
+    elif location == "assumptions":
+        payload[location].append({"text": "测试"+citation, "related_fields": ["existing_environment"]})
+    elif location == "executive_summary":
+        payload[location][0]["text"] += citation
     else:
         payload[location] += citation
     with pytest.raises(SolutionDraftError) as exc:
@@ -131,13 +138,13 @@ def test_complete_citation_groups_cannot_hide_unknown_labels_with_spacing(citati
     from apps.sales.services.solution_errors import SolutionDraftError
 
     payload = solution_payload()
-    payload["executive_summary"] += citation
+    payload["executive_summary"][0]["text"] += citation
     with pytest.raises(SolutionDraftError):
         parse(payload)
 
 
 @pytest.mark.parametrize("citation,expected", [("[ S1 ]", "[S1]"), ("（ S1、S2 ）", "[S1][S2]"), ("[S1，S2]", "[S1][S2]")])
-def test_complete_real_groups_with_spacing_preserve_authority(citation, expected):
-    payload = solution_payload()
-    payload["executive_summary"] = "有证据。"+citation
-    assert parse(payload).executive_summary == "有证据。"+expected
+def test_phase4_complete_real_groups_with_spacing_preserve_authority(citation, expected):
+    from apps.rag.services.answering import normalize_citations
+
+    assert normalize_citations("有证据。"+citation, source_count=3) == "有证据。"+expected

@@ -15,7 +15,9 @@ from apps.sales.services.solution_readiness import (
     SolutionReadiness, SolutionReadinessStatus, check_solution_readiness,
 )
 from apps.sales.services.solution_retrieval import SolutionSource, build_retrieval_intents, merge_evidence
-from apps.sales.services.solution_schema import SolutionDraft, parse_solution_draft
+from apps.sales.services.solution_schema import (
+    SolutionDraft, SolutionUnresolvedItem, build_solution_unresolved_items, parse_solution_draft,
+)
 
 
 class SolutionGenerationStatus(StrEnum):
@@ -31,6 +33,7 @@ class GroundedSolutionDraftResult:
     generation_status: SolutionGenerationStatus
     draft: SolutionDraft | None
     sources: tuple[SolutionSource, ...]
+    unresolved_items: tuple[SolutionUnresolvedItem, ...]
 
 
 def generate_grounded_solution_draft(
@@ -49,12 +52,13 @@ def generate_grounded_solution_draft(
     analysis_id = analysis.pk
     typed = analysis_record_to_domain(analysis)
     readiness = check_solution_readiness(typed)
+    unresolved_items = build_solution_unresolved_items(typed)
     if readiness.status in {
         SolutionReadinessStatus.NEEDS_SALES_CLARIFICATION,
         SolutionReadinessStatus.NEEDS_PRESALES_INVOLVEMENT,
     }:
         return GroundedSolutionDraftResult(
-            analysis_id, readiness, SolutionGenerationStatus.BLOCKED_BY_READINESS, None, (),
+            analysis_id, readiness, SolutionGenerationStatus.BLOCKED_BY_READINESS, None, (), unresolved_items,
         )
     groups = [search_knowledge(
         query=intent.query, top_k=3, document_type=None, provider=embedding_provider,
@@ -62,11 +66,11 @@ def generate_grounded_solution_draft(
     sources = merge_evidence(groups)
     if not sources:
         return GroundedSolutionDraftResult(
-            analysis_id, readiness, SolutionGenerationStatus.INSUFFICIENT_EVIDENCE, None, (),
+            analysis_id, readiness, SolutionGenerationStatus.INSUFFICIENT_EVIDENCE, None, (), unresolved_items,
         )
     provider = llm_provider if llm_provider is not None else get_llm_provider()
     generation = provider.generate(build_solution_messages(typed, readiness, sources))
-    draft = parse_solution_draft(generation.content, source_count=len(sources))
+    draft = parse_solution_draft(generation.content, source_count=len(sources), analysis=typed)
     return GroundedSolutionDraftResult(
-        analysis_id, readiness, SolutionGenerationStatus.GENERATED, draft, sources,
+        analysis_id, readiness, SolutionGenerationStatus.GENERATED, draft, sources, unresolved_items,
     )

@@ -55,17 +55,18 @@ def analysis_record(**statuses):
 def solution_payload():
     return {
         "title": "企业知识服务内部草稿",
-        "executive_summary": "围绕客户知识查询需求形成内部草稿。[S1]",
+        "executive_summary": [{"type": "customer_fact", "text": "客户希望进行企业知识查询。", "citations": []}],
         "solution_sections": [
-            {"key": key, "title": title, "content": "以企业资料为边界，具体实施条件待确认。[S1]"}
+            {"key": key, "title": title, "statements": [
+                {"type": "enterprise_fact", "text": "企业资料确认支持私有化部署。", "citations": ["S1"]},
+            ]}
             for key, title in (
                 ("overall_approach", "总体方案"), ("deployment", "部署方案"),
                 ("data_security", "数据安全"), ("integration", "系统集成"),
                 ("implementation", "实施建议"),
             )
         ],
-        "assumptions": ["服务器资源未确认，不承诺具体配置。"],
-        "unresolved_items": ["请确认OA集成范围。"],
+        "assumptions": [],
     }
 
 
