@@ -1,0 +1,76 @@
+"""Small deterministic solution fixtures, used only by offline tests."""
+
+import json
+
+from apps.sales.services.requirement_analysis import _parse_analysis
+from apps.sales.tests.requirement_fakes import AnalysisFakeLLM
+
+
+VALUES = {
+    "business_goal": "企业知识查询",
+    "use_scenario": "员工查阅企业资料",
+    "user_scale": "约300人",
+    "deployment_requirement": "私有化部署",
+    "data_security_requirement": "业务数据不出公网",
+    "existing_environment": "Linux服务器",
+    "integration_requirement": "OA对接",
+    "timeline": "2026年12月上线",
+    "budget": "50万元",
+    "technical_constraints": "使用PostgreSQL",
+}
+
+
+def analysis_payload(**statuses):
+    requirements = {}
+    conflicts = []
+    for name, value in VALUES.items():
+        status = statuses.get(name, "known")
+        requirements[name] = {
+            "status": status,
+            "value": value if status in {"known", "unclear"} else None,
+            "evidence": None if status == "unknown" else "受控输入证据（不要用于检索全文）",
+        }
+        if status == "conflict":
+            conflicts.append({"fields": [name], "description": "该维度存在冲突，待确认。"})
+    return {"summary": "客户计划建设企业系统。", "requirements": requirements,
+            "conflicts": conflicts, "clarifying_questions": []}
+
+
+def typed_analysis(**statuses):
+    return _parse_analysis(json.dumps(analysis_payload(**statuses), ensure_ascii=False))
+
+
+def analysis_record(**statuses):
+    """Hydrated model record without database I/O, for pure service unit tests."""
+    from apps.sales.models import OpportunityRequirementAnalysis
+
+    values = {
+        "id": 17, "opportunity_id": 12, "created_by_id": 9,
+        **analysis_payload(**statuses), "source_context": {"private": "BASIC_INFO_DO_NOT_DUMP"},
+        "source_raw_requirement": "RAW_REQUIREMENT_DO_NOT_DUMP", "analysis_version": "v1",
+    }
+    return OpportunityRequirementAnalysis.from_db("default", list(values), list(values.values()))
+
+
+def solution_payload():
+    return {
+        "title": "企业知识服务内部草稿",
+        "executive_summary": "围绕客户知识查询需求形成内部草稿。[S1]",
+        "solution_sections": [
+            {"key": key, "title": title, "content": "以企业资料为边界，具体实施条件待确认。[S1]"}
+            for key, title in (
+                ("overall_approach", "总体方案"), ("deployment", "部署方案"),
+                ("data_security", "数据安全"), ("integration", "系统集成"),
+                ("implementation", "实施建议"),
+            )
+        ],
+        "assumptions": ["服务器资源未确认，不承诺具体配置。"],
+        "unresolved_items": ["请确认OA集成范围。"],
+    }
+
+
+class SolutionFakeLLM(AnalysisFakeLLM):
+    def __init__(self, *, content=None, callback=None):
+        super().__init__(content=content if content is not None else json.dumps(
+            solution_payload(), ensure_ascii=False,
+        ), callback=callback)
