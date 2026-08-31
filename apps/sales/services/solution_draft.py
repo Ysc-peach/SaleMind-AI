@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
+from django.conf import settings
+
 from apps.knowledge.embeddings.base import EmbeddingProvider
 from apps.knowledge.services.search import search_knowledge
 from apps.llm.base import LLMProvider
@@ -69,7 +71,10 @@ def generate_grounded_solution_draft(
             analysis_id, readiness, SolutionGenerationStatus.INSUFFICIENT_EVIDENCE, None, (), unresolved_items,
         )
     provider = llm_provider if llm_provider is not None else get_llm_provider()
-    generation = provider.generate(build_solution_messages(typed, readiness, sources))
+    generation = provider.generate(
+        build_solution_messages(typed, readiness, sources),
+        max_output_tokens=settings.SOLUTION_DRAFT_MAX_OUTPUT_TOKENS,
+    )
     draft = parse_solution_draft(generation.content, source_count=len(sources), analysis=typed)
     return GroundedSolutionDraftResult(
         analysis_id, readiness, SolutionGenerationStatus.GENERATED, draft, sources, unresolved_items,

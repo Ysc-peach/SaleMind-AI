@@ -15,13 +15,17 @@ class DeterministicFakeLLM(LLMProvider):
 
     def __init__(self):
         self.calls: list[tuple[LLMMessage, ...]] = []
+        self.requested_output_budgets: list[int | None] = []
 
-    def generate(self, messages: Sequence[LLMMessage]) -> LLMGeneration:
+    def generate(
+        self, messages: Sequence[LLMMessage], *, max_output_tokens: int | None = None,
+    ) -> LLMGeneration:
         normalized_messages = tuple(
             {"role": message["role"], "content": message["content"]}
             for message in messages
         )
         self.calls.append(normalized_messages)
+        self.requested_output_budgets.append(max_output_tokens)
         serialized = json.dumps(
             normalized_messages,
             ensure_ascii=False,

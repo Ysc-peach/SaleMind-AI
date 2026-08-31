@@ -37,8 +37,8 @@ class AnalysisFakeLLM(DeterministicFakeLLM):
         self.callback = callback
         self.content = content if content is not None else json.dumps(valid_analysis_payload(), ensure_ascii=False)
 
-    def generate(self, messages):
-        super().generate(messages)
+    def generate(self, messages, *, max_output_tokens=None):
+        super().generate(messages, max_output_tokens=max_output_tokens)
         if self.callback is not None:
             self.callback()
         return LLMGeneration(content=self.content)

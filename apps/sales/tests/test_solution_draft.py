@@ -160,7 +160,7 @@ def test_llm_exceptions_keep_original_instance(monkeypatch, code):
     monkeypatch.setattr(service, "search_knowledge", lambda **kw: [search_result()])
     error = LLMProviderError(code)
     class FailingLLM(SolutionFakeLLM):
-        def generate(self, messages):
+        def generate(self, messages, *, max_output_tokens=None):
             raise error
     with pytest.raises(LLMProviderError) as exc:
         service.generate_grounded_solution_draft(analysis_record(), llm_provider=FailingLLM())

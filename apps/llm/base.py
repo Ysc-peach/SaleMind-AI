@@ -33,8 +33,10 @@ class LLMProvider(ABC):
         """Configured model identifier."""
 
     @abstractmethod
-    def generate(self, messages: Sequence[LLMMessage]) -> LLMGeneration:
-        """Generate one final response from standard chat messages."""
+    def generate(
+        self, messages: Sequence[LLMMessage], *, max_output_tokens: int | None = None,
+    ) -> LLMGeneration:
+        """Generate once; None keeps the configured output budget for this call."""
 
 
 @dataclass(frozen=True, slots=True)

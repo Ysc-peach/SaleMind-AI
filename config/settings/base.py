@@ -95,6 +95,9 @@ LLM_MAX_RETRIES = env.int("LLM_MAX_RETRIES", default=2)
 LLM_MAX_OUTPUT_TOKENS = env.int("LLM_MAX_OUTPUT_TOKENS", default=1024)
 LLM_THINKING_ENABLED = env.bool("LLM_THINKING_ENABLED", default=False)
 
+# Structured solution drafts need more output space than ordinary LLM tasks.
+SOLUTION_DRAFT_MAX_OUTPUT_TOKENS = env.int("SOLUTION_DRAFT_MAX_OUTPUT_TOKENS", default=4000)
+
 KNOWLEDGE_MAX_FILE_SIZE_BYTES = env.int(
     "KNOWLEDGE_MAX_FILE_SIZE_BYTES",
     default=20 * 1024 * 1024,
