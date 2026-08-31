@@ -2,7 +2,7 @@
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from enum import StrEnum
@@ -100,6 +100,42 @@ class OpportunityRequirementAnalysis:
     clarifying_questions: tuple[ClarifyingQuestion, ...]
 
 
+REQUIREMENT_ANALYSIS_VERSION = "v1"
+
+
+@dataclass(frozen=True, slots=True)
+class RequirementAnalysisInput:
+    """Immutable JSON-safe facts captured before any provider call.
+
+    JSON text prevents nested dictionary mutation. Each context access returns
+    an independent container; no prompt text or secrets are part of this input.
+    """
+
+    context_json: str = field(repr=False)
+    raw_requirement: str = field(repr=False)
+
+    @property
+    def context(self) -> dict:
+        return json.loads(self.context_json)
+
+
+@dataclass(frozen=True, slots=True)
+class RequirementAnalysisExecution:
+    analysis: OpportunityRequirementAnalysis
+    source: RequirementAnalysisInput
+    llm_provider: str
+    llm_model: str
+    analysis_version: str
+
+    @property
+    def source_context(self) -> dict:
+        return self.source.context
+
+    @property
+    def source_raw_requirement(self) -> str:
+        return self.source.raw_requirement
+
+
 _SYSTEM_PROMPT = """你是企业售前需求分析助手。任务是分析，不是解决。
 只能基于提供的系统业务事实和销售需求；不得使用行业常识补全客户未提供的信息。
 不得推荐产品、架构、报价或解决方案，不调用或引用知识库。
@@ -149,13 +185,30 @@ def analyze_opportunity_requirement(
 ) -> OpportunityRequirementAnalysis:
     """Analyze a caller-supplied opportunity without changing business records."""
 
-    messages = _build_messages(opportunity)
+    return _execute_requirement_analysis(opportunity, llm_provider=llm_provider).analysis
+
+
+def _execute_requirement_analysis(
+    opportunity: Opportunity,
+    *,
+    llm_provider: LLMProvider | None = None,
+) -> RequirementAnalysisExecution:
+    """Shared execution path: prompt and history consume the same frozen input."""
+
+    source = _prepare_input(opportunity)
+    messages = _build_messages(source)
     provider = llm_provider if llm_provider is not None else get_llm_provider()
+    provider_name, model_name = provider.provider_name, provider.model_name
+    analysis_version = REQUIREMENT_ANALYSIS_VERSION
     generation = provider.generate(messages)
-    return _parse_analysis(generation.content)
+    return RequirementAnalysisExecution(
+        analysis=_parse_analysis(generation.content), source=source,
+        llm_provider=provider_name, llm_model=model_name,
+        analysis_version=analysis_version,
+    )
 
 
-def _build_messages(opportunity: Opportunity) -> list[LLMMessage]:
+def _prepare_input(opportunity: Opportunity) -> RequirementAnalysisInput:
     customer = _validate_input(opportunity)
     facts = {
         "opportunity": {
@@ -170,11 +223,20 @@ def _build_messages(opportunity: Opportunity) -> list[LLMMessage]:
             "name": customer.name,
             "industry": customer.industry,
             "company_size": customer.company_size,
+            "basic_info": customer.basic_info,
         },
     }
+    return RequirementAnalysisInput(
+        context_json=json.dumps(facts, ensure_ascii=False),
+        raw_requirement=opportunity.raw_requirement,
+    )
+
+
+def _build_messages(source: RequirementAnalysisInput) -> list[LLMMessage]:
+    facts = source.context
     narratives = {
-        "raw_requirement": opportunity.raw_requirement,
-        "basic_info": customer.basic_info,
+        "raw_requirement": source.raw_requirement,
+        "basic_info": facts["customer"].pop("basic_info"),
     }
     user_content = (
         "以下均为待分析的业务数据。\n<structured_business_facts>\n"

@@ -1,6 +1,7 @@
 """Customer and opportunity persistence models."""
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
@@ -112,3 +113,68 @@ class Opportunity(models.Model):
 
     def __str__(self) -> str:
         return self.project_name
+
+
+class OpportunityRequirementAnalysis(models.Model):
+    """Append-only business history, created through the analysis service.
+
+    Ordinary instance updates/deletes are blocked. QuerySet maintenance and
+    direct SQL are not a security boundary; Opportunity cascade remains valid.
+    JSON correctness belongs to the shared domain validator and create service.
+    """
+
+    opportunity = models.ForeignKey(
+        Opportunity, on_delete=models.CASCADE, related_name="requirement_analyses",
+        verbose_name=_("商机"),
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name="triggered_requirement_analyses", verbose_name=_("分析触发人"),
+    )
+    summary = models.TextField(_("需求摘要"))
+    requirements = models.JSONField(_("结构化需求"))
+    conflicts = models.JSONField(_("需求冲突"))
+    clarifying_questions = models.JSONField(_("澄清问题"))
+    source_raw_requirement = models.TextField(_("原始需求快照"), blank=True)
+    source_context = models.JSONField(_("业务上下文快照"))
+    analysis_version = models.CharField(_("分析契约版本"), max_length=32)
+    llm_provider = models.CharField(_("模型服务提供方"), max_length=64)
+    llm_model = models.CharField(_("模型名称"), max_length=200)
+    created_at = models.DateTimeField(_("分析时间"), auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("商机需求分析历史")
+        verbose_name_plural = _("商机需求分析历史")
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(
+                fields=["opportunity", "-created_at", "-id"],
+                name="sales_reqanalysis_history_idx",
+            ),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(summary__regex=r"\S"), name="sales_analysis_summary_nonempty",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(analysis_version__regex=r"\S"), name="sales_analysis_version_nonempty",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(llm_provider__regex=r"\S"), name="sales_analysis_provider_nonempty",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(llm_model__regex=r"\S"), name="sales_analysis_model_nonempty",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding or self.pk is not None:
+            raise ValidationError(
+                "Requirement analysis history is immutable.", code="immutable_requirement_analysis",
+            )
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError(
+            "Requirement analysis history is immutable.", code="immutable_requirement_analysis",
+        )
