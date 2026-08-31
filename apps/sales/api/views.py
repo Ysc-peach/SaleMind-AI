@@ -5,8 +5,7 @@ from rest_framework import mixins, viewsets
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
-from apps.accounts.models import UserRole
-
+from .opportunity_access import OpportunityVisibilityMixin
 from .pagination import DefaultPageNumberPagination
 from .permissions import CustomerPermission, OpportunityPermission
 from .serializers import (
@@ -86,6 +85,7 @@ class CustomerViewSet(
 
 
 class OpportunityViewSet(
+    OpportunityVisibilityMixin,
     mixins.ListModelMixin,
     mixins.CreateModelMixin,
     mixins.RetrieveModelMixin,
@@ -108,21 +108,6 @@ class OpportunityViewSet(
         if action == "list":
             return OpportunityListSerializer
         return OpportunityDetailSerializer
-
-    def get_queryset(self):
-        queryset = Opportunity.objects.select_related(
-            "customer", "sales_owner", "presales_owner", "created_by"
-        )
-        role = self.request.user.role
-
-        if role == UserRole.SALES:
-            queryset = queryset.filter(sales_owner=self.request.user)
-        elif role == UserRole.PRESALES:
-            queryset = queryset.filter(presales_owner=self.request.user)
-        elif role != UserRole.ADMIN:
-            queryset = queryset.none()
-
-        return queryset.order_by("-updated_at", "-id")
 
     def perform_create(self, serializer):
         serializer.save(sales_owner=self.request.user, created_by=self.request.user)
