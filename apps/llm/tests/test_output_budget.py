@@ -41,12 +41,16 @@ def test_solution_default_output_budget_reaches_sdk_without_global_inflation(mon
     from apps.sales.services import solution_draft
 
     settings.LLM_MAX_OUTPUT_TOKENS = 321
-    provider, endpoint, _ = _build_provider(monkeypatch, _response(json.dumps(solution_payload())))
+    provider, endpoint, _ = _build_provider(monkeypatch, [
+        _response(json.dumps(solution_payload())),
+        _response('{"passed":true,"violations":[]}'),
+    ])
     monkeypatch.setattr(solution_draft, "search_knowledge", lambda **kw: [search_result()])
     result = solution_draft.generate_grounded_solution_draft(analysis_record(), llm_provider=provider)
     assert result.generation_status == "generated"
-    assert len(endpoint.calls) == 1
+    assert len(endpoint.calls) == 2
     assert endpoint.calls[0]["max_tokens"] == 4000
+    assert endpoint.calls[1]["max_tokens"] == 321
     assert settings.LLM_MAX_OUTPUT_TOKENS == 321
 
 
@@ -58,7 +62,7 @@ def test_solution_server_setting_is_recorded_by_fake(monkeypatch, settings):
     provider = SolutionFakeLLM()
     result = solution_draft.generate_grounded_solution_draft(analysis_record(), llm_provider=provider)
     assert result.generation_status == "generated"
-    assert provider.requested_output_budgets == [3500]
+    assert provider.requested_output_budgets == [3500, None]
 
 
 @pytest.mark.parametrize("statuses", [{"budget": "conflict"}, {"data_security_requirement": "conflict"}, {}])

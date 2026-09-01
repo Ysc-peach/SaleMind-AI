@@ -30,7 +30,7 @@ def generate_with_evidence(monkeypatch, evidence, statement, *, customer_request
     assert evidence in root.find("enterprise_evidence/source").text
     assert root.find("enterprise_evidence/source").attrib == {"id": "S1"}
     assert result.sources[0].content == evidence
-    assert provider.requested_output_budgets == [4000]
+    assert provider.requested_output_budgets == [4000, None]
     return result, system["content"], root
 
 

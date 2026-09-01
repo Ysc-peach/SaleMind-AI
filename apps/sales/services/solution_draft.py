@@ -12,6 +12,7 @@ from apps.llm.factory import get_llm_provider
 from apps.sales.models import OpportunityRequirementAnalysis as AnalysisRecord
 from apps.sales.services.requirement_analysis_history import analysis_record_to_domain
 from apps.sales.services.solution_errors import SolutionDraftError, SolutionDraftErrorCode
+from apps.sales.services.solution_grounding import verify_solution_draft_grounding
 from apps.sales.services.solution_prompt import build_solution_messages
 from apps.sales.services.solution_readiness import (
     SolutionReadiness, SolutionReadinessStatus, check_solution_readiness,
@@ -76,6 +77,9 @@ def generate_grounded_solution_draft(
         max_output_tokens=settings.SOLUTION_DRAFT_MAX_OUTPUT_TOKENS,
     )
     draft = parse_solution_draft(generation.content, source_count=len(sources), analysis=typed)
+    verify_solution_draft_grounding(
+        analysis=typed, draft=draft, sources=sources, llm_provider=provider,
+    )
     return GroundedSolutionDraftResult(
         analysis_id, readiness, SolutionGenerationStatus.GENERATED, draft, sources, unresolved_items,
     )

@@ -16,6 +16,8 @@ class _ChatCompletionsEndpoint:
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
+        if isinstance(self._response_or_error, list):
+            return self._response_or_error[len(self.calls) - 1]
         if isinstance(self._response_or_error, Exception):
             raise self._response_or_error
         return self._response_or_error

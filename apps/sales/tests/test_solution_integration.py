@@ -68,7 +68,7 @@ def test_selected_history_real_cosine_retrieval_no_business_writes(history_and_k
     assert result.analysis_id == first.pk != latest.pk
     assert result.generation_status == "generated"
     assert result.readiness.status == "ready_with_gaps"
-    assert len(llm.calls) == 1
+    assert len(llm.calls) == 2
     assert len(queries) == 3
     assert all("<=>" in query["sql"] for query in queries)
     assert [source.chunk_id for source in result.sources] == [chunk.pk]

@@ -2,6 +2,8 @@
 
 import json
 
+from apps.llm.base import LLMGeneration
+from apps.llm.tests.fakes import DeterministicFakeLLM
 from apps.sales.services.requirement_analysis import _parse_analysis
 from apps.sales.tests.requirement_fakes import AnalysisFakeLLM
 
@@ -71,7 +73,16 @@ def solution_payload():
 
 
 class SolutionFakeLLM(AnalysisFakeLLM):
-    def __init__(self, *, content=None, callback=None):
+    def __init__(self, *, content=None, callback=None, grounding_content=None):
         super().__init__(content=content if content is not None else json.dumps(
             solution_payload(), ensure_ascii=False,
         ), callback=callback)
+        self.grounding_content = grounding_content if grounding_content is not None else json.dumps({
+            "passed": True, "violations": [],
+        })
+
+    def generate(self, messages, *, max_output_tokens=None):
+        if len(messages) > 1 and "<allowed_violation_locations>" in messages[1]["content"]:
+            DeterministicFakeLLM.generate(self, messages, max_output_tokens=max_output_tokens)
+            return LLMGeneration(content=self.grounding_content)
+        return super().generate(messages, max_output_tokens=max_output_tokens)
