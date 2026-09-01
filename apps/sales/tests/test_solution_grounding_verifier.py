@@ -175,6 +175,43 @@ def test_verifier_treats_analysis_draft_and_evidence_as_untrusted_data():
     assert evidence_injection in root.find("enterprise_evidence/source").text
 
 
+def test_verifier_contract_distinguishes_explicit_negative_from_unconfirmed_per_capability():
+    from apps.sales.services.solution_grounding import verify_solution_draft_grounding
+
+    provider = VerifierFakeLLM(verifier_response())
+    mixed_evidence = (
+        "企业资料确认支持私有化部署；当前版本不支持扫描型 PDF OCR；"
+        "当前资料未确认 SSO 与 Oracle 能力。"
+    )
+    verify_solution_draft_grounding(
+        analysis=typed_analysis(),
+        draft=draft(),
+        sources=sources(content=mixed_evidence),
+        llm_provider=provider,
+    )
+
+    system = provider.calls[0][0]["content"]
+    for contract in (
+        "CONFIRMED_POSITIVE",
+        "EXPLICIT_NEGATIVE",
+        "UNCONFIRMED",
+        "EXPLICIT_NEGATIVE 不等于 UNCONFIRMED",
+        "当前版本不支持扫描型 PDF OCR",
+        "当前资料未确认扫描型 PDF OCR 能力",
+        "明确不支持 OCR，同时 SSO、Oracle 未确认",
+        "Evaluate evidence at the specific capability/claim level, not at the document-wide level.",
+        "该 statement 自己的 citations 指向的 sources",
+    ):
+        assert contract in system
+
+    assert "明确支持 X" in system
+    assert "正向 enterprise_fact 可以成立" in system
+    assert "明确不支持 X" in system
+    assert "负向 enterprise_fact 可以成立" in system
+    assert "未确认 X" in system
+    assert "正向或负向 enterprise_fact 都不能成立" in system
+
+
 @pytest.mark.parametrize("content", [
     "", " ", "not json", "{}", '{"passed":true,"violations":[],"extra":1}',
     '{"passed":1,"violations":[]}', '{"passed":true,"violations":{}}',
