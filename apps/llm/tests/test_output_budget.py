@@ -42,9 +42,13 @@ def test_solution_default_output_budget_reaches_sdk_without_global_inflation(mon
 
     settings.LLM_MAX_OUTPUT_TOKENS = 321
     verifier_result = {"results": [
-        {"location": "executive_summary[0]", "relation": "SUPPORTED"},
+        {"location": "executive_summary[0]", "relation": "SUPPORTED", "type_fit": "VALID"},
         *[
-            {"location": f"solution_sections.{key}.statements[0]", "relation": "SUPPORTED"}
+            {
+                "location": f"solution_sections.{key}.statements[0]",
+                "relation": "SUPPORTED",
+                "type_fit": "VALID",
+            }
             for key in ("overall_approach", "deployment", "data_security", "integration", "implementation")
         ],
     ]}

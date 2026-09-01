@@ -24,6 +24,11 @@ class GroundingRelation(StrEnum):
     CONTRADICTED = "CONTRADICTED"
 
 
+class GroundingTypeFit(StrEnum):
+    VALID = "VALID"
+    INVALID = "INVALID"
+
+
 class GroundingViolationCode(StrEnum):
     CUSTOMER_FACT_NOT_SUPPORTED = "CUSTOMER_FACT_NOT_SUPPORTED"
     ENTERPRISE_FACT_NOT_SUPPORTED = "ENTERPRISE_FACT_NOT_SUPPORTED"
@@ -35,6 +40,7 @@ class GroundingViolationCode(StrEnum):
     MIXED_GROUNDING_STATUS = "MIXED_GROUNDING_STATUS"
     CITATION_SEMANTIC_MISMATCH = "CITATION_SEMANTIC_MISMATCH"
     OTHER_GROUNDING_VIOLATION = "OTHER_GROUNDING_VIOLATION"
+    STATEMENT_TYPE_MISMATCH = "STATEMENT_TYPE_MISMATCH"
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +62,7 @@ class GroundingClaimPacket:
 class GroundingClaimResult:
     location: str
     relation: GroundingRelation
+    type_fit: GroundingTypeFit
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,15 +111,20 @@ def verify_solution_draft_grounding(
         build_solution_grounding_messages(packets),
     )
     results = _parse_results(generation.content, packets=packets)
-    violations = tuple(
-        SolutionGroundingViolation(_violation_code(packet.statement_type), packet.location)
-        for packet, result in zip(packets, results, strict=True)
-        if result.relation is not GroundingRelation.SUPPORTED
-    )
+    violations = []
+    for packet, result in zip(packets, results, strict=True):
+        if result.relation is not GroundingRelation.SUPPORTED:
+            violations.append(SolutionGroundingViolation(
+                _violation_code(packet.statement_type), packet.location,
+            ))
+        if result.type_fit is GroundingTypeFit.INVALID:
+            violations.append(SolutionGroundingViolation(
+                GroundingViolationCode.STATEMENT_TYPE_MISMATCH, packet.location,
+            ))
     verification = SolutionGroundingVerification(
         passed=not violations,
         results=results,
-        violations=violations,
+        violations=tuple(violations),
     )
     if not verification.passed:
         raise SolutionDraftGroundingError(
@@ -199,17 +211,23 @@ def _parse_results(
     allowed_locations = frozenset(packet.location for packet in packets)
     by_location = {}
     for item in items:
-        _object(item, {"location", "relation"})
-        location, relation = item["location"], item["relation"]
+        _object(item, {"location", "relation", "type_fit"})
+        location = item["location"]
+        relation = item["relation"]
+        type_fit = item["type_fit"]
         if (
             not isinstance(location, str)
             or location not in allowed_locations
             or location in by_location
             or not isinstance(relation, str)
             or relation not in GroundingRelation._value2member_map_
+            or not isinstance(type_fit, str)
+            or type_fit not in GroundingTypeFit._value2member_map_
         ):
             _invalid_response()
-        by_location[location] = GroundingClaimResult(location, GroundingRelation(relation))
+        by_location[location] = GroundingClaimResult(
+            location, GroundingRelation(relation), GroundingTypeFit(type_fit),
+        )
     if set(by_location) != allowed_locations:
         _invalid_response()
     return tuple(by_location[packet.location] for packet in packets)

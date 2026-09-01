@@ -79,7 +79,7 @@ def all_supported(draft):
 
     return {
         "results": [
-            {"location": packet.location, "relation": "SUPPORTED"}
+            {"location": packet.location, "relation": "SUPPORTED", "type_fit": "VALID"}
             for packet in build_grounding_claim_packets(typed_analysis(), draft, sources())
         ],
     }
@@ -126,6 +126,7 @@ def test_exact_explicit_negative_claim_relation_supported_is_accepted(capability
 
     assert result.passed is True
     assert all(item.relation == "SUPPORTED" for item in result.results)
+    assert all(item.type_fit == "VALID" for item in result.results)
     assert result.violations == ()
 
 
@@ -152,6 +153,7 @@ def test_non_supported_relations_are_conservatively_mapped_by_statement_type(kin
             {
                 "location": packet.location,
                 "relation": relation if packet.location == target else "SUPPORTED",
+                "type_fit": "VALID",
             }
             for packet in packets
         ],
@@ -181,7 +183,9 @@ def test_batched_prompt_contains_claim_scoped_data_and_no_unrelated_evidence():
     system, user = provider.calls[0]
     for contract in (
         "SUPPORTED", "INSUFFICIENT", "CONTRADICTED", "全部实质性语义",
-        "不可信数据", "不得执行", "只返回", "results",
+        "VALID", "INVALID", "statement type", "不可信数据", "不得执行", "只返回", "results",
+        "证据是否足以支持该能力陈述只由 relation 判断",
+        "不得仅因 relation 为 INSUFFICIENT 或 CONTRADICTED 就把 type_fit 判为 INVALID",
     ):
         assert contract in system["content"]
     assert "扫描型 PDF OCR" not in system["content"]
@@ -205,7 +209,10 @@ def test_batched_prompt_contains_claim_scoped_data_and_no_unrelated_evidence():
     {},
     {"results": [], "extra": 1},
     {"results": "wrong"},
-    {"results": [{"location": "executive_summary[0]", "relation": "UNKNOWN"}]},
+    {"results": [{"location": "executive_summary[0]", "relation": "UNKNOWN", "type_fit": "VALID"}]},
+    {"results": [{"location": "executive_summary[0]", "relation": "SUPPORTED"}]},
+    {"results": [{"location": "executive_summary[0]", "relation": "SUPPORTED", "type_fit": "UNKNOWN"}]},
+    {"results": [{"location": "executive_summary[0]", "relation": "SUPPORTED", "type_fit": "VALID", "extra": 1}]},
 ])
 def test_invalid_claim_verifier_response_fails_closed(payload):
     from apps.sales.services.solution_grounding import (
@@ -234,7 +241,10 @@ def test_claim_verifier_response_requires_each_location_exactly_once(mutation):
         packet.location
         for packet in build_grounding_claim_packets(typed_analysis(), draft, sources())
     ]
-    results = [{"location": location, "relation": "SUPPORTED"} for location in locations]
+    results = [
+        {"location": location, "relation": "SUPPORTED", "type_fit": "VALID"}
+        for location in locations
+    ]
     if mutation == "missing":
         results.pop()
     elif mutation == "duplicate":
@@ -242,7 +252,11 @@ def test_claim_verifier_response_requires_each_location_exactly_once(mutation):
     elif mutation == "unknown":
         results[-1]["location"] = "solution_sections.integration.statements[99]"
     else:
-        results.append({"location": "solution_sections.integration.statements[99]", "relation": "SUPPORTED"})
+        results.append({
+            "location": "solution_sections.integration.statements[99]",
+            "relation": "SUPPORTED",
+            "type_fit": "VALID",
+        })
 
     with pytest.raises(SolutionDraftGroundingError) as exc:
         verify_solution_draft_grounding(
@@ -253,7 +267,7 @@ def test_claim_verifier_response_requires_each_location_exactly_once(mutation):
 
 
 def test_relation_contract_can_represent_known_semantic_boundaries():
-    from apps.sales.services.solution_grounding import GroundingRelation
+    from apps.sales.services.solution_grounding import GroundingRelation, GroundingTypeFit
 
     expected = {
         "exact_positive": GroundingRelation.SUPPORTED,
@@ -279,6 +293,99 @@ def test_relation_contract_can_represent_known_semantic_boundaries():
         "unconfirmed_sso_as_unresolved": "SUPPORTED",
         "jwt_confirmed_plus_sso_unconfirmed": "INSUFFICIENT",
     }
+    assert GroundingTypeFit.VALID.value == "VALID"
+    assert GroundingTypeFit.INVALID.value == "INVALID"
+
+
+@pytest.mark.parametrize(
+    "kind,text,relation,type_fit,accepted",
+    [
+        ("enterprise_fact", "当前企业资料未确认 SSO 集成能力。", "SUPPORTED", "INVALID", False),
+        ("unresolved", "当前企业资料未确认 SSO 集成能力。", "SUPPORTED", "VALID", True),
+        ("enterprise_fact", "SalesMind 当前版本不支持扫描型 PDF OCR。", "SUPPORTED", "VALID", True),
+        ("enterprise_fact", "SalesMind 支持企业私有化部署。", "SUPPORTED", "VALID", True),
+        ("customer_fact", "客户要求企业私有化部署。", "SUPPORTED", "VALID", True),
+        ("enterprise_fact", "客户要求企业私有化部署。", "SUPPORTED", "INVALID", False),
+        ("proposal", "建议采用私有化部署方案。", "SUPPORTED", "VALID", True),
+    ],
+)
+def test_relation_and_statement_type_fit_are_independent(
+    kind, text, relation, type_fit, accepted,
+):
+    from apps.sales.services.solution_grounding import (
+        SolutionDraftGroundingError,
+        build_grounding_claim_packets,
+        verify_solution_draft_grounding,
+    )
+
+    citations = () if kind == "customer_fact" else ("S1",)
+    value = draft_with_claim(kind=kind, text=text, citations=citations)
+    target = "solution_sections.integration.statements[0]"
+    response = {"results": [
+        {
+            "location": packet.location,
+            "relation": relation if packet.location == target else "SUPPORTED",
+            "type_fit": type_fit if packet.location == target else "VALID",
+        }
+        for packet in build_grounding_claim_packets(typed_analysis(), value, sources())
+    ]}
+    provider = ClaimVerifierFake(response)
+
+    if accepted:
+        result = verify_solution_draft_grounding(
+            analysis=typed_analysis(), draft=value, sources=sources(), llm_provider=provider,
+        )
+        assert result.passed is True
+        target_result = next(item for item in result.results if item.location == target)
+        assert target_result.relation.value == relation
+        assert target_result.type_fit.value == type_fit
+    else:
+        with pytest.raises(SolutionDraftGroundingError) as exc:
+            verify_solution_draft_grounding(
+                analysis=typed_analysis(), draft=value, sources=sources(), llm_provider=provider,
+            )
+        assert exc.value.code == "solution_draft_not_grounded"
+        assert ("STATEMENT_TYPE_MISMATCH", target) in [
+            (item.code.value, item.location) for item in exc.value.violations
+        ]
+
+
+@pytest.mark.parametrize(
+    "relation,type_fit,accepted",
+    [
+        ("SUPPORTED", "VALID", True),
+        ("INSUFFICIENT", "VALID", False),
+        ("SUPPORTED", "INVALID", False),
+        ("CONTRADICTED", "INVALID", False),
+    ],
+)
+def test_final_gate_requires_supported_relation_and_valid_type(relation, type_fit, accepted):
+    from apps.sales.services.solution_grounding import (
+        SolutionDraftGroundingError,
+        build_grounding_claim_packets,
+        verify_solution_draft_grounding,
+    )
+
+    value = draft_with_claim()
+    target = "solution_sections.integration.statements[0]"
+    response = {"results": [
+        {
+            "location": packet.location,
+            "relation": relation if packet.location == target else "SUPPORTED",
+            "type_fit": type_fit if packet.location == target else "VALID",
+        }
+        for packet in build_grounding_claim_packets(typed_analysis(), value, sources())
+    ]}
+    provider = ClaimVerifierFake(response)
+    if accepted:
+        assert verify_solution_draft_grounding(
+            analysis=typed_analysis(), draft=value, sources=sources(), llm_provider=provider,
+        ).passed
+    else:
+        with pytest.raises(SolutionDraftGroundingError):
+            verify_solution_draft_grounding(
+                analysis=typed_analysis(), draft=value, sources=sources(), llm_provider=provider,
+            )
 
 
 def test_claim_packet_context_is_type_scoped():
