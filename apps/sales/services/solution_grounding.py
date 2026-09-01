@@ -11,7 +11,17 @@ from apps.llm.factory import get_llm_provider
 from apps.sales.services.requirement_analysis import OpportunityRequirementAnalysis
 from apps.sales.services.solution_grounding_prompt import build_solution_grounding_messages
 from apps.sales.services.solution_retrieval import SolutionSource
-from apps.sales.services.solution_schema import SolutionDraft
+from apps.sales.services.solution_schema import (
+    SolutionDraft,
+    SolutionStatement,
+    SolutionStatementType,
+)
+
+
+class GroundingRelation(StrEnum):
+    SUPPORTED = "SUPPORTED"
+    INSUFFICIENT = "INSUFFICIENT"
+    CONTRADICTED = "CONTRADICTED"
 
 
 class GroundingViolationCode(StrEnum):
@@ -34,8 +44,24 @@ class SolutionGroundingViolation:
 
 
 @dataclass(frozen=True, slots=True)
+class GroundingClaimPacket:
+    location: str
+    statement_type: SolutionStatementType
+    text: str
+    evidence: tuple[SolutionSource, ...]
+    customer_context: OpportunityRequirementAnalysis | None
+
+
+@dataclass(frozen=True, slots=True)
+class GroundingClaimResult:
+    location: str
+    relation: GroundingRelation
+
+
+@dataclass(frozen=True, slots=True)
 class SolutionGroundingVerification:
     passed: bool
+    results: tuple[GroundingClaimResult, ...]
     violations: tuple[SolutionGroundingViolation, ...]
 
 
@@ -72,19 +98,56 @@ def verify_solution_draft_grounding(
     llm_provider: LLMProvider | None = None,
 ) -> SolutionGroundingVerification:
     """Judge one structurally valid draft once; never retrieve, rewrite, or retry."""
-    _validate_input(analysis, draft, sources)
-    locations = _statement_locations(draft)
+    packets = build_grounding_claim_packets(analysis, draft, sources)
     provider = llm_provider if llm_provider is not None else get_llm_provider()
     generation = provider.generate(
-        build_solution_grounding_messages(analysis, draft, sources, locations),
+        build_solution_grounding_messages(packets),
     )
-    verification = _parse_verification(generation.content, allowed_locations=frozenset(locations))
+    results = _parse_results(generation.content, packets=packets)
+    violations = tuple(
+        SolutionGroundingViolation(_violation_code(packet.statement_type), packet.location)
+        for packet, result in zip(packets, results, strict=True)
+        if result.relation is not GroundingRelation.SUPPORTED
+    )
+    verification = SolutionGroundingVerification(
+        passed=not violations,
+        results=results,
+        violations=violations,
+    )
     if not verification.passed:
         raise SolutionDraftGroundingError(
             SolutionGroundingErrorCode.NOT_GROUNDED,
             violations=verification.violations,
         )
     return verification
+
+
+def build_grounding_claim_packets(
+    analysis: OpportunityRequirementAnalysis,
+    draft: SolutionDraft,
+    sources: tuple[SolutionSource, ...],
+) -> tuple[GroundingClaimPacket, ...]:
+    """Freeze one scoped verifier packet per structurally valid statement."""
+    _validate_input(analysis, draft, sources)
+    source_by_label = {source.label: source for source in sources}
+    packets = []
+    for location, statement in _located_statements(draft):
+        if any(label not in source_by_label for label in statement.citations):
+            raise SolutionDraftGroundingError(SolutionGroundingErrorCode.INVALID_INPUT)
+        evidence = () if statement.type is SolutionStatementType.CUSTOMER_FACT else tuple(
+            source_by_label[label] for label in statement.citations
+        )
+        customer_context = (
+            None if statement.type is SolutionStatementType.ENTERPRISE_FACT else analysis
+        )
+        packets.append(GroundingClaimPacket(
+            location=location,
+            statement_type=statement.type,
+            text=statement.text,
+            evidence=evidence,
+            customer_context=customer_context,
+        ))
+    return tuple(packets)
 
 
 def _validate_input(
@@ -103,21 +166,24 @@ def _validate_input(
         raise SolutionDraftGroundingError(SolutionGroundingErrorCode.INVALID_INPUT)
 
 
-def _statement_locations(draft: SolutionDraft) -> tuple[str, ...]:
-    locations = [f"executive_summary[{index}]" for index, _ in enumerate(draft.executive_summary)]
-    locations.extend(
-        f"solution_sections.{section.key}.statements[{index}]"
+def _located_statements(draft: SolutionDraft) -> tuple[tuple[str, SolutionStatement], ...]:
+    items = [
+        (f"executive_summary[{index}]", statement)
+        for index, statement in enumerate(draft.executive_summary)
+    ]
+    items.extend(
+        (f"solution_sections.{section.key}.statements[{index}]", statement)
         for section in draft.solution_sections
-        for index, _ in enumerate(section.statements)
+        for index, statement in enumerate(section.statements)
     )
-    return tuple(locations)
+    return tuple(items)
 
 
-def _parse_verification(
+def _parse_results(
     content: str,
     *,
-    allowed_locations: frozenset[str],
-) -> SolutionGroundingVerification:
+    packets: tuple[GroundingClaimPacket, ...],
+) -> tuple[GroundingClaimResult, ...]:
     text = _text(content)
     fence = re.fullmatch(r"```json[ \t]*\r?\n(.*)\r?\n```", text, flags=re.DOTALL)
     if fence is not None:
@@ -126,28 +192,36 @@ def _parse_verification(
         payload = json.loads(text, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
     except (ValueError, RecursionError):
         _invalid_response()
-    _object(payload, {"passed", "violations"})
-    passed, items = payload["passed"], payload["violations"]
-    if not isinstance(passed, bool) or not isinstance(items, list):
+    _object(payload, {"results"})
+    items = payload["results"]
+    if not isinstance(items, list) or len(items) != len(packets):
         _invalid_response()
-    violations = []
-    seen = set()
+    allowed_locations = frozenset(packet.location for packet in packets)
+    by_location = {}
     for item in items:
-        _object(item, {"code", "location"})
-        code, location = item["code"], item["location"]
+        _object(item, {"location", "relation"})
+        location, relation = item["location"], item["relation"]
         if (
-            not isinstance(code, str)
-            or code not in GroundingViolationCode._value2member_map_
-            or not isinstance(location, str)
+            not isinstance(location, str)
             or location not in allowed_locations
-            or (code, location) in seen
+            or location in by_location
+            or not isinstance(relation, str)
+            or relation not in GroundingRelation._value2member_map_
         ):
             _invalid_response()
-        seen.add((code, location))
-        violations.append(SolutionGroundingViolation(GroundingViolationCode(code), location))
-    if passed != (not violations):
+        by_location[location] = GroundingClaimResult(location, GroundingRelation(relation))
+    if set(by_location) != allowed_locations:
         _invalid_response()
-    return SolutionGroundingVerification(passed=passed, violations=tuple(violations))
+    return tuple(by_location[packet.location] for packet in packets)
+
+
+def _violation_code(statement_type: SolutionStatementType) -> GroundingViolationCode:
+    return {
+        SolutionStatementType.CUSTOMER_FACT: GroundingViolationCode.CUSTOMER_FACT_NOT_SUPPORTED,
+        SolutionStatementType.ENTERPRISE_FACT: GroundingViolationCode.ENTERPRISE_FACT_NOT_SUPPORTED,
+        SolutionStatementType.PROPOSAL: GroundingViolationCode.PROPOSAL_NOT_SUPPORTED,
+        SolutionStatementType.UNRESOLVED: GroundingViolationCode.OTHER_GROUNDING_VIOLATION,
+    }[statement_type]
 
 
 def _object(value: object, keys: set[str]) -> None:

@@ -41,9 +41,16 @@ def test_solution_default_output_budget_reaches_sdk_without_global_inflation(mon
     from apps.sales.services import solution_draft
 
     settings.LLM_MAX_OUTPUT_TOKENS = 321
+    verifier_result = {"results": [
+        {"location": "executive_summary[0]", "relation": "SUPPORTED"},
+        *[
+            {"location": f"solution_sections.{key}.statements[0]", "relation": "SUPPORTED"}
+            for key in ("overall_approach", "deployment", "data_security", "integration", "implementation")
+        ],
+    ]}
     provider, endpoint, _ = _build_provider(monkeypatch, [
         _response(json.dumps(solution_payload())),
-        _response('{"passed":true,"violations":[]}'),
+        _response(json.dumps(verifier_result)),
     ])
     monkeypatch.setattr(solution_draft, "search_knowledge", lambda **kw: [search_result()])
     result = solution_draft.generate_grounded_solution_draft(analysis_record(), llm_provider=provider)

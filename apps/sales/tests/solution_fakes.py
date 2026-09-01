@@ -1,6 +1,7 @@
 """Small deterministic solution fixtures, used only by offline tests."""
 
 import json
+from xml.etree import ElementTree
 
 from apps.llm.base import LLMGeneration
 from apps.llm.tests.fakes import DeterministicFakeLLM
@@ -77,12 +78,18 @@ class SolutionFakeLLM(AnalysisFakeLLM):
         super().__init__(content=content if content is not None else json.dumps(
             solution_payload(), ensure_ascii=False,
         ), callback=callback)
-        self.grounding_content = grounding_content if grounding_content is not None else json.dumps({
-            "passed": True, "violations": [],
-        })
+        self.grounding_content = grounding_content
 
     def generate(self, messages, *, max_output_tokens=None):
-        if len(messages) > 1 and "<allowed_violation_locations>" in messages[1]["content"]:
+        if len(messages) > 1 and "<grounding_claim_packets>" in messages[1]["content"]:
             DeterministicFakeLLM.generate(self, messages, max_output_tokens=max_output_tokens)
-            return LLMGeneration(content=self.grounding_content)
+            content = self.grounding_content
+            if content is None:
+                root = ElementTree.fromstring("<root>" + messages[1]["content"] + "</root>")
+                payload = json.loads(root.find("grounding_claim_packets").text)
+                content = json.dumps({"results": [
+                    {"location": item["location"], "relation": "SUPPORTED"}
+                    for item in payload["claims"]
+                ]})
+            return LLMGeneration(content=content)
         return super().generate(messages, max_output_tokens=max_output_tokens)
