@@ -17,6 +17,15 @@ SECTION_DEFINITIONS = (
     ("data_security", "数据安全"), ("integration", "系统集成"),
     ("implementation", "实施建议"),
 )
+SOLUTION_DRAFT_TITLE = "商机需求解决方案内部草稿"
+
+
+class SolutionSectionKey(StrEnum):
+    OVERALL_APPROACH = "overall_approach"
+    DEPLOYMENT = "deployment"
+    DATA_SECURITY = "data_security"
+    INTEGRATION = "integration"
+    IMPLEMENTATION = "implementation"
 
 
 class SolutionStatementType(StrEnum):
@@ -59,6 +68,94 @@ class SolutionDraft:
     executive_summary: tuple[SolutionStatement, ...]
     solution_sections: tuple[SolutionSection, ...]
     assumptions: tuple[SolutionAssumption, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AtomicSolutionClaim:
+    """One independently verifiable proposition produced by the generation LLM."""
+
+    section: SolutionSectionKey
+    statement_type: SolutionStatementType
+    text: str
+    citations: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AtomicSolutionClaimSet:
+    claims: tuple[AtomicSolutionClaim, ...]
+
+
+def parse_atomic_solution_claims(content: str, *, source_count: int) -> AtomicSolutionClaimSet:
+    """Parse the deliberately small generation IR without repairing model output."""
+    text = _text(content)
+    fence = re.fullmatch(r"```json[ \t]*\r?\n(.*)\r?\n```", text, flags=re.DOTALL)
+    if fence is not None:
+        text = fence.group(1)
+    try:
+        payload = json.loads(text, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
+    except (ValueError, RecursionError):
+        _invalid()
+    _object(payload, {"claims"})
+    items = payload["claims"]
+    if not isinstance(items, list) or not 1 <= len(items) <= 60:
+        _invalid()
+    labels = frozenset(f"S{i}" for i in range(1, source_count + 1))
+    claims = []
+    for item in items:
+        _object(item, {"section", "statement_type", "text", "citations"})
+        section = item["section"]
+        kind = item["statement_type"]
+        if (
+            not isinstance(section, str)
+            or section not in SolutionSectionKey._value2member_map_
+            or not isinstance(kind, str)
+            or kind not in SolutionStatementType._value2member_map_
+        ):
+            _invalid()
+        statement_type = SolutionStatementType(kind)
+        citations = _citations(item["citations"], labels, statement_type)
+        claims.append(AtomicSolutionClaim(
+            SolutionSectionKey(section), statement_type, _prose(item["text"]), citations,
+        ))
+    if any(
+        sum(claim.section is section for claim in claims) > 12
+        for section in SolutionSectionKey
+    ):
+        _invalid()
+    return AtomicSolutionClaimSet(tuple(claims))
+
+
+def assemble_solution_draft(
+    claim_set: AtomicSolutionClaimSet,
+    analysis: OpportunityRequirementAnalysis,
+) -> SolutionDraft:
+    """Build the stable public draft envelope from verified atomic claims only."""
+    if not isinstance(claim_set, AtomicSolutionClaimSet) or not isinstance(
+        analysis, OpportunityRequirementAnalysis,
+    ):
+        _invalid()
+    statements_by_section = {key: [] for key in SolutionSectionKey}
+    for claim in claim_set.claims:
+        statement = SolutionStatement(claim.statement_type, claim.text, claim.citations)
+        statements_by_section[claim.section].append(statement)
+    sections = tuple(
+        SolutionSection(key, title, tuple(statements_by_section[SolutionSectionKey(key)]))
+        for key, title in SECTION_DEFINITIONS
+    )
+    summary = sections[0].statements[:8]
+    if not summary:
+        summary = tuple(
+            section.statements[0] for section in sections if section.statements
+        )[:8]
+    return SolutionDraft(
+        title=SOLUTION_DRAFT_TITLE,
+        executive_summary=summary,
+        solution_sections=sections,
+        assumptions=tuple(
+            SolutionAssumption(item.text, (item.field,))
+            for item in build_solution_unresolved_items(analysis)
+        ),
+    )
 
 
 def parse_solution_draft(
@@ -106,17 +203,27 @@ def _statements(value: object, labels: frozenset[str], *, maximum: int) -> tuple
         if not isinstance(item["type"], str) or item["type"] not in SolutionStatementType._value2member_map_:
             _invalid()
         kind = SolutionStatementType(item["type"])
-        citations = item["citations"]
-        if (not isinstance(citations, list)
-                or any(not isinstance(label, str) or label not in labels for label in citations)
-                or len(set(citations)) != len(citations)):
-            _invalid()
-        if kind is SolutionStatementType.CUSTOMER_FACT and citations:
-            _invalid()
-        if kind in {SolutionStatementType.ENTERPRISE_FACT, SolutionStatementType.PROPOSAL} and not citations:
-            _invalid()
-        result.append(SolutionStatement(kind, _prose(item["text"]), tuple(citations)))
+        citations = _citations(item["citations"], labels, kind)
+        result.append(SolutionStatement(kind, _prose(item["text"]), citations))
     return tuple(result)
+
+
+def _citations(
+    value: object,
+    labels: frozenset[str],
+    kind: SolutionStatementType,
+) -> tuple[str, ...]:
+    if (
+        not isinstance(value, list)
+        or any(not isinstance(label, str) or label not in labels for label in value)
+        or len(set(value)) != len(value)
+    ):
+        _invalid()
+    if kind is SolutionStatementType.CUSTOMER_FACT and value:
+        _invalid()
+    if kind in {SolutionStatementType.ENTERPRISE_FACT, SolutionStatementType.PROPOSAL} and not value:
+        _invalid()
+    return tuple(value)
 
 
 def _assumptions(value: object, analysis: OpportunityRequirementAnalysis) -> tuple[SolutionAssumption, ...]:

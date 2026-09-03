@@ -12,14 +12,18 @@ from apps.llm.factory import get_llm_provider
 from apps.sales.models import OpportunityRequirementAnalysis as AnalysisRecord
 from apps.sales.services.requirement_analysis_history import analysis_record_to_domain
 from apps.sales.services.solution_errors import SolutionDraftError, SolutionDraftErrorCode
-from apps.sales.services.solution_grounding import verify_solution_draft_grounding
+from apps.sales.services.solution_grounding import verify_atomic_solution_claims
 from apps.sales.services.solution_prompt import build_solution_messages
 from apps.sales.services.solution_readiness import (
     SolutionReadiness, SolutionReadinessStatus, check_solution_readiness,
 )
 from apps.sales.services.solution_retrieval import SolutionSource, build_retrieval_intents, merge_evidence
 from apps.sales.services.solution_schema import (
-    SolutionDraft, SolutionUnresolvedItem, build_solution_unresolved_items, parse_solution_draft,
+    SolutionDraft,
+    SolutionUnresolvedItem,
+    assemble_solution_draft,
+    build_solution_unresolved_items,
+    parse_atomic_solution_claims,
 )
 
 
@@ -76,10 +80,11 @@ def generate_grounded_solution_draft(
         build_solution_messages(typed, readiness, sources),
         max_output_tokens=settings.SOLUTION_DRAFT_MAX_OUTPUT_TOKENS,
     )
-    draft = parse_solution_draft(generation.content, source_count=len(sources), analysis=typed)
-    verify_solution_draft_grounding(
-        analysis=typed, draft=draft, sources=sources, llm_provider=provider,
+    claims = parse_atomic_solution_claims(generation.content, source_count=len(sources))
+    verify_atomic_solution_claims(
+        analysis=typed, claims=claims, sources=sources, llm_provider=provider,
     )
+    draft = assemble_solution_draft(claims, typed)
     return GroundedSolutionDraftResult(
         analysis_id, readiness, SolutionGenerationStatus.GENERATED, draft, sources, unresolved_items,
     )

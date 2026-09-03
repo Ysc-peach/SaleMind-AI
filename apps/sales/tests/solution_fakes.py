@@ -73,10 +73,31 @@ def solution_payload():
     }
 
 
+def atomic_solution_payload():
+    return {
+        "claims": [
+            {
+                "section": "overall_approach",
+                "statement_type": "customer_fact",
+                "text": "客户希望进行企业知识查询。",
+                "citations": [],
+            },
+        ] + [
+            {
+                "section": key,
+                "statement_type": "enterprise_fact",
+                "text": "企业资料确认支持私有化部署。",
+                "citations": ["S1"],
+            }
+            for key in ("deployment", "data_security", "integration", "implementation")
+        ],
+    }
+
+
 class SolutionFakeLLM(AnalysisFakeLLM):
     def __init__(self, *, content=None, callback=None, grounding_content=None):
         super().__init__(content=content if content is not None else json.dumps(
-            solution_payload(), ensure_ascii=False,
+            atomic_solution_payload(), ensure_ascii=False,
         ), callback=callback)
         self.grounding_content = grounding_content
 
@@ -88,7 +109,7 @@ class SolutionFakeLLM(AnalysisFakeLLM):
                 root = ElementTree.fromstring("<root>" + messages[1]["content"] + "</root>")
                 payload = json.loads(root.find("grounding_claim_packets").text)
                 content = json.dumps({"results": [
-                    {"location": item["location"], "relation": "SUPPORTED", "type_fit": "VALID"}
+                    {"location": item["location"], "relation": "SUPPORTED"}
                     for item in payload["claims"]
                 ]})
             return LLMGeneration(content=content)

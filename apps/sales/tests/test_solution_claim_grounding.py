@@ -1,7 +1,7 @@
-"""Claim-scoped semantic grounding with complete fail-closed coverage."""
+"""Regression coverage for atomic claim scoping and relation aggregation."""
 
 import json
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import FrozenInstanceError
 from xml.etree import ElementTree
 
 import pytest
@@ -10,411 +10,111 @@ from apps.llm.base import LLMGeneration
 from apps.llm.tests.fakes import DeterministicFakeLLM
 from apps.rag.tests.test_answering import search_result
 from apps.sales.services.solution_retrieval import merge_evidence
-from apps.sales.services.solution_schema import parse_solution_draft
-from apps.sales.tests.solution_fakes import solution_payload, typed_analysis
+from apps.sales.tests.solution_fakes import typed_analysis
+from apps.sales.tests.test_solution_atomic_claims import parse, payload
 
 
-@pytest.fixture(autouse=True)
-def no_network(monkeypatch):
-    monkeypatch.setattr(
-        "socket.socket.connect",
-        lambda *args, **kwargs: pytest.fail("Claim grounding tests must remain offline."),
-    )
+def source_set():
+    return merge_evidence([[
+        search_result(chunk_id=1, document_id=11, content="SalesMind 当前版本不支持 CSV 批量导出功能。"),
+        search_result(chunk_id=2, document_id=12, content="当前资料未确认 SSO 集成能力。"),
+    ]])
+
+
+def claims(*items):
+    value = payload()
+    value["claims"] = list(items)
+    return parse(value)
+
+
+def item(kind, text, citations, section="integration"):
+    return {"section": section, "statement_type": kind, "text": text, "citations": list(citations)}
 
 
 class ClaimVerifierFake(DeterministicFakeLLM):
-    def __init__(self, payload):
+    def __init__(self, relations):
         super().__init__()
-        self.payload = payload
+        self.relations = relations
 
     def generate(self, messages, *, max_output_tokens=None):
         super().generate(messages, max_output_tokens=max_output_tokens)
-        content = self.payload if isinstance(self.payload, str) else json.dumps(
-            self.payload, ensure_ascii=False,
-        )
-        return LLMGeneration(content=content)
+        root = ElementTree.fromstring("<root>" + messages[1]["content"] + "</root>")
+        packets = json.loads(root.find("grounding_claim_packets").text)["claims"]
+        return LLMGeneration(content=json.dumps({"results": [
+            {"location": packet["location"], "relation": relation}
+            for packet, relation in zip(packets, self.relations, strict=True)
+        ]}))
 
 
-def sources():
-    return merge_evidence([[
-        search_result(
-            chunk_id=1,
-            document_id=11,
-            content="SalesMind 当前版本不支持扫描型 PDF OCR。",
-            source_reference="OCR能力边界",
-        ),
-        search_result(
-            chunk_id=2,
-            document_id=12,
-            content="当前企业资料未确认 SSO 集成能力。",
-            source_reference="SSO能力边界",
-        ),
-    ]])
+def test_packets_are_frozen_and_scope_each_claim_to_its_own_authority():
+    from apps.sales.services.solution_grounding import build_atomic_grounding_claim_packets
 
-
-def draft_with_claim(
-    *,
-    kind="enterprise_fact",
-    text="SalesMind 当前版本不支持扫描型 PDF OCR。",
-    citations=("S1",),
-    location=("integration", 0),
-):
-    payload = solution_payload()
-    key, index = location
-    section = next(item for item in payload["solution_sections"] if item["key"] == key)
-    section["statements"][index] = {
-        "type": kind,
-        "text": text,
-        "citations": list(citations),
-    }
-    return parse_solution_draft(
-        json.dumps(payload, ensure_ascii=False),
-        source_count=2,
-        analysis=typed_analysis(),
+    value = claims(
+        item("enterprise_fact", "SalesMind 当前版本不支持 CSV 批量导出功能。", ("S1",)),
+        item("unresolved", "当前资料未确认 SSO 集成能力。", ("S2",)),
+        item("customer_fact", "客户现有 Linux 环境。", ()),
     )
-
-
-def all_supported(draft):
-    from apps.sales.services.solution_grounding import build_grounding_claim_packets
-
-    return {
-        "results": [
-            {"location": packet.location, "relation": "SUPPORTED", "type_fit": "VALID"}
-            for packet in build_grounding_claim_packets(typed_analysis(), draft, sources())
-        ],
-    }
-
-
-def test_claim_packets_are_frozen_and_scope_enterprise_evidence_to_citations():
-    from apps.sales.services.solution_grounding import build_grounding_claim_packets
-
-    packets = build_grounding_claim_packets(typed_analysis(), draft_with_claim(), sources())
-    target = next(
-        packet for packet in packets
-        if packet.location == "solution_sections.integration.statements[0]"
+    packets = build_atomic_grounding_claim_packets(typed_analysis(), value, source_set())
+    assert [source.label for source in packets[0].evidence] == ["S1"]
+    assert all("SSO" not in source.content for source in packets[0].evidence)
+    assert packets[0].customer_context is None
+    assert [source.label for source in packets[1].evidence] == ["S2"]
+    assert tuple(item.field.value for item in packets[1].customer_context.requirements) == (
+        "integration_requirement", "existing_environment", "use_scenario", "technical_constraints",
     )
-    customer = packets[0]
-
-    assert target.statement_type == "enterprise_fact"
-    assert target.text == "SalesMind 当前版本不支持扫描型 PDF OCR。"
-    assert [item.label for item in target.evidence] == ["S1"]
-    assert all("SSO" not in item.content for item in target.evidence)
-    assert target.customer_context is None
-    assert customer.statement_type == "customer_fact"
-    assert customer.evidence == ()
-    assert customer.customer_context == typed_analysis()
+    assert packets[2].evidence == ()
+    assert packets[2].customer_context == packets[1].customer_context
     with pytest.raises(FrozenInstanceError):
-        target.text = "changed"
+        packets[0].text = "changed"
 
 
 @pytest.mark.parametrize("capability", ["扫描型 PDF OCR", "CSV 批量导出功能"])
-def test_exact_explicit_negative_claim_relation_supported_is_accepted(capability):
-    from apps.sales.services.solution_grounding import verify_solution_draft_grounding
+def test_explicit_negative_claims_are_representable_as_supported(capability):
+    from apps.sales.services.solution_grounding import verify_atomic_solution_claims
 
-    evidence = merge_evidence([[
-        search_result(content=f"SalesMind 当前版本不支持{capability}。"),
-    ]])
-    draft = draft_with_claim(
-        text=f"SalesMind 当前版本不支持{capability}。",
-        citations=("S1",),
+    value = claims(item("enterprise_fact", f"SalesMind 当前版本不支持{capability}。", ("S1",)))
+    result = verify_atomic_solution_claims(
+        analysis=typed_analysis(), claims=value, sources=source_set(),
+        llm_provider=ClaimVerifierFake(["SUPPORTED"]),
     )
-    provider = ClaimVerifierFake(all_supported(draft))
-
-    result = verify_solution_draft_grounding(
-        analysis=typed_analysis(), draft=draft, sources=evidence, llm_provider=provider,
-    )
-
-    assert result.passed is True
-    assert all(item.relation == "SUPPORTED" for item in result.results)
-    assert all(item.type_fit == "VALID" for item in result.results)
-    assert result.violations == ()
+    assert result.passed and result.results[0].relation == "SUPPORTED"
 
 
-@pytest.mark.parametrize("relation", ["INSUFFICIENT", "CONTRADICTED"])
 @pytest.mark.parametrize("kind,expected", [
     ("customer_fact", "CUSTOMER_FACT_NOT_SUPPORTED"),
     ("enterprise_fact", "ENTERPRISE_FACT_NOT_SUPPORTED"),
     ("proposal", "PROPOSAL_NOT_SUPPORTED"),
     ("unresolved", "OTHER_GROUNDING_VIOLATION"),
 ])
-def test_non_supported_relations_are_conservatively_mapped_by_statement_type(kind, expected, relation):
-    from apps.sales.services.solution_grounding import (
-        SolutionDraftGroundingError,
-        build_grounding_claim_packets,
-        verify_solution_draft_grounding,
-    )
+@pytest.mark.parametrize("relation", ["INSUFFICIENT", "CONTRADICTED"])
+def test_non_supported_relation_is_conservatively_mapped_by_type(kind, expected, relation):
+    from apps.sales.services.solution_grounding import SolutionDraftGroundingError, verify_atomic_solution_claims
 
     citations = () if kind == "customer_fact" else ("S1",)
-    draft = draft_with_claim(kind=kind, citations=citations)
-    packets = build_grounding_claim_packets(typed_analysis(), draft, sources())
-    target = "solution_sections.integration.statements[0]"
-    response = {
-        "results": [
-            {
-                "location": packet.location,
-                "relation": relation if packet.location == target else "SUPPORTED",
-                "type_fit": "VALID",
-            }
-            for packet in packets
-        ],
-    }
-
+    value = claims(item(kind, "一个受控原子命题。", citations))
     with pytest.raises(SolutionDraftGroundingError) as exc:
-        verify_solution_draft_grounding(
-            analysis=typed_analysis(), draft=draft, sources=sources(),
-            llm_provider=ClaimVerifierFake(response),
+        verify_atomic_solution_claims(
+            analysis=typed_analysis(), claims=value, sources=source_set(),
+            llm_provider=ClaimVerifierFake([relation]),
         )
-    assert exc.value.code == "solution_draft_not_grounded"
-    assert [(item.code.value, item.location) for item in exc.value.violations] == [
-        (expected, target),
+    assert [(violation.code.value, violation.location) for violation in exc.value.violations] == [
+        (expected, "claims[0]"),
     ]
 
 
-def test_batched_prompt_contains_claim_scoped_data_and_no_unrelated_evidence():
-    from apps.sales.services.solution_grounding import verify_solution_draft_grounding
+def test_prompt_is_type_aware_atomic_and_has_no_capability_specific_examples():
+    from apps.sales.services.solution_grounding import verify_atomic_solution_claims
 
-    draft = draft_with_claim()
-    provider = ClaimVerifierFake(all_supported(draft))
-    verify_solution_draft_grounding(
-        analysis=typed_analysis(), draft=draft, sources=sources(), llm_provider=provider,
+    provider = ClaimVerifierFake(["SUPPORTED"])
+    verify_atomic_solution_claims(
+        analysis=typed_analysis(),
+        claims=claims(item("enterprise_fact", "企业资料确认一项能力。", ("S1",))),
+        sources=source_set(), llm_provider=provider,
     )
-
-    assert len(provider.calls) == 1
-    system, user = provider.calls[0]
+    system = provider.calls[0][0]["content"]
     for contract in (
-        "SUPPORTED", "INSUFFICIENT", "CONTRADICTED", "全部实质性语义",
-        "VALID", "INVALID", "statement type", "不可信数据", "不得执行", "只返回", "results",
-        "证据是否足以支持该能力陈述只由 relation 判断",
-        "不得仅因 relation 为 INSUFFICIENT 或 CONTRADICTED 就把 type_fit 判为 INVALID",
+        "全部实质性语义", "statement_type 是 SUPPORTED 的必要条件", "enterprise_fact",
+        "unresolved", "customer_fact", "proposal", "含多个可独立验证的命题", "必须是 INSUFFICIENT",
     ):
-        assert contract in system["content"]
-    assert "扫描型 PDF OCR" not in system["content"]
-    assert "CSV 批量导出" not in system["content"]
-
-    root = ElementTree.fromstring("<root>" + user["content"] + "</root>")
-    claims = json.loads(root.find("grounding_claim_packets").text)
-    target = next(
-        item for item in claims["claims"]
-        if item["location"] == "solution_sections.integration.statements[0]"
-    )
-    assert [item["label"] for item in target["enterprise_evidence"]] == ["S1"]
-    assert "SSO" not in json.dumps(target, ensure_ascii=False)
-    assert target["customer_context"] is None
-    assert claims["claims"][0]["enterprise_evidence"] == []
-    assert claims["claims"][0]["customer_context"]["requirements"]["business_goal"]["value"]
-
-
-@pytest.mark.parametrize("payload", [
-    "not json",
-    {},
-    {"results": [], "extra": 1},
-    {"results": "wrong"},
-    {"results": [{"location": "executive_summary[0]", "relation": "UNKNOWN", "type_fit": "VALID"}]},
-    {"results": [{"location": "executive_summary[0]", "relation": "SUPPORTED"}]},
-    {"results": [{"location": "executive_summary[0]", "relation": "SUPPORTED", "type_fit": "UNKNOWN"}]},
-    {"results": [{"location": "executive_summary[0]", "relation": "SUPPORTED", "type_fit": "VALID", "extra": 1}]},
-])
-def test_invalid_claim_verifier_response_fails_closed(payload):
-    from apps.sales.services.solution_grounding import (
-        SolutionDraftGroundingError,
-        verify_solution_draft_grounding,
-    )
-
-    with pytest.raises(SolutionDraftGroundingError) as exc:
-        verify_solution_draft_grounding(
-            analysis=typed_analysis(), draft=draft_with_claim(), sources=sources(),
-            llm_provider=ClaimVerifierFake(payload),
-        )
-    assert exc.value.code == "solution_grounding_invalid_response"
-
-
-@pytest.mark.parametrize("mutation", ["missing", "duplicate", "unknown", "extra"])
-def test_claim_verifier_response_requires_each_location_exactly_once(mutation):
-    from apps.sales.services.solution_grounding import (
-        SolutionDraftGroundingError,
-        build_grounding_claim_packets,
-        verify_solution_draft_grounding,
-    )
-
-    draft = draft_with_claim()
-    locations = [
-        packet.location
-        for packet in build_grounding_claim_packets(typed_analysis(), draft, sources())
-    ]
-    results = [
-        {"location": location, "relation": "SUPPORTED", "type_fit": "VALID"}
-        for location in locations
-    ]
-    if mutation == "missing":
-        results.pop()
-    elif mutation == "duplicate":
-        results[-1] = dict(results[0])
-    elif mutation == "unknown":
-        results[-1]["location"] = "solution_sections.integration.statements[99]"
-    else:
-        results.append({
-            "location": "solution_sections.integration.statements[99]",
-            "relation": "SUPPORTED",
-            "type_fit": "VALID",
-        })
-
-    with pytest.raises(SolutionDraftGroundingError) as exc:
-        verify_solution_draft_grounding(
-            analysis=typed_analysis(), draft=draft, sources=sources(),
-            llm_provider=ClaimVerifierFake({"results": results}),
-        )
-    assert exc.value.code == "solution_grounding_invalid_response"
-
-
-def test_relation_contract_can_represent_known_semantic_boundaries():
-    from apps.sales.services.solution_grounding import GroundingRelation, GroundingTypeFit
-
-    expected = {
-        "exact_positive": GroundingRelation.SUPPORTED,
-        "exact_negative_ocr": GroundingRelation.SUPPORTED,
-        "exact_negative_csv": GroundingRelation.SUPPORTED,
-        "unconfirmed_sso_as_unsupported": GroundingRelation.INSUFFICIENT,
-        "positive_private_deployment_as_negative": GroundingRelation.CONTRADICTED,
-        "customer_linux": GroundingRelation.SUPPORTED,
-        "linux_as_validated_environment": GroundingRelation.INSUFFICIENT,
-        "contract_requirement_as_capability": GroundingRelation.INSUFFICIENT,
-        "unconfirmed_sso_as_unresolved": GroundingRelation.SUPPORTED,
-        "jwt_confirmed_plus_sso_unconfirmed": GroundingRelation.INSUFFICIENT,
-    }
-    assert {name: relation.value for name, relation in expected.items()} == {
-        "exact_positive": "SUPPORTED",
-        "exact_negative_ocr": "SUPPORTED",
-        "exact_negative_csv": "SUPPORTED",
-        "unconfirmed_sso_as_unsupported": "INSUFFICIENT",
-        "positive_private_deployment_as_negative": "CONTRADICTED",
-        "customer_linux": "SUPPORTED",
-        "linux_as_validated_environment": "INSUFFICIENT",
-        "contract_requirement_as_capability": "INSUFFICIENT",
-        "unconfirmed_sso_as_unresolved": "SUPPORTED",
-        "jwt_confirmed_plus_sso_unconfirmed": "INSUFFICIENT",
-    }
-    assert GroundingTypeFit.VALID.value == "VALID"
-    assert GroundingTypeFit.INVALID.value == "INVALID"
-
-
-@pytest.mark.parametrize(
-    "kind,text,relation,type_fit,accepted",
-    [
-        ("enterprise_fact", "当前企业资料未确认 SSO 集成能力。", "SUPPORTED", "INVALID", False),
-        ("unresolved", "当前企业资料未确认 SSO 集成能力。", "SUPPORTED", "VALID", True),
-        ("enterprise_fact", "SalesMind 当前版本不支持扫描型 PDF OCR。", "SUPPORTED", "VALID", True),
-        ("enterprise_fact", "SalesMind 支持企业私有化部署。", "SUPPORTED", "VALID", True),
-        ("customer_fact", "客户要求企业私有化部署。", "SUPPORTED", "VALID", True),
-        ("enterprise_fact", "客户要求企业私有化部署。", "SUPPORTED", "INVALID", False),
-        ("proposal", "建议采用私有化部署方案。", "SUPPORTED", "VALID", True),
-    ],
-)
-def test_relation_and_statement_type_fit_are_independent(
-    kind, text, relation, type_fit, accepted,
-):
-    from apps.sales.services.solution_grounding import (
-        SolutionDraftGroundingError,
-        build_grounding_claim_packets,
-        verify_solution_draft_grounding,
-    )
-
-    citations = () if kind == "customer_fact" else ("S1",)
-    value = draft_with_claim(kind=kind, text=text, citations=citations)
-    target = "solution_sections.integration.statements[0]"
-    response = {"results": [
-        {
-            "location": packet.location,
-            "relation": relation if packet.location == target else "SUPPORTED",
-            "type_fit": type_fit if packet.location == target else "VALID",
-        }
-        for packet in build_grounding_claim_packets(typed_analysis(), value, sources())
-    ]}
-    provider = ClaimVerifierFake(response)
-
-    if accepted:
-        result = verify_solution_draft_grounding(
-            analysis=typed_analysis(), draft=value, sources=sources(), llm_provider=provider,
-        )
-        assert result.passed is True
-        target_result = next(item for item in result.results if item.location == target)
-        assert target_result.relation.value == relation
-        assert target_result.type_fit.value == type_fit
-    else:
-        with pytest.raises(SolutionDraftGroundingError) as exc:
-            verify_solution_draft_grounding(
-                analysis=typed_analysis(), draft=value, sources=sources(), llm_provider=provider,
-            )
-        assert exc.value.code == "solution_draft_not_grounded"
-        assert ("STATEMENT_TYPE_MISMATCH", target) in [
-            (item.code.value, item.location) for item in exc.value.violations
-        ]
-
-
-@pytest.mark.parametrize(
-    "relation,type_fit,accepted",
-    [
-        ("SUPPORTED", "VALID", True),
-        ("INSUFFICIENT", "VALID", False),
-        ("SUPPORTED", "INVALID", False),
-        ("CONTRADICTED", "INVALID", False),
-    ],
-)
-def test_final_gate_requires_supported_relation_and_valid_type(relation, type_fit, accepted):
-    from apps.sales.services.solution_grounding import (
-        SolutionDraftGroundingError,
-        build_grounding_claim_packets,
-        verify_solution_draft_grounding,
-    )
-
-    value = draft_with_claim()
-    target = "solution_sections.integration.statements[0]"
-    response = {"results": [
-        {
-            "location": packet.location,
-            "relation": relation if packet.location == target else "SUPPORTED",
-            "type_fit": type_fit if packet.location == target else "VALID",
-        }
-        for packet in build_grounding_claim_packets(typed_analysis(), value, sources())
-    ]}
-    provider = ClaimVerifierFake(response)
-    if accepted:
-        assert verify_solution_draft_grounding(
-            analysis=typed_analysis(), draft=value, sources=sources(), llm_provider=provider,
-        ).passed
-    else:
-        with pytest.raises(SolutionDraftGroundingError):
-            verify_solution_draft_grounding(
-                analysis=typed_analysis(), draft=value, sources=sources(), llm_provider=provider,
-            )
-
-
-def test_claim_packet_context_is_type_scoped():
-    from apps.sales.services.solution_grounding import build_grounding_claim_packets
-
-    payload = solution_payload()
-    payload["executive_summary"] = [
-        {"type": "customer_fact", "text": "客户希望进行企业知识查询。", "citations": []},
-        {"type": "unresolved", "text": "SSO能力仍需确认。", "citations": ["S2"]},
-        {"type": "proposal", "text": "建议采用私有化部署。", "citations": ["S1"]},
-    ]
-    draft = parse_solution_draft(
-        json.dumps(payload, ensure_ascii=False), source_count=2, analysis=typed_analysis(),
-    )
-    packets = build_grounding_claim_packets(typed_analysis(), draft, sources())
-    customer, unresolved, proposal = packets[:3]
-
-    assert customer.customer_context == typed_analysis() and customer.evidence == ()
-    assert unresolved.customer_context == typed_analysis()
-    assert [item.label for item in unresolved.evidence] == ["S2"]
-    assert proposal.customer_context == typed_analysis()
-    assert [item.label for item in proposal.evidence] == ["S1"]
-
-
-def test_claim_packets_do_not_re_read_or_mutate_analysis():
-    from apps.sales.services.solution_grounding import build_grounding_claim_packets
-
-    analysis = typed_analysis()
-    before = replace(analysis)
-    packets = build_grounding_claim_packets(analysis, draft_with_claim(), sources())
-    assert analysis == before
-    assert packets[0].customer_context is analysis
+        assert contract in system
+    assert "扫描型 PDF OCR" not in system and "CSV 批量导出" not in system

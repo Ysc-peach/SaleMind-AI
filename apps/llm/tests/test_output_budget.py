@@ -9,7 +9,7 @@ from apps.llm.tests.test_deepseek_provider import _build_provider, _response
 from apps.rag.tests.test_answering import search_result
 from apps.sales.models import Customer, Opportunity
 from apps.sales.tests.requirement_fakes import valid_analysis_payload
-from apps.sales.tests.solution_fakes import analysis_record, SolutionFakeLLM, solution_payload
+from apps.sales.tests.solution_fakes import analysis_record, atomic_solution_payload, SolutionFakeLLM
 
 
 @pytest.fixture(autouse=True)
@@ -41,19 +41,13 @@ def test_solution_default_output_budget_reaches_sdk_without_global_inflation(mon
     from apps.sales.services import solution_draft
 
     settings.LLM_MAX_OUTPUT_TOKENS = 321
+    generated = atomic_solution_payload()
     verifier_result = {"results": [
-        {"location": "executive_summary[0]", "relation": "SUPPORTED", "type_fit": "VALID"},
-        *[
-            {
-                "location": f"solution_sections.{key}.statements[0]",
-                "relation": "SUPPORTED",
-                "type_fit": "VALID",
-            }
-            for key in ("overall_approach", "deployment", "data_security", "integration", "implementation")
-        ],
+        {"location": f"claims[{index}]", "relation": "SUPPORTED"}
+        for index in range(len(generated["claims"]))
     ]}
     provider, endpoint, _ = _build_provider(monkeypatch, [
-        _response(json.dumps(solution_payload())),
+        _response(json.dumps(generated)),
         _response(json.dumps(verifier_result)),
     ])
     monkeypatch.setattr(solution_draft, "search_knowledge", lambda **kw: [search_result()])

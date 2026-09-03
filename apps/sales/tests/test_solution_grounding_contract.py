@@ -195,12 +195,11 @@ def test_prompt_has_specific_generation_boundary_regressions(monkeypatch):
     service.generate_grounded_solution_draft(record, llm_provider=llm)
     system, user = llm.calls[0]
     for contract in (
-        "客户需求永远不能单独证明企业能力", "采购合同草案", "错误：proposal",
-        "未确认不等于不支持", "不支持OA", "不具备SSO", "不支持Kubernetes",
-        "除非企业证据明确表示不支持", "已有Linux服务器不等于已验证运行环境",
-        "不得推断资源充足", "不得推断Kubernetes已安装", "不得声称环境已验证",
+        "客户需求永远不能单独证明企业具备", "未确认、未声明或资料不足既不等于支持",
+        "客户环境只代表已知客户事实", "不能推出环境已验证、资源充足、网络适用或生产就绪",
+        "one claim = one independently verifiable", "必须拆成多个 claims",
         "customer_fact", "enterprise_fact", "proposal", "unresolved",
-        "citations", "text 中禁止", "unresolved_items 由程序生成",
+        "citations", "程序负责安全标题、最终五章节", "禁止返回 title",
     ):
         assert contract in system["content"]
     assert malicious not in system["content"]

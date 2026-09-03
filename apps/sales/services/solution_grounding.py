@@ -8,10 +8,17 @@ from typing import NoReturn
 
 from apps.llm.base import LLMProvider
 from apps.llm.factory import get_llm_provider
-from apps.sales.services.requirement_analysis import OpportunityRequirementAnalysis
+from apps.sales.services.requirement_analysis import (
+    ClarifyingQuestion,
+    OpportunityRequirementAnalysis,
+    RequirementConflict,
+    RequirementDimension,
+    RequirementFieldAnalysis,
+)
 from apps.sales.services.solution_grounding_prompt import build_solution_grounding_messages
 from apps.sales.services.solution_retrieval import SolutionSource
 from apps.sales.services.solution_schema import (
+    AtomicSolutionClaimSet,
     SolutionDraft,
     SolutionStatement,
     SolutionStatementType,
@@ -22,11 +29,6 @@ class GroundingRelation(StrEnum):
     SUPPORTED = "SUPPORTED"
     INSUFFICIENT = "INSUFFICIENT"
     CONTRADICTED = "CONTRADICTED"
-
-
-class GroundingTypeFit(StrEnum):
-    VALID = "VALID"
-    INVALID = "INVALID"
 
 
 class GroundingViolationCode(StrEnum):
@@ -40,7 +42,6 @@ class GroundingViolationCode(StrEnum):
     MIXED_GROUNDING_STATUS = "MIXED_GROUNDING_STATUS"
     CITATION_SEMANTIC_MISMATCH = "CITATION_SEMANTIC_MISMATCH"
     OTHER_GROUNDING_VIOLATION = "OTHER_GROUNDING_VIOLATION"
-    STATEMENT_TYPE_MISMATCH = "STATEMENT_TYPE_MISMATCH"
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,14 +56,26 @@ class GroundingClaimPacket:
     statement_type: SolutionStatementType
     text: str
     evidence: tuple[SolutionSource, ...]
-    customer_context: OpportunityRequirementAnalysis | None
+    customer_context: "GroundingCustomerContext | OpportunityRequirementAnalysis | None"
+
+
+@dataclass(frozen=True, slots=True)
+class GroundingCustomerRequirement:
+    field: RequirementDimension
+    analysis: RequirementFieldAnalysis
+
+
+@dataclass(frozen=True, slots=True)
+class GroundingCustomerContext:
+    requirements: tuple[GroundingCustomerRequirement, ...]
+    conflicts: tuple[RequirementConflict, ...]
+    clarifying_questions: tuple[ClarifyingQuestion, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class GroundingClaimResult:
     location: str
     relation: GroundingRelation
-    type_fit: GroundingTypeFit
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,8 +117,27 @@ def verify_solution_draft_grounding(
     sources: tuple[SolutionSource, ...],
     llm_provider: LLMProvider | None = None,
 ) -> SolutionGroundingVerification:
-    """Judge one structurally valid draft once; never retrieve, rewrite, or retry."""
+    """Compatibility boundary for callers that already hold a final draft."""
     packets = build_grounding_claim_packets(analysis, draft, sources)
+    return _verify_packets(packets, llm_provider)
+
+
+def verify_atomic_solution_claims(
+    *,
+    analysis: OpportunityRequirementAnalysis,
+    claims: AtomicSolutionClaimSet,
+    sources: tuple[SolutionSource, ...],
+    llm_provider: LLMProvider | None = None,
+) -> SolutionGroundingVerification:
+    """Verify every generated atomic claim in one type-aware batched request."""
+    packets = build_atomic_grounding_claim_packets(analysis, claims, sources)
+    return _verify_packets(packets, llm_provider)
+
+
+def _verify_packets(
+    packets: tuple[GroundingClaimPacket, ...],
+    llm_provider: LLMProvider | None,
+) -> SolutionGroundingVerification:
     provider = llm_provider if llm_provider is not None else get_llm_provider()
     generation = provider.generate(
         build_solution_grounding_messages(packets),
@@ -116,10 +148,6 @@ def verify_solution_draft_grounding(
         if result.relation is not GroundingRelation.SUPPORTED:
             violations.append(SolutionGroundingViolation(
                 _violation_code(packet.statement_type), packet.location,
-            ))
-        if result.type_fit is GroundingTypeFit.INVALID:
-            violations.append(SolutionGroundingViolation(
-                GroundingViolationCode.STATEMENT_TYPE_MISMATCH, packet.location,
             ))
     verification = SolutionGroundingVerification(
         passed=not violations,
@@ -132,6 +160,92 @@ def verify_solution_draft_grounding(
             violations=verification.violations,
         )
     return verification
+
+
+def build_atomic_grounding_claim_packets(
+    analysis: OpportunityRequirementAnalysis,
+    claims: AtomicSolutionClaimSet,
+    sources: tuple[SolutionSource, ...],
+) -> tuple[GroundingClaimPacket, ...]:
+    """Scope authoritative evidence independently for each atomic IR claim."""
+    if not isinstance(analysis, OpportunityRequirementAnalysis) or not isinstance(claims, AtomicSolutionClaimSet):
+        raise SolutionDraftGroundingError(SolutionGroundingErrorCode.INVALID_INPUT)
+    _validate_sources(sources)
+    source_by_label = {source.label: source for source in sources}
+    packets = []
+    for index, claim in enumerate(claims.claims):
+        if any(label not in source_by_label for label in claim.citations):
+            raise SolutionDraftGroundingError(SolutionGroundingErrorCode.INVALID_INPUT)
+        evidence = () if claim.statement_type is SolutionStatementType.CUSTOMER_FACT else tuple(
+            source_by_label[label] for label in claim.citations
+        )
+        customer_context = None
+        if claim.statement_type is not SolutionStatementType.ENTERPRISE_FACT:
+            customer_context = _customer_context_for_section(analysis, claim.section.value)
+        packets.append(GroundingClaimPacket(
+            location=f"claims[{index}]",
+            statement_type=claim.statement_type,
+            text=claim.text,
+            evidence=evidence,
+            customer_context=customer_context,
+        ))
+    return tuple(packets)
+
+
+_CUSTOMER_FIELDS_BY_SECTION = {
+    "overall_approach": (
+        RequirementDimension.BUSINESS_GOAL,
+        RequirementDimension.USE_SCENARIO,
+        RequirementDimension.USER_SCALE,
+        RequirementDimension.DEPLOYMENT_REQUIREMENT,
+        RequirementDimension.DATA_SECURITY_REQUIREMENT,
+    ),
+    "deployment": (
+        RequirementDimension.DEPLOYMENT_REQUIREMENT,
+        RequirementDimension.DATA_SECURITY_REQUIREMENT,
+        RequirementDimension.EXISTING_ENVIRONMENT,
+        RequirementDimension.USER_SCALE,
+        RequirementDimension.TECHNICAL_CONSTRAINTS,
+    ),
+    "data_security": (
+        RequirementDimension.DATA_SECURITY_REQUIREMENT,
+        RequirementDimension.DEPLOYMENT_REQUIREMENT,
+        RequirementDimension.TECHNICAL_CONSTRAINTS,
+    ),
+    "integration": (
+        RequirementDimension.INTEGRATION_REQUIREMENT,
+        RequirementDimension.EXISTING_ENVIRONMENT,
+        RequirementDimension.USE_SCENARIO,
+        RequirementDimension.TECHNICAL_CONSTRAINTS,
+    ),
+    "implementation": (
+        RequirementDimension.TIMELINE,
+        RequirementDimension.BUDGET,
+        RequirementDimension.EXISTING_ENVIRONMENT,
+        RequirementDimension.INTEGRATION_REQUIREMENT,
+        RequirementDimension.TECHNICAL_CONSTRAINTS,
+    ),
+}
+
+
+def _customer_context_for_section(
+    analysis: OpportunityRequirementAnalysis,
+    section: str,
+) -> GroundingCustomerContext:
+    fields = _CUSTOMER_FIELDS_BY_SECTION[section]
+    allowed = frozenset(fields)
+    return GroundingCustomerContext(
+        requirements=tuple(
+            GroundingCustomerRequirement(field, getattr(analysis.requirements, field.value))
+            for field in fields
+        ),
+        conflicts=tuple(
+            conflict for conflict in analysis.conflicts if any(field in allowed for field in conflict.fields)
+        ),
+        clarifying_questions=tuple(
+            question for question in analysis.clarifying_questions if question.field in allowed
+        ),
+    )
 
 
 def build_grounding_claim_packets(
@@ -169,6 +283,10 @@ def _validate_input(
 ) -> None:
     if not isinstance(analysis, OpportunityRequirementAnalysis) or not isinstance(draft, SolutionDraft):
         raise SolutionDraftGroundingError(SolutionGroundingErrorCode.INVALID_INPUT)
+    _validate_sources(sources)
+
+
+def _validate_sources(sources: tuple[SolutionSource, ...]) -> None:
     if (
         not isinstance(sources, tuple)
         or not sources
@@ -211,23 +329,18 @@ def _parse_results(
     allowed_locations = frozenset(packet.location for packet in packets)
     by_location = {}
     for item in items:
-        _object(item, {"location", "relation", "type_fit"})
+        _object(item, {"location", "relation"})
         location = item["location"]
         relation = item["relation"]
-        type_fit = item["type_fit"]
         if (
             not isinstance(location, str)
             or location not in allowed_locations
             or location in by_location
             or not isinstance(relation, str)
             or relation not in GroundingRelation._value2member_map_
-            or not isinstance(type_fit, str)
-            or type_fit not in GroundingTypeFit._value2member_map_
         ):
             _invalid_response()
-        by_location[location] = GroundingClaimResult(
-            location, GroundingRelation(relation), GroundingTypeFit(type_fit),
-        )
+        by_location[location] = GroundingClaimResult(location, GroundingRelation(relation))
     if set(by_location) != allowed_locations:
         _invalid_response()
     return tuple(by_location[packet.location] for packet in packets)

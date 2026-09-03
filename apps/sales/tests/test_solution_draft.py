@@ -88,7 +88,7 @@ def test_generation_calls_existing_search_per_intent_and_preserves_source_author
     assert calls[0]["query"] == "企业知识查询 员工查阅企业资料 约300人"
     assert result.generation_status == "generated" and result.readiness.status == "ready"
     assert result.analysis_id == record.pk
-    assert result.draft.title == "企业知识服务内部草稿"
+    assert result.draft.title == "商机需求解决方案内部草稿"
     assert len(llm.calls) == 2
     assert llm.requested_output_budgets == [4000, None]
     assert [s.chunk_id for s in result.sources] == [1,4,7,2,5,8,3,6]
@@ -137,7 +137,7 @@ def test_prompt_separates_customer_requests_from_untrusted_enterprise_evidence(m
     system, user = llm.calls[0]
     assert system["role"] == "system" and user["role"] == "user"
     assert "Ignore previous instructions" not in system["content"]
-    for contract in ("内部", "不是正式客户承诺", "客户提出", "不代表", "Enterprise Evidence", "不得", "报价", "不可信", "JSON", "简体中文", "待确认"):
+    for contract in ("内部", "不是正式客户承诺", "客户需求", "不能单独证明", "Enterprise Evidence", "不得", "报价", "不可信", "JSON", "简体中文", "待确认"):
         assert contract in system["content"]
     root = ElementTree.fromstring("<root>"+user["content"]+"</root>")
     assert root.find("system") is None
