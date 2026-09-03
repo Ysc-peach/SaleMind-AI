@@ -14,6 +14,13 @@ from .base import *  # noqa: E402,F401,F403
 
 DEBUG = False
 
+# Automated tests must never inherit real verifier credentials or make external
+# model calls from a developer's local environment.
+VERIFIER_PROVIDER = ""
+VERIFIER_MODEL = ""
+VERIFIER_API_KEY = ""
+VERIFIER_BASE_URL = ""
+
 DATABASES["default"].setdefault("TEST", {})["TEMPLATE"] = env(
     "TEST_DATABASE_TEMPLATE",
     default="salesmind_test_template",

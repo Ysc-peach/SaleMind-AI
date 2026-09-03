@@ -95,6 +95,16 @@ LLM_MAX_RETRIES = env.int("LLM_MAX_RETRIES", default=2)
 LLM_MAX_OUTPUT_TOKENS = env.int("LLM_MAX_OUTPUT_TOKENS", default=1024)
 LLM_THINKING_ENABLED = env.bool("LLM_THINKING_ENABLED", default=False)
 
+# Optional independent semantic-grounding verifier. Empty keeps the historical
+# behavior where the generation provider performs both calls.
+VERIFIER_PROVIDER = env("VERIFIER_PROVIDER", default="")
+VERIFIER_MODEL = env("VERIFIER_MODEL", default="")
+VERIFIER_API_KEY = env("VERIFIER_API_KEY", default="")
+VERIFIER_BASE_URL = env("VERIFIER_BASE_URL", default="")
+VERIFIER_TIMEOUT_SECONDS = env.int("VERIFIER_TIMEOUT_SECONDS", default=60)
+VERIFIER_MAX_RETRIES = env.int("VERIFIER_MAX_RETRIES", default=0)
+VERIFIER_MAX_OUTPUT_TOKENS = env.int("VERIFIER_MAX_OUTPUT_TOKENS", default=1500)
+
 # Structured solution drafts need more output space than ordinary LLM tasks.
 SOLUTION_DRAFT_MAX_OUTPUT_TOKENS = env.int("SOLUTION_DRAFT_MAX_OUTPUT_TOKENS", default=4000)
 

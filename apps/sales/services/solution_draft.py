@@ -9,6 +9,7 @@ from apps.knowledge.embeddings.base import EmbeddingProvider
 from apps.knowledge.services.search import search_knowledge
 from apps.llm.base import LLMProvider
 from apps.llm.factory import get_llm_provider
+from apps.llm.verifier_factory import get_verifier_provider
 from apps.sales.models import OpportunityRequirementAnalysis as AnalysisRecord
 from apps.sales.services.requirement_analysis_history import analysis_record_to_domain
 from apps.sales.services.solution_errors import SolutionDraftError, SolutionDraftErrorCode
@@ -48,6 +49,7 @@ def generate_grounded_solution_draft(
     *,
     embedding_provider: EmbeddingProvider | None = None,
     llm_provider: LLMProvider | None = None,
+    verifier_provider: LLMProvider | None = None,
 ) -> GroundedSolutionDraftResult:
     """No latest lookup, persistence, HTTP, SDK logic, or exception rewriting.
 
@@ -81,8 +83,16 @@ def generate_grounded_solution_draft(
         max_output_tokens=settings.SOLUTION_DRAFT_MAX_OUTPUT_TOKENS,
     )
     claims = parse_atomic_solution_claims(generation.content, source_count=len(sources))
+    active_verifier = verifier_provider
+    if active_verifier is None:
+        configured_verifier = settings.VERIFIER_PROVIDER
+        active_verifier = (
+            get_verifier_provider()
+            if isinstance(configured_verifier, str) and configured_verifier.strip()
+            else provider
+        )
     verify_atomic_solution_claims(
-        analysis=typed, claims=claims, sources=sources, llm_provider=provider,
+        analysis=typed, claims=claims, sources=sources, llm_provider=active_verifier,
     )
     draft = assemble_solution_draft(claims, typed)
     return GroundedSolutionDraftResult(
