@@ -21,6 +21,19 @@ class KnowledgeDocumentStatus(models.TextChoices):
     FAILED = "failed", _("处理失败")
 
 
+class EnterpriseGroundingFactStatus(models.TextChoices):
+    CONFIRMED_SUPPORTED = "confirmed_supported", _("已确认支持")
+    CONFIRMED_UNSUPPORTED = "confirmed_unsupported", _("已确认不支持")
+    UNCONFIRMED = "unconfirmed", _("未确认")
+    CONFLICT = "conflict", _("冲突")
+
+
+class EnterpriseGroundingFactApprovalStatus(models.TextChoices):
+    PROPOSED = "proposed", _("待审核")
+    APPROVED = "approved", _("已批准")
+    REJECTED = "rejected", _("已拒绝")
+
+
 class KnowledgeDocument(models.Model):
     DocumentType = KnowledgeDocumentType
     Status = KnowledgeDocumentStatus
@@ -79,6 +92,11 @@ class KnowledgeDocument(models.Model):
     )
     last_indexed_at = models.DateTimeField(
         _("最后索引时间"),
+        null=True,
+        blank=True,
+    )
+    last_index_run_id = models.UUIDField(
+        _("最近完成索引运行 ID"),
         null=True,
         blank=True,
     )
@@ -188,3 +206,97 @@ class KnowledgeChunk(models.Model):
 
     def __str__(self) -> str:
         return f"{self.document}: {self.chunk_index}"
+
+
+class EnterpriseGroundingFact(models.Model):
+    Status = EnterpriseGroundingFactStatus
+    ApprovalStatus = EnterpriseGroundingFactApprovalStatus
+
+    subject_key = models.CharField(_("能力主题"), max_length=128)
+    statement = models.TextField(_("事实陈述"))
+    status = models.CharField(
+        _("事实状态"),
+        max_length=32,
+        choices=EnterpriseGroundingFactStatus.choices,
+    )
+    source_document = models.ForeignKey(
+        KnowledgeDocument,
+        on_delete=models.PROTECT,
+        related_name="grounding_facts",
+        verbose_name=_("来源文档"),
+    )
+    source_chunk_id = models.PositiveBigIntegerField(_("来源分块快照 ID"))
+    source_excerpt = models.TextField(_("来源摘录"))
+    source_index_run_id = models.UUIDField(_("来源索引运行 ID"))
+    source_content_hash = models.CharField(_("来源内容 SHA-256"), max_length=64)
+    approval_status = models.CharField(
+        _("审核状态"),
+        max_length=16,
+        choices=EnterpriseGroundingFactApprovalStatus.choices,
+        default=EnterpriseGroundingFactApprovalStatus.PROPOSED,
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="approved_grounding_facts",
+        verbose_name=_("批准人"),
+        null=True,
+        blank=True,
+    )
+    approved_at = models.DateTimeField(_("批准时间"), null=True, blank=True)
+    is_stale = models.BooleanField(_("已过期"), default=False)
+    stale_at = models.DateTimeField(_("过期时间"), null=True, blank=True)
+    created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(status__in=EnterpriseGroundingFactStatus.values),
+                name="knowledge_fact_status_valid",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(
+                    approval_status__in=EnterpriseGroundingFactApprovalStatus.values,
+                ),
+                name="knowledge_fact_approval_valid",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        approval_status=EnterpriseGroundingFactApprovalStatus.APPROVED,
+                        approved_by__isnull=False,
+                        approved_at__isnull=False,
+                    )
+                    | models.Q(
+                        ~models.Q(
+                            approval_status=EnterpriseGroundingFactApprovalStatus.APPROVED,
+                        ),
+                        approved_by__isnull=True,
+                        approved_at__isnull=True,
+                    )
+                ),
+                name="knowledge_fact_approval_metadata",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(is_stale=True, stale_at__isnull=False)
+                    | models.Q(is_stale=False, stale_at__isnull=True)
+                ),
+                name="knowledge_fact_stale_metadata",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["subject_key", "approval_status", "is_stale"],
+                name="knowledge_fact_admission_idx",
+            ),
+            models.Index(
+                fields=["source_document", "source_index_run_id"],
+                name="knowledge_fact_source_run_idx",
+            ),
+        ]
+        verbose_name = _("企业 Grounding 事实")
+        verbose_name_plural = _("企业 Grounding 事实")
+
+    def __str__(self) -> str:
+        return f"{self.subject_key}: {self.statement}"
