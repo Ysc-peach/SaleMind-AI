@@ -27,6 +27,7 @@ from apps.llm.factory import get_llm_provider
 # merging must never inherit an approved capability status.
 GROUNDING_SUBJECT_REGISTRY = {
     "enterprise_knowledge_query": "企业知识检索",
+    "server_compatibility": "服务器兼容性",
     "private_deployment": "私有化部署",
     "intranet_data_residency": "内网数据驻留",
     "public_network_transfer": "公网数据传输",
