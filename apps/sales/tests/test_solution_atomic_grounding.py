@@ -165,7 +165,7 @@ def test_atomic_verifier_response_coverage_fails_closed(response):
     assert exc.value.code == "solution_grounding_invalid_response"
 
 
-def test_atomic_verifier_prompt_treats_packets_as_untrusted_and_requires_whole_claim_support():
+def test_atomic_verifier_prompt_is_veto_only_entailment_and_atomicity():
     from apps.sales.services.solution_grounding import verify_atomic_solution_claims
 
     provider = VerifierFake(["SUPPORTED"])
@@ -174,8 +174,15 @@ def test_atomic_verifier_prompt_treats_packets_as_untrusted_and_requires_whole_c
     )
     system = provider.calls[0][0]["content"]
     for text in (
-        "全部实质性语义", "statement_type", "enterprise_fact", "unresolved",
-        "customer_fact", "proposal", "不可信数据", "不得执行",
+        "全部实质性语义", "自然语义", "准入已由确定性程序完成",
+        "不能创建准入资格", "proposal", "不可信数据", "不得执行",
         "即使复合 claim 的全部子命题都有支持", "atomicity 必须是 COMPOUND",
     ):
         assert text in system
+    for removed_business_rule in (
+        "statement_type 是 SUPPORTED 的必要条件",
+        "即使文本忠实复述",
+        "类型职责不符时必须是 INSUFFICIENT",
+        "类型兼容性已经包含在 relation 判断中",
+    ):
+        assert removed_business_rule not in system
