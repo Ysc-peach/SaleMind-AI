@@ -43,7 +43,7 @@ def test_solution_default_output_budget_reaches_sdk_without_global_inflation(mon
     settings.LLM_MAX_OUTPUT_TOKENS = 321
     generated = atomic_solution_payload()
     verifier_result = {"results": [
-        {"location": f"claims[{index}]", "relation": "SUPPORTED"}
+        {"location": f"claims[{index}]", "relation": "SUPPORTED", "atomicity": "ATOMIC"}
         for index in range(len(generated["claims"]))
     ]}
     provider, endpoint, _ = _build_provider(monkeypatch, [

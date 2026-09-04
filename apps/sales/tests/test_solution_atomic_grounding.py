@@ -44,7 +44,7 @@ class VerifierFake(DeterministicFakeLLM):
         root = ElementTree.fromstring("<root>" + messages[1]["content"] + "</root>")
         claims = json.loads(root.find("grounding_claim_packets").text)["claims"]
         results = [
-            {"location": item["location"], "relation": relation}
+            {"location": item["location"], "relation": relation, "atomicity": "ATOMIC"}
             for item, relation in zip(claims, self.relations, strict=True)
         ]
         return LLMGeneration(content=json.dumps({"results": results}))
@@ -127,7 +127,8 @@ def test_atomic_packet_uses_only_its_cited_source_and_no_type_fit_dimension():
     assert "type_fit" not in provider.calls[0][0]["content"]
 
 
-def test_customer_context_is_limited_to_the_claim_section_dimensions():
+def test_customer_fact_context_is_complete_and_not_controlled_by_claim_section():
+    from apps.sales.services.requirement_analysis import RequirementDimension
     from apps.sales.services.solution_grounding import build_atomic_grounding_claim_packets
 
     value = one_claim(
@@ -135,21 +136,18 @@ def test_customer_context_is_limited_to_the_claim_section_dimensions():
     )
     packets = build_atomic_grounding_claim_packets(typed_analysis(), value, sources())
     fields = tuple(item.field.value for item in packets[0].customer_context.requirements)
-    assert fields == (
-        "integration_requirement", "existing_environment", "use_scenario", "technical_constraints",
-    )
-    assert "budget" not in fields and "data_security_requirement" not in fields
+    assert fields == tuple(item.value for item in RequirementDimension)
 
 
 @pytest.mark.parametrize("response", [
     "not json",
     {"results": []},
-    {"results": [{"location": "claims[0]", "relation": "SUPPORTED", "extra": 1}]},
-    {"results": [{"location": "claims[0]", "relation": "UNKNOWN"}]},
-    {"results": [{"location": "claims[99]", "relation": "SUPPORTED"}]},
+    {"results": [{"location": "claims[0]", "relation": "SUPPORTED", "atomicity": "ATOMIC", "extra": 1}]},
+    {"results": [{"location": "claims[0]", "relation": "UNKNOWN", "atomicity": "ATOMIC"}]},
+    {"results": [{"location": "claims[99]", "relation": "SUPPORTED", "atomicity": "ATOMIC"}]},
     {"results": [
-        {"location": "claims[0]", "relation": "SUPPORTED"},
-        {"location": "claims[0]", "relation": "SUPPORTED"},
+        {"location": "claims[0]", "relation": "SUPPORTED", "atomicity": "ATOMIC"},
+        {"location": "claims[0]", "relation": "SUPPORTED", "atomicity": "ATOMIC"},
     ]},
 ])
 def test_atomic_verifier_response_coverage_fails_closed(response):
@@ -178,6 +176,6 @@ def test_atomic_verifier_prompt_treats_packets_as_untrusted_and_requires_whole_c
     for text in (
         "全部实质性语义", "statement_type", "enterprise_fact", "unresolved",
         "customer_fact", "proposal", "不可信数据", "不得执行",
-        "即使各子命题看似分别有支持也必须先拆分",
+        "即使复合 claim 的全部子命题都有支持", "atomicity 必须是 COMPOUND",
     ):
         assert text in system

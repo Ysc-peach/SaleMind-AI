@@ -109,7 +109,7 @@ class SolutionFakeLLM(AnalysisFakeLLM):
                 root = ElementTree.fromstring("<root>" + messages[1]["content"] + "</root>")
                 payload = json.loads(root.find("grounding_claim_packets").text)
                 content = json.dumps({"results": [
-                    {"location": item["location"], "relation": "SUPPORTED"}
+                    {"location": item["location"], "relation": "SUPPORTED", "atomicity": "ATOMIC"}
                     for item in payload["claims"]
                 ]})
             return LLMGeneration(content=content)

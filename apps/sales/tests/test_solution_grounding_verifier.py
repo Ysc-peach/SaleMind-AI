@@ -30,7 +30,8 @@ class VerifierFake(DeterministicFakeLLM):
         root = ElementTree.fromstring("<root>" + messages[1]["content"] + "</root>")
         claims = json.loads(root.find("grounding_claim_packets").text)["claims"]
         return LLMGeneration(content=json.dumps({"results": [
-            {"location": item["location"], "relation": "SUPPORTED"} for item in claims
+            {"location": item["location"], "relation": "SUPPORTED", "atomicity": "ATOMIC"}
+            for item in claims
         ]}))
 
 
@@ -118,7 +119,11 @@ def test_verifier_failure_is_not_retried_or_assembled(monkeypatch):
     from apps.sales.services.solution_grounding import SolutionDraftGroundingError
 
     response = {"results": [
-        {"location": f"claims[{index}]", "relation": "INSUFFICIENT" if index == 0 else "SUPPORTED"}
+        {
+            "location": f"claims[{index}]",
+            "relation": "INSUFFICIENT" if index == 0 else "SUPPORTED",
+            "atomicity": "ATOMIC",
+        }
         for index in range(len(atomic_solution_payload()["claims"]))
     ]}
     monkeypatch.setattr(service, "search_knowledge", lambda **kwargs: [search_result()])

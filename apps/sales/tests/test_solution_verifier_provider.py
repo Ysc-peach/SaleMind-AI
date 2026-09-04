@@ -20,11 +20,11 @@ class IndependentVerifier(DeterministicFakeLLM):
         super().generate(messages, max_output_tokens=max_output_tokens)
         assert "<grounding_claim_packets>" in messages[-1]["content"]
         return LLMGeneration(content=json.dumps({"results": [
-            {"location": "claims[0]", "relation": "SUPPORTED"},
-            {"location": "claims[1]", "relation": "SUPPORTED"},
-            {"location": "claims[2]", "relation": "SUPPORTED"},
-            {"location": "claims[3]", "relation": "SUPPORTED"},
-            {"location": "claims[4]", "relation": "SUPPORTED"},
+            {"location": "claims[0]", "relation": "SUPPORTED", "atomicity": "ATOMIC"},
+            {"location": "claims[1]", "relation": "SUPPORTED", "atomicity": "ATOMIC"},
+            {"location": "claims[2]", "relation": "SUPPORTED", "atomicity": "ATOMIC"},
+            {"location": "claims[3]", "relation": "SUPPORTED", "atomicity": "ATOMIC"},
+            {"location": "claims[4]", "relation": "SUPPORTED", "atomicity": "ATOMIC"},
         ]}))
 
 

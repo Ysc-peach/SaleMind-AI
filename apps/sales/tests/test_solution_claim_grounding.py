@@ -41,12 +41,13 @@ class ClaimVerifierFake(DeterministicFakeLLM):
         root = ElementTree.fromstring("<root>" + messages[1]["content"] + "</root>")
         packets = json.loads(root.find("grounding_claim_packets").text)["claims"]
         return LLMGeneration(content=json.dumps({"results": [
-            {"location": packet["location"], "relation": relation}
+            {"location": packet["location"], "relation": relation, "atomicity": "ATOMIC"}
             for packet, relation in zip(packets, self.relations, strict=True)
         ]}))
 
 
 def test_packets_are_frozen_and_scope_each_claim_to_its_own_authority():
+    from apps.sales.services.requirement_analysis import RequirementDimension
     from apps.sales.services.solution_grounding import build_atomic_grounding_claim_packets
 
     value = claims(
@@ -63,7 +64,9 @@ def test_packets_are_frozen_and_scope_each_claim_to_its_own_authority():
         "integration_requirement", "existing_environment", "use_scenario", "technical_constraints",
     )
     assert packets[2].evidence == ()
-    assert packets[2].customer_context == packets[1].customer_context
+    assert tuple(item.field for item in packets[2].customer_context.requirements) == tuple(
+        RequirementDimension
+    )
     with pytest.raises(FrozenInstanceError):
         packets[0].text = "changed"
 
@@ -114,7 +117,7 @@ def test_prompt_is_type_aware_atomic_and_has_no_capability_specific_examples():
     system = provider.calls[0][0]["content"]
     for contract in (
         "全部实质性语义", "statement_type 是 SUPPORTED 的必要条件", "enterprise_fact",
-        "unresolved", "customer_fact", "proposal", "含多个可独立验证的命题", "必须是 INSUFFICIENT",
+        "unresolved", "customer_fact", "proposal", "两个或以上可分别成立或失败", "SUPPORTED + ATOMIC",
     ):
         assert contract in system
     assert "扫描型 PDF OCR" not in system and "CSV 批量导出" not in system

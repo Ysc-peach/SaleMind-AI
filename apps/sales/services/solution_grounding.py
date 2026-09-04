@@ -31,6 +31,11 @@ class GroundingRelation(StrEnum):
     CONTRADICTED = "CONTRADICTED"
 
 
+class GroundingAtomicity(StrEnum):
+    ATOMIC = "ATOMIC"
+    COMPOUND = "COMPOUND"
+
+
 class GroundingViolationCode(StrEnum):
     CUSTOMER_FACT_NOT_SUPPORTED = "CUSTOMER_FACT_NOT_SUPPORTED"
     ENTERPRISE_FACT_NOT_SUPPORTED = "ENTERPRISE_FACT_NOT_SUPPORTED"
@@ -76,6 +81,7 @@ class GroundingCustomerContext:
 class GroundingClaimResult:
     location: str
     relation: GroundingRelation
+    atomicity: GroundingAtomicity
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,9 +151,17 @@ def _verify_packets(
     results = _parse_results(generation.content, packets=packets)
     violations = []
     for packet, result in zip(packets, results, strict=True):
-        if result.relation is not GroundingRelation.SUPPORTED:
+        if (
+            result.relation is not GroundingRelation.SUPPORTED
+            or result.atomicity is not GroundingAtomicity.ATOMIC
+        ):
             violations.append(SolutionGroundingViolation(
-                _violation_code(packet.statement_type), packet.location,
+                (
+                    _violation_code(packet.statement_type)
+                    if result.relation is not GroundingRelation.SUPPORTED
+                    else GroundingViolationCode.OTHER_GROUNDING_VIOLATION
+                ),
+                packet.location,
             ))
     verification = SolutionGroundingVerification(
         passed=not violations,
@@ -180,7 +194,12 @@ def build_atomic_grounding_claim_packets(
             source_by_label[label] for label in claim.citations
         )
         customer_context = None
-        if claim.statement_type is not SolutionStatementType.ENTERPRISE_FACT:
+        if claim.statement_type in {
+            SolutionStatementType.CUSTOMER_FACT,
+            SolutionStatementType.PROPOSAL,
+        }:
+            customer_context = _complete_customer_context(analysis)
+        elif claim.statement_type is SolutionStatementType.UNRESOLVED:
             customer_context = _customer_context_for_section(analysis, claim.section.value)
         packets.append(GroundingClaimPacket(
             location=f"claims[{index}]",
@@ -245,6 +264,19 @@ def _customer_context_for_section(
         clarifying_questions=tuple(
             question for question in analysis.clarifying_questions if question.field in allowed
         ),
+    )
+
+
+def _complete_customer_context(
+    analysis: OpportunityRequirementAnalysis,
+) -> GroundingCustomerContext:
+    return GroundingCustomerContext(
+        requirements=tuple(
+            GroundingCustomerRequirement(field, getattr(analysis.requirements, field.value))
+            for field in RequirementDimension
+        ),
+        conflicts=analysis.conflicts,
+        clarifying_questions=analysis.clarifying_questions,
     )
 
 
@@ -329,18 +361,25 @@ def _parse_results(
     allowed_locations = frozenset(packet.location for packet in packets)
     by_location = {}
     for item in items:
-        _object(item, {"location", "relation"})
+        _object(item, {"location", "relation", "atomicity"})
         location = item["location"]
         relation = item["relation"]
+        atomicity = item["atomicity"]
         if (
             not isinstance(location, str)
             or location not in allowed_locations
             or location in by_location
             or not isinstance(relation, str)
             or relation not in GroundingRelation._value2member_map_
+            or not isinstance(atomicity, str)
+            or atomicity not in GroundingAtomicity._value2member_map_
         ):
             _invalid_response()
-        by_location[location] = GroundingClaimResult(location, GroundingRelation(relation))
+        by_location[location] = GroundingClaimResult(
+            location,
+            GroundingRelation(relation),
+            GroundingAtomicity(atomicity),
+        )
     if set(by_location) != allowed_locations:
         _invalid_response()
     return tuple(by_location[packet.location] for packet in packets)
