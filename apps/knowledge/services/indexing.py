@@ -13,7 +13,11 @@ from apps.knowledge.exceptions import (
     KnowledgeDocumentError,
     KnowledgeDocumentErrorCode,
 )
-from apps.knowledge.models import KnowledgeChunk, KnowledgeDocument
+from apps.knowledge.models import (
+    EnterpriseGroundingFact,
+    KnowledgeChunk,
+    KnowledgeDocument,
+)
 from apps.knowledge.parsers import parse_document
 from apps.knowledge.services.chunking import ChunkDraft, chunk_segments
 
@@ -205,6 +209,7 @@ def _complete_indexing(
         document.embedding_model = provider.model_name
         document.embedding_dimensions = provider.dimensions
         document.last_indexed_at = timezone.now()
+        document.last_index_run_id = run_id
         document.indexing_run_id = None
         document.processing_started_at = None
         document.error_code = ""
@@ -217,6 +222,7 @@ def _complete_indexing(
                 "embedding_model",
                 "embedding_dimensions",
                 "last_indexed_at",
+                "last_index_run_id",
                 "indexing_run_id",
                 "processing_started_at",
                 "error_code",
@@ -248,11 +254,17 @@ def _complete_reindexing(
         KnowledgeChunk.objects.bulk_create(
             _build_chunk_records(document, chunks, embeddings)
         )
+        completed_at = timezone.now()
+        EnterpriseGroundingFact.objects.filter(
+            source_document_id=document_id,
+            is_stale=False,
+        ).update(is_stale=True, stale_at=completed_at)
         document.chunk_count = len(chunks)
         document.embedding_provider = provider.provider_name
         document.embedding_model = provider.model_name
         document.embedding_dimensions = provider.dimensions
-        document.last_indexed_at = timezone.now()
+        document.last_indexed_at = completed_at
+        document.last_index_run_id = run_id
         document.indexing_run_id = None
         document.processing_started_at = None
         document.error_code = ""
@@ -264,6 +276,7 @@ def _complete_reindexing(
                 "embedding_model",
                 "embedding_dimensions",
                 "last_indexed_at",
+                "last_index_run_id",
                 "indexing_run_id",
                 "processing_started_at",
                 "error_code",
@@ -315,6 +328,7 @@ def _mark_initial_indexing_failed(
         document.embedding_model = ""
         document.embedding_dimensions = None
         document.last_indexed_at = None
+        document.last_index_run_id = None
         document.indexing_run_id = None
         document.processing_started_at = None
         document.error_code = error.code
@@ -327,6 +341,7 @@ def _mark_initial_indexing_failed(
                 "embedding_model",
                 "embedding_dimensions",
                 "last_indexed_at",
+                "last_index_run_id",
                 "indexing_run_id",
                 "processing_started_at",
                 "error_code",

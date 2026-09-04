@@ -751,3 +751,67 @@ def test_default_provider_is_resolved_by_factory_without_network(
     assert document.embedding_provider == provider.provider_name
     assert document.embedding_model == provider.model_name
     assert document.embedding_dimensions == provider.dimensions
+
+
+def test_successful_reindex_stales_old_fact_but_preserves_audit_snapshot(
+    make_ready_document,
+    creator,
+):
+    from apps.knowledge.models import EnterpriseGroundingFact
+    from apps.knowledge.services.indexing import reindex_document
+
+    old_run_id = uuid4()
+    document = make_ready_document(last_index_run_id=old_run_id)
+    old_chunk = document.chunks.order_by("id").first()
+    fact = EnterpriseGroundingFact.objects.create(
+        subject_key="private_deployment",
+        statement="SalesMind 支持私有化部署。",
+        status="confirmed_supported",
+        source_document=document,
+        source_chunk_id=old_chunk.pk,
+        source_excerpt=old_chunk.content,
+        source_index_run_id=old_run_id,
+        source_content_hash="a" * 64,
+        approval_status="approved",
+        approved_by=creator,
+        approved_at=timezone.now(),
+    )
+
+    reindex_document(document.pk, provider=ReindexEmbeddingProvider(document.pk))
+
+    document.refresh_from_db()
+    fact.refresh_from_db()
+    assert document.last_index_run_id != old_run_id
+    assert fact.source_chunk_id == old_chunk.pk
+    assert fact.source_excerpt == old_chunk.content
+    assert fact.is_stale is True
+    assert fact.stale_at is not None
+    assert not document.chunks.filter(pk=old_chunk.pk).exists()
+
+
+def test_failed_reindex_does_not_stale_current_fact(make_ready_document, creator):
+    from apps.knowledge.models import EnterpriseGroundingFact
+    from apps.knowledge.services.indexing import reindex_document
+
+    current_run_id = uuid4()
+    document = make_ready_document(last_index_run_id=current_run_id)
+    chunk = document.chunks.order_by("id").first()
+    fact = EnterpriseGroundingFact.objects.create(
+        subject_key="private_deployment",
+        statement="SalesMind 支持私有化部署。",
+        status="confirmed_supported",
+        source_document=document,
+        source_chunk_id=chunk.pk,
+        source_excerpt=chunk.content,
+        source_index_run_id=current_run_id,
+        source_content_hash="a" * 64,
+    )
+
+    with pytest.raises(KnowledgeDocumentError):
+        reindex_document(document.pk, provider=FailingEmbeddingProvider())
+
+    document.refresh_from_db()
+    fact.refresh_from_db()
+    assert document.last_index_run_id == current_run_id
+    assert fact.is_stale is False
+    assert fact.stale_at is None

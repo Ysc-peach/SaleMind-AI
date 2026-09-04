@@ -177,6 +177,7 @@ def test_pending_document_is_indexed_into_ready_traceable_chunks(make_document):
     assert document.embedding_model == "sha256-test"
     assert document.embedding_dimensions == 1024
     assert document.last_indexed_at is not None
+    assert document.last_index_run_id == provider.observed_state["indexing_run_id"]
     assert document.indexing_run_id is None
     assert document.processing_started_at is None
     assert document.error_code == ""
