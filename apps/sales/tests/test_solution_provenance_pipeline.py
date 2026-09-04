@@ -243,4 +243,3 @@ def test_generation_prompt_contains_only_admitted_enterprise_evidence(
     assert result.content not in generator.calls[0][-1]["content"]
     assert "proposal" in generator.calls[0][0]["content"].lower()
     assert "enterprise_fact" not in generator.calls[0][0]["content"]
-

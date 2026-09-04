@@ -116,4 +116,3 @@ The verifier cannot approve a Fact, change status, resolve conflicts, mark a sta
 ## Testing Strategy
 
 TDD covers model constraints, strict extraction, approval, stale lifecycle, deterministic admission, the N4 permanent regression, explicit-negative CSV/OCR, private deployment, D2, environment overclaim, A3/G1 compound claims, cross-section customer context, and the invariant that a mocked `SUPPORTED + ATOMIC` verifier cannot grant an inadmissible enterprise fact.
-

@@ -171,4 +171,3 @@ def test_admin_registers_only_fact_review_model(fact_fixture, django_user_model)
     request.user = sales_superuser
     assert model_admin.has_view_permission(request) is False
     assert model_admin.has_change_permission(request) is False
-

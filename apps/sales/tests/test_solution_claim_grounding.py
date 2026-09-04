@@ -105,7 +105,7 @@ def test_non_supported_relation_is_conservatively_mapped_by_type(kind, expected,
     ]
 
 
-def test_prompt_is_type_aware_atomic_and_has_no_capability_specific_examples():
+def test_prompt_is_veto_only_atomic_and_has_no_capability_specific_examples():
     from apps.sales.services.solution_grounding import verify_atomic_solution_claims
 
     provider = ClaimVerifierFake(["SUPPORTED"])
@@ -116,8 +116,9 @@ def test_prompt_is_type_aware_atomic_and_has_no_capability_specific_examples():
     )
     system = provider.calls[0][0]["content"]
     for contract in (
-        "全部实质性语义", "statement_type 是 SUPPORTED 的必要条件", "enterprise_fact",
-        "unresolved", "customer_fact", "proposal", "两个或以上可分别成立或失败", "SUPPORTED + ATOMIC",
+        "全部实质性语义", "自然语义", "准入已由确定性程序完成",
+        "不能创建准入资格", "proposal", "两个或以上可分别成立或失败",
     ):
         assert contract in system
+    assert "statement_type 是 SUPPORTED 的必要条件" not in system
     assert "扫描型 PDF OCR" not in system and "CSV 批量导出" not in system

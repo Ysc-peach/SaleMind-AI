@@ -9,7 +9,7 @@ from apps.llm.tests.test_deepseek_provider import _build_provider, _response
 from apps.rag.tests.test_answering import search_result
 from apps.sales.models import Customer, Opportunity
 from apps.sales.tests.requirement_fakes import valid_analysis_payload
-from apps.sales.tests.solution_fakes import analysis_record, atomic_solution_payload, SolutionFakeLLM
+from apps.sales.tests.solution_fakes import analysis_record, proposal_solution_payload, SolutionFakeLLM
 
 
 @pytest.fixture(autouse=True)
@@ -37,14 +37,15 @@ def test_invalid_output_budget_fails_safely_before_sdk_call(monkeypatch, budget)
     assert endpoint.calls == []
 
 
+@pytest.mark.django_db
 def test_solution_default_output_budget_reaches_sdk_without_global_inflation(monkeypatch, settings):
     from apps.sales.services import solution_draft
 
     settings.LLM_MAX_OUTPUT_TOKENS = 321
-    generated = atomic_solution_payload()
+    generated = proposal_solution_payload()
     verifier_result = {"results": [
         {"location": f"claims[{index}]", "relation": "SUPPORTED", "atomicity": "ATOMIC"}
-        for index in range(len(generated["claims"]))
+        for index in range(10)
     ]}
     provider, endpoint, _ = _build_provider(monkeypatch, [
         _response(json.dumps(generated)),
@@ -59,6 +60,7 @@ def test_solution_default_output_budget_reaches_sdk_without_global_inflation(mon
     assert settings.LLM_MAX_OUTPUT_TOKENS == 321
 
 
+@pytest.mark.django_db
 def test_solution_server_setting_is_recorded_by_fake(monkeypatch, settings):
     from apps.sales.services import solution_draft
 
@@ -107,6 +109,7 @@ def test_rag_answer_still_uses_original_provider_default(monkeypatch):
     assert endpoint.calls[0]["max_tokens"] == 321
 
 
+@pytest.mark.django_db
 def test_truncated_solution_is_rejected_without_second_generation(monkeypatch):
     from apps.sales.services import solution_draft
     from apps.sales.services.solution_errors import SolutionDraftError

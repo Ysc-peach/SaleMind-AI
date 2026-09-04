@@ -250,4 +250,3 @@ def test_only_supported_provenance_labels_are_available_to_proposals(provenance)
     admission = build_solution_admission(typed_analysis(), (provenance[2],))
 
     assert admission.allowed_proposal_source_labels == ("S1",)
-
