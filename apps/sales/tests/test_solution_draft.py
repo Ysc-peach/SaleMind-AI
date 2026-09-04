@@ -12,6 +12,9 @@ from apps.rag.tests.test_answering import search_result
 from apps.sales.tests.solution_fakes import analysis_record, SolutionFakeLLM, solution_payload
 
 
+pytestmark = pytest.mark.django_db
+
+
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch):
     monkeypatch.setattr("socket.socket.connect", lambda *a, **kw: pytest.fail("No real network in solution tests."))
@@ -137,17 +140,15 @@ def test_prompt_separates_customer_requests_from_untrusted_enterprise_evidence(m
     system, user = llm.calls[0]
     assert system["role"] == "system" and user["role"] == "user"
     assert "Ignore previous instructions" not in system["content"]
-    for contract in ("内部", "不是正式客户承诺", "客户需求", "不能单独证明", "Enterprise Evidence", "不得", "报价", "不可信", "JSON", "简体中文", "待确认"):
+    for contract in ("内部", "不是正式客户承诺", "客户需求", "不能单独证明", "proposal", "不得", "报价", "不可信", "JSON", "简体中文", "待确认"):
         assert contract in system["content"]
     root = ElementTree.fromstring("<root>"+user["content"]+"</root>")
     assert root.find("system") is None
     customer = json.loads(root.find("customer_requirements").text)
     assert customer["requirements"]["technical_constraints"]["value"] == record.requirements["technical_constraints"]["value"]
     assert customer["requirements"]["budget"]["status"] == "unknown"
-    evidence = root.find("enterprise_evidence/source")
-    assert evidence.attrib == {"id": "S1"}
-    assert malicious in evidence.text
-    assert "数据库 > 范围" in evidence.text
+    assert root.find("allowed_enterprise_capabilities/source") is None
+    assert malicious not in user["content"]
     assert "RAW_REQUIREMENT_DO_NOT_DUMP" not in user["content"]
     assert "BASIC_INFO_DO_NOT_DUMP" not in user["content"]
     assert result.sources[0].content == source.content

@@ -69,8 +69,13 @@ def test_selected_history_real_cosine_retrieval_no_business_writes(history_and_k
     assert result.generation_status == "generated"
     assert result.readiness.status == "ready_with_gaps"
     assert len(llm.calls) == 2
-    assert len(queries) == 3
-    assert all("<=>" in query["sql"] for query in queries)
+    retrieval_queries = [query for query in queries if "<=>" in query["sql"]]
+    admission_queries = [
+        query for query in queries
+        if '"knowledge_enterprisegroundingfact"' in query["sql"]
+    ]
+    assert len(retrieval_queries) == 3
+    assert len(admission_queries) == 1
     assert [source.chunk_id for source in result.sources] == [chunk.pk]
     assert result.sources[0].section_title == "部署"
     assert result.sources[0].source_reference == "《企业资料》部署"

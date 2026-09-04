@@ -9,6 +9,9 @@ from apps.sales.services.solution_errors import SolutionDraftError
 from apps.sales.tests.solution_fakes import solution_payload, typed_analysis
 
 
+pytestmark = pytest.mark.django_db
+
+
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch):
     monkeypatch.setattr("socket.socket.connect", lambda *a, **kw: pytest.fail("No network in contract tests."))
@@ -197,17 +200,22 @@ def test_prompt_has_specific_generation_boundary_regressions(monkeypatch):
     for contract in (
         "客户需求永远不能单独证明企业具备", "未确认、未声明或资料不足既不等于支持",
         "客户环境只代表已知客户事实", "不能推出环境已验证、资源充足、网络适用或生产就绪",
-        "one claim = one independently verifiable", "必须拆成多个 claims",
-        "customer_fact", "enterprise_fact", "proposal", "unresolved",
-        "citations", "程序负责安全标题、最终五章节", "禁止返回 title",
+        "one claim = one independently verifiable", "必须拆成多个",
+        "proposal", "citations", "程序已经确定客户事实、企业事实、待确认事项", "禁止返回 title",
     ):
         assert contract in system["content"]
     assert malicious not in system["content"]
     root = ElementTree.fromstring("<root>"+user["content"]+"</root>")
     assert root.find("system") is None
     assert "采购合同草案" in root.find("customer_requirements").text
-    assert malicious in root.find("enterprise_evidence/source").text
-    assert "integration_requirement" in root.find("solution_unresolved_items").text
+    assert root.find("allowed_enterprise_capabilities/source") is None
+    assert malicious not in user["content"]
+    admitted = json.loads(root.find("program_admitted_claims").text)
+    assert any(
+        item["section"] == "integration"
+        and item["statement_type"] == "unresolved"
+        for item in admitted
+    )
 
 
 def test_schema_does_not_pretend_to_prove_semantic_grounding():

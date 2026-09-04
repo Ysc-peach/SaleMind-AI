@@ -10,6 +10,9 @@ from apps.rag.tests.test_answering import search_result
 from apps.sales.tests.solution_fakes import SolutionFakeLLM, analysis_record
 
 
+pytestmark = pytest.mark.django_db
+
+
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch):
     monkeypatch.setattr("socket.socket.connect", lambda *a, **kw: pytest.fail("No real network."))
@@ -19,12 +22,18 @@ class IndependentVerifier(DeterministicFakeLLM):
     def generate(self, messages, *, max_output_tokens=None):
         super().generate(messages, max_output_tokens=max_output_tokens)
         assert "<grounding_claim_packets>" in messages[-1]["content"]
+        import html
+        import re
+
+        match = re.search(
+            r"<grounding_claim_packets>(.*?)</grounding_claim_packets>",
+            messages[-1]["content"],
+            flags=re.DOTALL,
+        )
+        packets = json.loads(html.unescape(match.group(1)))
         return LLMGeneration(content=json.dumps({"results": [
-            {"location": "claims[0]", "relation": "SUPPORTED", "atomicity": "ATOMIC"},
-            {"location": "claims[1]", "relation": "SUPPORTED", "atomicity": "ATOMIC"},
-            {"location": "claims[2]", "relation": "SUPPORTED", "atomicity": "ATOMIC"},
-            {"location": "claims[3]", "relation": "SUPPORTED", "atomicity": "ATOMIC"},
-            {"location": "claims[4]", "relation": "SUPPORTED", "atomicity": "ATOMIC"},
+            {"location": item["location"], "relation": "SUPPORTED", "atomicity": "ATOMIC"}
+            for item in packets["claims"]
         ]}))
 
 

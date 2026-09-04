@@ -85,6 +85,67 @@ class AtomicSolutionClaimSet:
     claims: tuple[AtomicSolutionClaim, ...]
 
 
+def parse_atomic_solution_proposals(
+    content: str,
+    *,
+    allowed_source_labels: tuple[str, ...],
+) -> AtomicSolutionClaimSet:
+    """Parse the proposal-only IR; all fact types are program-owned."""
+
+    text = _text(content)
+    fence = re.fullmatch(r"```json[ \t]*\r?\n(.*)\r?\n```", text, flags=re.DOTALL)
+    if fence is not None:
+        text = fence.group(1)
+    try:
+        payload = json.loads(
+            text,
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_constant,
+        )
+    except (ValueError, RecursionError):
+        _invalid()
+    _object(payload, {"proposals"})
+    items = payload["proposals"]
+    if not isinstance(items, list) or len(items) > 30:
+        _invalid()
+    if (
+        not isinstance(allowed_source_labels, tuple)
+        or len(set(allowed_source_labels)) != len(allowed_source_labels)
+        or any(not isinstance(label, str) for label in allowed_source_labels)
+    ):
+        _invalid()
+    labels = frozenset(allowed_source_labels)
+    claims = []
+    for item in items:
+        _object(item, {"section", "text", "citations"})
+        section = item["section"]
+        if (
+            not isinstance(section, str)
+            or section not in SolutionSectionKey._value2member_map_
+        ):
+            _invalid()
+        citations = item["citations"]
+        if (
+            not isinstance(citations, list)
+            or not citations
+            or len(set(citations)) != len(citations)
+            or any(
+                not isinstance(label, str) or label not in labels
+                for label in citations
+            )
+        ):
+            _invalid()
+        claims.append(
+            AtomicSolutionClaim(
+                section=SolutionSectionKey(section),
+                statement_type=SolutionStatementType.PROPOSAL,
+                text=_prose(item["text"]),
+                citations=tuple(citations),
+            )
+        )
+    return AtomicSolutionClaimSet(tuple(claims))
+
+
 def parse_atomic_solution_claims(content: str, *, source_count: int) -> AtomicSolutionClaimSet:
     """Parse the deliberately small generation IR without repairing model output."""
     text = _text(content)

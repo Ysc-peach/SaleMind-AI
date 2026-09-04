@@ -94,10 +94,14 @@ def atomic_solution_payload():
     }
 
 
+def proposal_solution_payload():
+    return {"proposals": []}
+
+
 class SolutionFakeLLM(AnalysisFakeLLM):
     def __init__(self, *, content=None, callback=None, grounding_content=None):
         super().__init__(content=content if content is not None else json.dumps(
-            atomic_solution_payload(), ensure_ascii=False,
+            proposal_solution_payload(), ensure_ascii=False,
         ), callback=callback)
         self.grounding_content = grounding_content
 

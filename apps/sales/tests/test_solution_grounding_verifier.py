@@ -14,6 +14,9 @@ from apps.sales.tests.solution_fakes import analysis_record, atomic_solution_pay
 from apps.sales.tests.test_solution_atomic_claims import parse
 
 
+pytestmark = pytest.mark.django_db
+
+
 def sources():
     return merge_evidence([[search_result(content="企业资料确认支持私有化部署。")]])
 
@@ -124,7 +127,7 @@ def test_verifier_failure_is_not_retried_or_assembled(monkeypatch):
             "relation": "INSUFFICIENT" if index == 0 else "SUPPORTED",
             "atomicity": "ATOMIC",
         }
-        for index in range(len(atomic_solution_payload()["claims"]))
+        for index in range(10)
     ]}
     monkeypatch.setattr(service, "search_knowledge", lambda **kwargs: [search_result()])
     llm = SolutionFakeLLM(grounding_content=json.dumps(response))
