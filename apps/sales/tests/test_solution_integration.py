@@ -75,7 +75,9 @@ def test_selected_history_real_cosine_retrieval_no_business_writes(history_and_k
         if '"knowledge_enterprisegroundingfact"' in query["sql"]
     ]
     assert len(retrieval_queries) == 3
-    assert len(admission_queries) == 1
+    # Admission is read once before generation and revalidated once after the
+    # external verifier call so concurrent provenance changes fail closed.
+    assert len(admission_queries) == 2
     assert [source.chunk_id for source in result.sources] == [chunk.pk]
     assert result.sources[0].section_title == "部署"
     assert result.sources[0].source_reference == "《企业资料》部署"

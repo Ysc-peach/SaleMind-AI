@@ -10,10 +10,10 @@ The existing pipeline remains responsible for deterministic readiness, three ret
 
 - `KnowledgeDocument` owns uploaded knowledge and indexing state.
 - `KnowledgeChunk` is replaced by `_complete_reindexing()` and therefore cannot be a durable provenance foreign key.
-- successful indexing currently clears the transient `indexing_run_id`; Phase 5.5h adds `last_index_run_id` to retain the committed knowledge version.
-- `generate_grounded_solution_draft()` retrieves `SolutionSource` values and currently lets the generation LLM propose every statement type.
+- Before Phase 5.5h, successful indexing cleared the transient `indexing_run_id`; Phase 5.5h adds `last_index_run_id` to retain the committed knowledge version.
+- Before Phase 5.5h, `generate_grounded_solution_draft()` let the generation LLM propose every statement type; it now limits model output to proposal claims.
 - `verify_atomic_solution_claims()` receives claim-scoped evidence, returns relation plus atomicity, and rejects anything except `SUPPORTED + ATOMIC`.
-- Django Admin currently registers the custom user only. `KnowledgeDocument` and `KnowledgeChunk` intentionally remain unregistered.
+- Before Phase 5.5h, Django Admin registered only the custom user. Phase 5.5h adds the grounding Fact review surface; `KnowledgeDocument` and `KnowledgeChunk` remain intentionally unregistered.
 - application business roles are `admin`, `sales`, and `presales`; a business admin without Django `is_staff` cannot enter Django Admin.
 
 ## Security Invariant
@@ -90,6 +90,8 @@ No rule above is placed in an LLM prompt.
 Program code constructs customer facts from known typed Requirement Analysis fields, customer unresolved items from non-known fields, enterprise facts from confirmed admission slots, and enterprise unresolved items from unconfirmed/conflict admission slots.
 
 The generation LLM is reduced to proposing `proposal` claims. Proposal JSON retains section, text, and structured source citations. A proposal citation is admissible only when it resolves to an active approved confirmed enterprise fact. Proposals still undergo semantic and atomicity verification against full frozen customer context and their citation-scoped approved enterprise evidence.
+
+Because generation and verification are external calls and must not be wrapped in a long database transaction, the service deterministically rebuilds admission immediately after verification. Any reindex, approval, rejection, conflict, or stale transition that changed the admitted snapshot causes a fail-closed result before draft assembly.
 
 This makes customer, enterprise, and unresolved fact identity deterministic while preserving LLM creativity for recommendations.
 

@@ -55,6 +55,19 @@ class AlwaysSupportedVerifier(DeterministicFakeLLM):
         ]}))
 
 
+class StalingVerifier(AlwaysSupportedVerifier):
+    def __init__(self, fact):
+        super().__init__()
+        self.fact = fact
+
+    def generate(self, messages, *, max_output_tokens=None):
+        response = super().generate(messages, max_output_tokens=max_output_tokens)
+        self.fact.is_stale = True
+        self.fact.stale_at = timezone.now()
+        self.fact.save(update_fields=["is_stale", "stale_at"])
+        return response
+
+
 @pytest.fixture
 def admitted_source(django_user_model):
     actor = django_user_model.objects.create_user(
@@ -157,6 +170,28 @@ def test_approved_fact_is_program_claim_and_proposal_uses_approved_source(
         for item in statements
     )
     assert any(item.type is SolutionStatementType.PROPOSAL for item in statements)
+    assert len(generator.calls) == 1
+    assert len(verifier.calls) == 1
+
+
+def test_fact_staled_during_external_calls_is_rejected_before_draft_return(
+    monkeypatch,
+    admitted_source,
+):
+    from apps.sales.services import solution_draft
+    from apps.sales.services.solution_errors import SolutionDraftError
+
+    result, create_fact = admitted_source
+    fact = create_fact()
+    monkeypatch.setattr(solution_draft, "search_knowledge", lambda **kwargs: [result])
+    generator = ProposalLLM({"proposals": []})
+    verifier = StalingVerifier(fact)
+
+    with pytest.raises(SolutionDraftError):
+        solution_draft.generate_grounded_solution_draft(
+            analysis_record(), llm_provider=generator, verifier_provider=verifier,
+        )
+
     assert len(generator.calls) == 1
     assert len(verifier.calls) == 1
 

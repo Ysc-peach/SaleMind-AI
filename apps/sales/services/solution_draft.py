@@ -101,6 +101,11 @@ def generate_grounded_solution_draft(
     verify_atomic_solution_claims(
         analysis=typed, claims=claims, sources=sources, llm_provider=active_verifier,
     )
+    # External model calls must stay outside database transactions. Rebuild the
+    # deterministic admission afterward so a concurrent reindex/approval change
+    # cannot return claims whose provenance is no longer current.
+    if build_solution_admission(typed, sources) != admission:
+        raise SolutionDraftError(SolutionDraftErrorCode.INVALID_INPUT)
     draft = assemble_solution_draft(claims, typed)
     return GroundedSolutionDraftResult(
         analysis_id, readiness, SolutionGenerationStatus.GENERATED, draft, sources, unresolved_items,

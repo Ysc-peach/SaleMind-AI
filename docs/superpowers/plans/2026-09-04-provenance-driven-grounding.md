@@ -74,10 +74,10 @@
 **Files:**
 - Create: `apps/knowledge/admin.py`
 - Create: `apps/knowledge/services/grounding_fact_approval.py`
-- Create: `apps/knowledge/tests/test_grounding_fact_admin.py`
+- Create: `apps/knowledge/tests/test_grounding_fact_approval.py`
 
 **Interfaces:**
-- Produces: `approve_grounding_facts(facts, *, actor)` and `reject_grounding_facts(facts, *, actor)` plus read-only Django Admin actions.
+- Produces: `approve_grounding_facts(fact_ids, *, actor)` and `reject_grounding_facts(fact_ids, *, actor)` plus read-only Django Admin actions.
 
 - [ ] Add RED tests proving proposed facts cannot self-approve, active business-admin staff can approve/reject, approval actor/time are recorded, sales/presales/technical-superuser roles cannot approve facts, and add/delete/direct edits are unavailable.
 - [ ] Run the focused tests and confirm RED because approval/admin boundaries are absent.
@@ -153,6 +153,7 @@
 - [ ] Run combined Phase 5 regressions and full pytest.
 - [ ] Run `python manage.py makemigrations --check --dry-run`, `python manage.py check`, `pip check`, and `git diff --check`.
 - [ ] Independently review every probability-to-admission path, reindex lifecycle, provenance survival, transaction boundary, and the five required YES assertions.
+- [ ] Prove that admission is revalidated after external generation/verification so a concurrent stale or approval transition fails closed before draft return.
 - [ ] For each real blocker, write RED, apply the minimal fix, rerun affected focused suites, then repeat full verification.
 - [ ] Commit any final test-only invariant coverage as `test: cover provenance grounding safety invariants`; do not create an empty commit.
 - [ ] Report commits, migration, tests, review, five YES answers, Git state, and stop before real smoke.
