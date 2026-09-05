@@ -184,7 +184,11 @@ def test_fact_staled_during_external_calls_is_rejected_before_draft_return(
     result, create_fact = admitted_source
     fact = create_fact()
     monkeypatch.setattr(solution_draft, "search_knowledge", lambda **kwargs: [result])
-    generator = ProposalLLM({"proposals": []})
+    generator = ProposalLLM({"proposals": [{
+        "section": "deployment",
+        "text": "建议采用私有化部署方向。",
+        "citations": ["S1"],
+    }]})
     verifier = StalingVerifier(fact)
 
     with pytest.raises(SolutionDraftError):
@@ -230,7 +234,7 @@ def test_n4_cannot_be_enterprise_fact_even_when_verifier_always_supports(
     )
     assert not any(item.type is SolutionStatementType.ENTERPRISE_FACT for item in statements)
     assert any(item.type is SolutionStatementType.UNRESOLVED for item in statements)
-    assert len(verifier.calls) == 1
+    assert len(verifier.calls) == 0
 
 
 def test_proposed_confirmed_fact_cannot_authorize_proposal_citation(

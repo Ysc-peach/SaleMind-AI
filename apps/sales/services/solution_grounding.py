@@ -140,6 +140,27 @@ def verify_atomic_solution_claims(
     return _verify_packets(packets, llm_provider)
 
 
+def verify_atomic_solution_proposals(
+    *,
+    analysis: OpportunityRequirementAnalysis,
+    proposals: AtomicSolutionClaimSet,
+    sources: tuple[SolutionSource, ...],
+    llm_provider: LLMProvider | None = None,
+) -> SolutionGroundingVerification:
+    """Verify one non-empty set of LLM-generated proposals only."""
+    if (
+        not isinstance(proposals, AtomicSolutionClaimSet)
+        or not proposals.claims
+        or any(
+            claim.statement_type is not SolutionStatementType.PROPOSAL
+            for claim in proposals.claims
+        )
+    ):
+        raise SolutionDraftGroundingError(SolutionGroundingErrorCode.INVALID_INPUT)
+    packets = build_atomic_grounding_claim_packets(analysis, proposals, sources)
+    return _verify_packets(packets, llm_provider)
+
+
 def _verify_packets(
     packets: tuple[GroundingClaimPacket, ...],
     llm_provider: LLMProvider | None,

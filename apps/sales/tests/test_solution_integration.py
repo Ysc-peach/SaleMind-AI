@@ -68,7 +68,7 @@ def test_selected_history_real_cosine_retrieval_no_business_writes(history_and_k
     assert result.analysis_id == first.pk != latest.pk
     assert result.generation_status == "generated"
     assert result.readiness.status == "ready_with_gaps"
-    assert len(llm.calls) == 2
+    assert len(llm.calls) == 1
     retrieval_queries = [query for query in queries if "<=>" in query["sql"]]
     admission_queries = [
         query for query in queries
@@ -76,7 +76,7 @@ def test_selected_history_real_cosine_retrieval_no_business_writes(history_and_k
     ]
     assert len(retrieval_queries) == 3
     # Admission is read once before generation and revalidated once after the
-    # external verifier call so concurrent provenance changes fail closed.
+    # external model path so concurrent provenance changes fail closed.
     assert len(admission_queries) == 2
     assert [source.chunk_id for source in result.sources] == [chunk.pk]
     assert result.sources[0].section_title == "部署"

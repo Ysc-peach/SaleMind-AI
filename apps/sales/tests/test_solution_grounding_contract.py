@@ -178,7 +178,7 @@ def test_result_unresolved_items_are_program_generated_even_without_llm_evidence
         llm_provider=llm,
     )
     assert [item.field for item in result.unresolved_items] == ["existing_environment", "integration_requirement", "budget"]
-    assert len(llm.calls) == 2 * int(has_evidence)
+    assert len(llm.calls) == int(has_evidence)
     if has_evidence:
         assert not hasattr(result.draft, "unresolved_items")
 

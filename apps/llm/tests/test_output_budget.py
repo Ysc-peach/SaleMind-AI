@@ -9,7 +9,7 @@ from apps.llm.tests.test_deepseek_provider import _build_provider, _response
 from apps.rag.tests.test_answering import search_result
 from apps.sales.models import Customer, Opportunity
 from apps.sales.tests.requirement_fakes import valid_analysis_payload
-from apps.sales.tests.solution_fakes import analysis_record, proposal_solution_payload, SolutionFakeLLM
+from apps.sales.tests.solution_fakes import analysis_record, SolutionFakeLLM
 
 
 @pytest.fixture(autouse=True)
@@ -40,18 +40,25 @@ def test_invalid_output_budget_fails_safely_before_sdk_call(monkeypatch, budget)
 @pytest.mark.django_db
 def test_solution_default_output_budget_reaches_sdk_without_global_inflation(monkeypatch, settings):
     from apps.sales.services import solution_draft
+    from apps.sales.services.solution_admission import GroundingAdmission
+    from apps.sales.services.solution_schema import AtomicSolutionClaimSet
 
     settings.LLM_MAX_OUTPUT_TOKENS = 321
-    generated = proposal_solution_payload()
-    verifier_result = {"results": [
-        {"location": f"claims[{index}]", "relation": "SUPPORTED", "atomicity": "ATOMIC"}
-        for index in range(10)
-    ]}
+    generated = {"proposals": [{
+        "section": "deployment",
+        "text": "建议采用私有化部署方案。",
+        "citations": ["S1"],
+    }]}
+    verifier_result = {"results": [{
+        "location": "claims[0]", "relation": "SUPPORTED", "atomicity": "ATOMIC",
+    }]}
     provider, endpoint, _ = _build_provider(monkeypatch, [
         _response(json.dumps(generated)),
         _response(json.dumps(verifier_result)),
     ])
     monkeypatch.setattr(solution_draft, "search_knowledge", lambda **kw: [search_result()])
+    admitted = GroundingAdmission(AtomicSolutionClaimSet(()), (), (), ("S1",))
+    monkeypatch.setattr(solution_draft, "build_solution_admission", lambda analysis, sources: admitted)
     result = solution_draft.generate_grounded_solution_draft(analysis_record(), llm_provider=provider)
     assert result.generation_status == "generated"
     assert len(endpoint.calls) == 2
@@ -69,7 +76,7 @@ def test_solution_server_setting_is_recorded_by_fake(monkeypatch, settings):
     provider = SolutionFakeLLM()
     result = solution_draft.generate_grounded_solution_draft(analysis_record(), llm_provider=provider)
     assert result.generation_status == "generated"
-    assert provider.requested_output_budgets == [3500, None]
+    assert provider.requested_output_budgets == [3500]
 
 
 @pytest.mark.parametrize("statuses", [{"budget": "conflict"}, {"data_security_requirement": "conflict"}, {}])

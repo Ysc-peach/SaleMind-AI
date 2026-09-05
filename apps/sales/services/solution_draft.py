@@ -14,7 +14,7 @@ from apps.sales.models import OpportunityRequirementAnalysis as AnalysisRecord
 from apps.sales.services.requirement_analysis_history import analysis_record_to_domain
 from apps.sales.services.solution_admission import build_solution_admission
 from apps.sales.services.solution_errors import SolutionDraftError, SolutionDraftErrorCode
-from apps.sales.services.solution_grounding import verify_atomic_solution_claims
+from apps.sales.services.solution_grounding import verify_atomic_solution_proposals
 from apps.sales.services.solution_prompt import build_solution_messages
 from apps.sales.services.solution_readiness import (
     SolutionReadiness, SolutionReadinessStatus, check_solution_readiness,
@@ -90,17 +90,21 @@ def generate_grounded_solution_draft(
         allowed_source_labels=admission.allowed_proposal_source_labels,
     )
     claims = AtomicSolutionClaimSet(admission.claims.claims + proposals.claims)
-    active_verifier = verifier_provider
-    if active_verifier is None:
-        configured_verifier = settings.VERIFIER_PROVIDER
-        active_verifier = (
-            get_verifier_provider()
-            if isinstance(configured_verifier, str) and configured_verifier.strip()
-            else provider
+    if proposals.claims:
+        active_verifier = verifier_provider
+        if active_verifier is None:
+            configured_verifier = settings.VERIFIER_PROVIDER
+            active_verifier = (
+                get_verifier_provider()
+                if isinstance(configured_verifier, str) and configured_verifier.strip()
+                else provider
+            )
+        verify_atomic_solution_proposals(
+            analysis=typed,
+            proposals=proposals,
+            sources=sources,
+            llm_provider=active_verifier,
         )
-    verify_atomic_solution_claims(
-        analysis=typed, claims=claims, sources=sources, llm_provider=active_verifier,
-    )
     # External model calls must stay outside database transactions. Rebuild the
     # deterministic admission afterward so a concurrent reindex/approval change
     # cannot return claims whose provenance is no longer current.

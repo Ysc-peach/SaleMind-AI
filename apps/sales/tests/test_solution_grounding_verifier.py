@@ -21,6 +21,36 @@ def sources():
     return merge_evidence([[search_result(content="企业资料确认支持私有化部署。")]])
 
 
+def proposal_admission():
+    from apps.sales.services.solution_admission import GroundingAdmission
+    from apps.sales.services.solution_schema import (
+        AtomicSolutionClaim,
+        AtomicSolutionClaimSet,
+        SolutionSectionKey,
+        SolutionStatementType,
+    )
+
+    return GroundingAdmission(
+        claims=AtomicSolutionClaimSet((AtomicSolutionClaim(
+            section=SolutionSectionKey.DEPLOYMENT,
+            statement_type=SolutionStatementType.CUSTOMER_FACT,
+            text="部署要求：私有化部署。",
+            citations=(),
+        ),)),
+        enterprise_decisions=(),
+        enterprise_provenance=(),
+        allowed_proposal_source_labels=("S1",),
+    )
+
+
+def proposal_content():
+    return json.dumps({"proposals": [{
+        "section": "deployment",
+        "text": "建议采用私有化部署方案。",
+        "citations": ["S1"],
+    }]}, ensure_ascii=False)
+
+
 class VerifierFake(DeterministicFakeLLM):
     def __init__(self, content=None):
         super().__init__()
@@ -75,7 +105,8 @@ def test_orchestration_generates_then_verifies_once_and_assembles(monkeypatch):
     from apps.sales.services import solution_draft as service
 
     monkeypatch.setattr(service, "search_knowledge", lambda **kwargs: [search_result()])
-    llm = SolutionFakeLLM()
+    monkeypatch.setattr(service, "build_solution_admission", lambda analysis, sources: proposal_admission())
+    llm = SolutionFakeLLM(content=proposal_content())
     result = service.generate_grounded_solution_draft(analysis_record(), llm_provider=llm)
     assert result.generation_status == "generated"
     assert len(llm.calls) == 2 and llm.requested_output_budgets == [4000, None]
@@ -93,14 +124,15 @@ def test_verifier_reuses_frozen_history_after_caller_record_changes(monkeypatch)
         record.requirements["business_goal"]["value"] = "调用期间被修改"
 
     monkeypatch.setattr(service, "search_knowledge", lambda **kwargs: [search_result()])
-    llm = SolutionFakeLLM(callback=mutate_record_after_generation)
+    monkeypatch.setattr(service, "build_solution_admission", lambda analysis, sources: proposal_admission())
+    llm = SolutionFakeLLM(content=proposal_content(), callback=mutate_record_after_generation)
     service.generate_grounded_solution_draft(record, llm_provider=llm)
     root = ElementTree.fromstring("<root>" + llm.calls[1][1]["content"] + "</root>")
     packets = json.loads(root.find("grounding_claim_packets").text)["claims"]
-    customer = next(item for item in packets if item["statement_type"] == "customer_fact")
+    proposal = next(item for item in packets if item["statement_type"] == "proposal")
     requirement_values = {
         item["field"]: item["analysis"]["value"]
-        for item in customer["customer_context"]["requirements"]
+        for item in proposal["customer_context"]["requirements"]
     }
     assert requirement_values["business_goal"] == original
     assert "调用期间被修改" not in llm.calls[1][1]["content"]
@@ -121,16 +153,14 @@ def test_verifier_failure_is_not_retried_or_assembled(monkeypatch):
     from apps.sales.services import solution_draft as service
     from apps.sales.services.solution_grounding import SolutionDraftGroundingError
 
-    response = {"results": [
-        {
-            "location": f"claims[{index}]",
-            "relation": "INSUFFICIENT" if index == 0 else "SUPPORTED",
-            "atomicity": "ATOMIC",
-        }
-        for index in range(10)
-    ]}
+    response = {"results": [{
+        "location": "claims[0]",
+        "relation": "INSUFFICIENT",
+        "atomicity": "ATOMIC",
+    }]}
     monkeypatch.setattr(service, "search_knowledge", lambda **kwargs: [search_result()])
-    llm = SolutionFakeLLM(grounding_content=json.dumps(response))
+    monkeypatch.setattr(service, "build_solution_admission", lambda analysis, sources: proposal_admission())
+    llm = SolutionFakeLLM(content=proposal_content(), grounding_content=json.dumps(response))
     with pytest.raises(SolutionDraftGroundingError):
         service.generate_grounded_solution_draft(analysis_record(), llm_provider=llm)
     assert len(llm.calls) == 2

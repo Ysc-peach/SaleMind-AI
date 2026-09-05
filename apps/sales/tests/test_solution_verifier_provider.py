@@ -37,11 +37,29 @@ class IndependentVerifier(DeterministicFakeLLM):
         ]}))
 
 
+def enable_proposal_verification(monkeypatch, service):
+    from apps.sales.services.solution_admission import GroundingAdmission
+    from apps.sales.services.solution_schema import AtomicSolutionClaimSet
+
+    admitted = GroundingAdmission(
+        claims=AtomicSolutionClaimSet(()),
+        enterprise_decisions=(),
+        enterprise_provenance=(),
+        allowed_proposal_source_labels=("S1",),
+    )
+    monkeypatch.setattr(service, "build_solution_admission", lambda analysis, sources: admitted)
+    return json.dumps({"proposals": [{
+        "section": "deployment",
+        "text": "建议采用私有化部署方案。",
+        "citations": ["S1"],
+    }]}, ensure_ascii=False)
+
+
 def test_explicit_verifier_provider_is_used_only_for_semantic_verification(monkeypatch):
     from apps.sales.services import solution_draft as service
 
     monkeypatch.setattr(service, "search_knowledge", lambda **kwargs: [search_result()])
-    generation = SolutionFakeLLM()
+    generation = SolutionFakeLLM(content=enable_proposal_verification(monkeypatch, service))
     verifier = IndependentVerifier()
 
     result = service.generate_grounded_solution_draft(
@@ -60,7 +78,7 @@ def test_configured_verifier_factory_does_not_replace_generation_provider(monkey
 
     settings.VERIFIER_PROVIDER = "openai_compatible"
     monkeypatch.setattr(service, "search_knowledge", lambda **kwargs: [search_result()])
-    generation = SolutionFakeLLM()
+    generation = SolutionFakeLLM(content=enable_proposal_verification(monkeypatch, service))
     verifier = IndependentVerifier()
     monkeypatch.setattr(service, "get_llm_provider", lambda: generation)
     monkeypatch.setattr(service, "get_verifier_provider", lambda: verifier)
@@ -77,7 +95,7 @@ def test_unconfigured_verifier_keeps_existing_single_provider_behavior(monkeypat
 
     settings.VERIFIER_PROVIDER = ""
     monkeypatch.setattr(service, "search_knowledge", lambda **kwargs: [search_result()])
-    llm = SolutionFakeLLM()
+    llm = SolutionFakeLLM(content=enable_proposal_verification(monkeypatch, service))
     monkeypatch.setattr(service, "get_llm_provider", lambda: llm)
     monkeypatch.setattr(service, "get_verifier_provider", lambda: pytest.fail("No verifier factory."))
 
