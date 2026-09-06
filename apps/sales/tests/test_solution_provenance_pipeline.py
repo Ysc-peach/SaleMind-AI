@@ -5,6 +5,7 @@ import json
 from uuid import uuid4
 
 import pytest
+from django.db import connection
 from django.utils import timezone
 
 from apps.knowledge.models import (
@@ -62,10 +63,13 @@ class StalingVerifier(AlwaysSupportedVerifier):
 
     def generate(self, messages, *, max_output_tokens=None):
         response = super().generate(messages, max_output_tokens=max_output_tokens)
-        self.fact.is_stale = True
-        self.fact.stale_at = timezone.now()
-        self.fact.save(update_fields=["is_stale", "stale_at"])
-        return response
+        try:
+            self.fact.is_stale = True
+            self.fact.stale_at = timezone.now()
+            self.fact.save(update_fields=["is_stale", "stale_at"])
+            return response
+        finally:
+            connection.close()
 
 
 @pytest.fixture
@@ -170,6 +174,8 @@ def test_approved_fact_is_program_claim_and_proposal_uses_approved_source(
         for item in statements
     )
     assert any(item.type is SolutionStatementType.PROPOSAL for item in statements)
+    assert output.admission is not None
+    assert output.admission.enterprise_provenance[0].fact_id is not None
     assert len(generator.calls) == 1
     assert len(verifier.calls) == 1
 

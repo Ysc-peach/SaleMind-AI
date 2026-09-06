@@ -12,7 +12,7 @@ from apps.llm.factory import get_llm_provider
 from apps.llm.verifier_factory import get_verifier_provider
 from apps.sales.models import OpportunityRequirementAnalysis as AnalysisRecord
 from apps.sales.services.requirement_analysis_history import analysis_record_to_domain
-from apps.sales.services.solution_admission import build_solution_admission
+from apps.sales.services.solution_admission import GroundingAdmission, build_solution_admission
 from apps.sales.services.solution_errors import SolutionDraftError, SolutionDraftErrorCode
 from apps.sales.services.solution_grounding import verify_atomic_solution_proposals
 from apps.sales.services.solution_prompt import build_solution_messages
@@ -44,6 +44,7 @@ class GroundedSolutionDraftResult:
     draft: SolutionDraft | None
     sources: tuple[SolutionSource, ...]
     unresolved_items: tuple[SolutionUnresolvedItem, ...]
+    admission: GroundingAdmission | None
 
 
 def generate_grounded_solution_draft(
@@ -69,7 +70,8 @@ def generate_grounded_solution_draft(
         SolutionReadinessStatus.NEEDS_PRESALES_INVOLVEMENT,
     }:
         return GroundedSolutionDraftResult(
-            analysis_id, readiness, SolutionGenerationStatus.BLOCKED_BY_READINESS, None, (), unresolved_items,
+            analysis_id, readiness, SolutionGenerationStatus.BLOCKED_BY_READINESS,
+            None, (), unresolved_items, None,
         )
     groups = [search_knowledge(
         query=intent.query, top_k=3, document_type=None, provider=embedding_provider,
@@ -77,7 +79,8 @@ def generate_grounded_solution_draft(
     sources = merge_evidence(groups)
     if not sources:
         return GroundedSolutionDraftResult(
-            analysis_id, readiness, SolutionGenerationStatus.INSUFFICIENT_EVIDENCE, None, (), unresolved_items,
+            analysis_id, readiness, SolutionGenerationStatus.INSUFFICIENT_EVIDENCE,
+            None, (), unresolved_items, None,
         )
     admission = build_solution_admission(typed, sources)
     provider = llm_provider if llm_provider is not None else get_llm_provider()
@@ -112,5 +115,6 @@ def generate_grounded_solution_draft(
         raise SolutionDraftError(SolutionDraftErrorCode.INVALID_INPUT)
     draft = assemble_solution_draft(claims, typed)
     return GroundedSolutionDraftResult(
-        analysis_id, readiness, SolutionGenerationStatus.GENERATED, draft, sources, unresolved_items,
+        analysis_id, readiness, SolutionGenerationStatus.GENERATED,
+        draft, sources, unresolved_items, admission,
     )

@@ -30,3 +30,14 @@ class OpportunityPermission(BasePermission):
             UserRole.SALES,
             UserRole.PRESALES,
         )
+
+
+class SolutionDraftPermission(BasePermission):
+    """Business roles may use drafts only through role-filtered Opportunities."""
+
+    def has_permission(self, request, view):
+        return bool(
+            request.user.is_authenticated
+            and request.user.role
+            in (UserRole.ADMIN, UserRole.SALES, UserRole.PRESALES)
+        )

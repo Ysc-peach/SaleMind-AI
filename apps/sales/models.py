@@ -22,6 +22,25 @@ class OpportunityStatus(models.TextChoices):
     CLOSED = "closed", _("已关闭")
 
 
+class SolutionReviewStatus(models.TextChoices):
+    DRAFT = "draft", _("草稿")
+    PENDING_REVIEW = "pending_review", _("待审核")
+    APPROVED = "approved", _("已批准")
+    NEEDS_REVISION = "needs_revision", _("需要修改")
+
+
+class SolutionStaleReason(models.TextChoices):
+    NEWER_REQUIREMENT_ANALYSIS = (
+        "newer_requirement_analysis",
+        _("存在更新的需求分析"),
+    )
+    GROUNDING_FACT_INVALID = "grounding_fact_invalid", _("Grounding Fact 已失效")
+    GROUNDING_PROVENANCE_INVALID = (
+        "grounding_provenance_invalid",
+        _("Grounding 来源已失效"),
+    )
+
+
 class Customer(models.Model):
     name = models.CharField(_("客户名称"), max_length=200)
     industry = models.CharField(_("行业"), max_length=100, blank=True, default="")
@@ -177,4 +196,196 @@ class OpportunityRequirementAnalysis(models.Model):
     def delete(self, *args, **kwargs):
         raise ValidationError(
             "Requirement analysis history is immutable.", code="immutable_requirement_analysis",
+        )
+
+
+class SolutionDraftRecord(models.Model):
+    """Immutable persisted content for one generated Solution Draft version."""
+
+    ReviewStatus = SolutionReviewStatus
+    StaleReason = SolutionStaleReason
+
+    opportunity = models.ForeignKey(
+        Opportunity,
+        on_delete=models.PROTECT,
+        related_name="solution_drafts",
+        verbose_name=_("商机"),
+    )
+    requirement_analysis = models.ForeignKey(
+        OpportunityRequirementAnalysis,
+        on_delete=models.PROTECT,
+        related_name="solution_drafts",
+        verbose_name=_("需求分析快照"),
+    )
+    version = models.PositiveIntegerField(_("方案版本"))
+    title = models.CharField(_("方案标题"), max_length=255)
+    draft_payload = models.JSONField(_("方案结构化快照"))
+    generation_metadata = models.JSONField(_("生成元数据"), default=dict)
+    review_status = models.CharField(
+        _("审核状态"),
+        max_length=24,
+        choices=SolutionReviewStatus.choices,
+        default=SolutionReviewStatus.DRAFT,
+    )
+    is_stale = models.BooleanField(_("已过期"), default=False)
+    stale_at = models.DateTimeField(_("过期时间"), null=True, blank=True)
+    stale_reasons = models.JSONField(_("过期原因"), default=list)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_solution_drafts",
+        verbose_name=_("创建人"),
+    )
+    created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
+
+    _IMMUTABLE_FIELDS = (
+        "opportunity_id",
+        "requirement_analysis_id",
+        "version",
+        "title",
+        "draft_payload",
+        "generation_metadata",
+        "created_by_id",
+    )
+    _LIFECYCLE_FIELDS = frozenset(
+        {"review_status", "is_stale", "stale_at", "stale_reasons"}
+    )
+
+    class Meta:
+        ordering = ["-version", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["opportunity", "version"],
+                name="sales_solution_opportunity_version_unique",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(version__gte=1),
+                name="sales_solution_version_positive",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(review_status__in=SolutionReviewStatus.values),
+                name="sales_solution_review_status_valid",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(is_stale=True, stale_at__isnull=False)
+                    | models.Q(
+                        is_stale=False,
+                        stale_at__isnull=True,
+                        stale_reasons=[],
+                    )
+                ),
+                name="sales_solution_stale_metadata",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(title__regex=r"\S"),
+                name="sales_solution_title_nonempty",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["opportunity", "-version"],
+                name="sales_solution_history_idx",
+            ),
+            models.Index(
+                fields=["review_status", "is_stale"],
+                name="sales_solution_state_idx",
+            ),
+        ]
+        verbose_name = _("解决方案草稿版本")
+        verbose_name_plural = _("解决方案草稿版本")
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding and self.pk is not None:
+            update_fields = kwargs.get("update_fields")
+            if update_fields is None or not set(update_fields) <= self._LIFECYCLE_FIELDS:
+                original = type(self).objects.values(*self._IMMUTABLE_FIELDS).get(pk=self.pk)
+                if any(getattr(self, field) != original[field] for field in self._IMMUTABLE_FIELDS):
+                    raise ValidationError(
+                        "Solution Draft version content is immutable.",
+                        code="immutable_solution_draft",
+                    )
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError(
+            "Solution Draft versions are immutable.",
+            code="immutable_solution_draft",
+        )
+
+
+class SolutionDraftProvenance(models.Model):
+    """Immutable citation provenance that survives KnowledgeChunk replacement."""
+
+    solution_draft = models.ForeignKey(
+        SolutionDraftRecord,
+        on_delete=models.CASCADE,
+        related_name="provenance_entries",
+        verbose_name=_("方案草稿版本"),
+    )
+    statement_path = models.CharField(_("陈述路径"), max_length=255)
+    citation_label = models.CharField(_("引用标签"), max_length=32)
+    enterprise_grounding_fact = models.ForeignKey(
+        "knowledge.EnterpriseGroundingFact",
+        on_delete=models.PROTECT,
+        related_name="solution_provenance_entries",
+        verbose_name=_("企业 Grounding 事实"),
+    )
+    source_document = models.ForeignKey(
+        "knowledge.KnowledgeDocument",
+        on_delete=models.PROTECT,
+        related_name="solution_provenance_entries",
+        verbose_name=_("来源文档"),
+    )
+    source_chunk_id = models.PositiveBigIntegerField(_("来源分块快照 ID"))
+    source_index_run_id = models.UUIDField(_("来源索引运行 ID"))
+    source_content_hash = models.CharField(_("来源内容 SHA-256"), max_length=64)
+    source_excerpt = models.TextField(_("来源摘录"))
+    created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "solution_draft",
+                    "statement_path",
+                    "citation_label",
+                    "enterprise_grounding_fact",
+                ],
+                name="sales_solution_provenance_unique",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(statement_path__regex=r"\S"),
+                name="sales_solution_statement_path_nonempty",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(citation_label__regex=r"^S[1-9][0-9]*$"),
+                name="sales_solution_citation_label_valid",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["solution_draft", "statement_path"],
+                name="sales_solprov_path_idx",
+            ),
+            models.Index(
+                fields=["enterprise_grounding_fact"],
+                name="sales_solprov_fact_idx",
+            ),
+        ]
+        verbose_name = _("解决方案引用来源")
+        verbose_name_plural = _("解决方案引用来源")
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding or self.pk is not None:
+            raise ValidationError(
+                "Solution Draft provenance is immutable.",
+                code="immutable_solution_provenance",
+            )
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError(
+            "Solution Draft provenance is immutable.",
+            code="immutable_solution_provenance",
         )

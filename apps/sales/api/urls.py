@@ -4,6 +4,10 @@ from django.urls import path
 
 from .views import CustomerViewSet, OpportunityViewSet
 from .requirement_analysis_views import RequirementAnalysisViewSet
+from .solution_draft_views import (
+    SolutionDraftCollectionViewSet,
+    SolutionDraftDetailViewSet,
+)
 
 
 customer_create_view = CustomerViewSet.as_view({"post": "create"})
@@ -15,9 +19,25 @@ opportunity_collection_view = OpportunityViewSet.as_view(
 opportunity_detail_view = OpportunityViewSet.as_view(
     {"get": "retrieve", "patch": "partial_update"}
 )
+solution_draft_collection_view = SolutionDraftCollectionViewSet.as_view(
+    {"get": "list_drafts", "post": "create_draft"}
+)
+solution_draft_detail_view = SolutionDraftDetailViewSet.as_view(
+    {"get": "retrieve_draft"}
+)
 
 
 urlpatterns = [
+    path(
+        "opportunities/<int:opportunity_id>/solution-drafts/",
+        solution_draft_collection_view,
+        name="solution-draft-list",
+    ),
+    path(
+        "solution-drafts/<int:solution_id>/",
+        solution_draft_detail_view,
+        name="solution-draft-detail",
+    ),
     path(
         "opportunities/<int:opportunity_id>/ai/requirement-analyses/",
         RequirementAnalysisViewSet.as_view({"post": "analyze", "get": "history"}),
