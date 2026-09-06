@@ -18,3 +18,4 @@ def test_test_settings_disable_external_verifier_configuration():
     assert settings.VERIFIER_MODEL == ""
     assert settings.VERIFIER_API_KEY == ""
     assert settings.VERIFIER_BASE_URL == ""
+    assert settings.VERIFIER_MAX_CONCURRENCY == 2

@@ -174,6 +174,7 @@ def test_approved_fact_is_program_claim_and_proposal_uses_approved_source(
     assert len(verifier.calls) == 1
 
 
+@pytest.mark.django_db(transaction=True)
 def test_fact_staled_during_external_calls_is_rejected_before_draft_return(
     monkeypatch,
     admitted_source,

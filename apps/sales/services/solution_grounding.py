@@ -2,9 +2,12 @@
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import NoReturn
+
+from django.conf import settings
 
 from apps.llm.base import LLMProvider
 from apps.llm.factory import get_llm_provider
@@ -157,8 +160,36 @@ def verify_atomic_solution_proposals(
         )
     ):
         raise SolutionDraftGroundingError(SolutionGroundingErrorCode.INVALID_INPUT)
+    max_concurrency = settings.VERIFIER_MAX_CONCURRENCY
+    if (
+        not isinstance(max_concurrency, int)
+        or isinstance(max_concurrency, bool)
+        or max_concurrency <= 0
+    ):
+        raise SolutionDraftGroundingError(SolutionGroundingErrorCode.INVALID_INPUT)
     packets = build_atomic_grounding_claim_packets(analysis, proposals, sources)
-    return _verify_packets(packets, llm_provider)
+    provider = llm_provider if llm_provider is not None else get_llm_provider()
+    with ThreadPoolExecutor(
+        max_workers=min(max_concurrency, len(packets)),
+        thread_name_prefix="solution-proposal-verifier",
+    ) as executor:
+        futures = tuple(
+            executor.submit(_verify_packets, (packet,), provider)
+            for packet in packets
+        )
+        try:
+            verifications = tuple(future.result() for future in futures)
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            raise
+    return SolutionGroundingVerification(
+        passed=True,
+        results=tuple(
+            verification.results[0] for verification in verifications
+        ),
+        violations=(),
+    )
 
 
 def _verify_packets(
