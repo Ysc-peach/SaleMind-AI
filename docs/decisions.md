@@ -181,3 +181,15 @@ This is a compact ADR-style log of decisions already represented by current code
 **Alternatives rejected.** Directly patching review status, overwriting one mutable review row, deleting review history, coupling stale to `NEEDS_REVISION`, allowing self-review, and using Django staff/superuser flags as review authority.
 
 **Consequences.** The implemented service state machine is `DRAFT → PENDING_REVIEW → APPROVED` or `NEEDS_REVISION`. It uses short transactions, row locks, one-active-pending-review enforcement, action-specific permissions, self-review prohibition, and approval-time stale revalidation. Migration `sales.0004_solutionreview` is applied in the real `salesmind` database.
+
+## D-016 — Durable LangGraph orchestration over authoritative Django services
+
+**Decision.** Use LangGraph only to route the bounded Solution workflow from an explicit analysis through generation/persistence, review submission, durable human interrupt, and approve-or-return resume. Keep Django services and PostgreSQL business tables authoritative. Use the official PostgreSQL checkpointer, and make generation replay durable through a nullable unique UUID idempotency key protected by a PostgreSQL session advisory lock.
+
+**Context.** Human review must survive process reconstruction, while crashes can occur after a business transaction commits but before a graph checkpoint is written. A graph-only Solution ID cannot prevent duplicate provider calls or versions in that window, and checkpoint state must not be allowed to override a committed review decision.
+
+**Why.** Stable database identities let the graph reconstruct current facts on every node. Durable generation idempotency closes the generation/checkpoint crash window without holding a transaction across external model calls. Replay recovery closes the decision/checkpoint window while preserving immutable review history.
+
+**Alternatives rejected.** Reimplementing permissions or review transitions in graph nodes, storing full ORM objects or business payloads in checkpoints, using `MemorySaver` for production, holding database transactions across provider calls, relying only on `state.solution_draft_id`, and automatically looping returned reviews into analysis or regeneration.
+
+**Consequences.** The graph has five thin nodes and terminal/handoff outcomes for `CUSTOMER_INFO_REQUIRED` and `TECHNICAL_REVISION_REQUIRED`. Same-key generation replay returns the existing Solution version; matching committed decisions recover; conflicting replay fails closed. Migration `sales.0005_solutiondraftrecord_generation_idempotency` and the official PostgresSaver schema are applied in the real `salesmind` database. Redis, Celery, multi-agent orchestration, and automatic revision loops remain outside Phase 6a.

@@ -157,6 +157,8 @@ If reindexing, stale marking, approval changes, source content, or another prove
 
 The persistence request always names an existing `OpportunityRequirementAnalysis`; it never silently substitutes the latest analysis. Model calls occur before the short persistence transaction. Inside that transaction, the service locks the Opportunity, revalidates current grounding admission, allocates the next per-Opportunity version, and atomically writes `SolutionDraftRecord` plus its citation provenance. Any failure creates neither a partial record nor orphan provenance.
 
+For a LangGraph workflow, `workflow_run_id` is passed as the nullable UUID `generation_idempotency_key`. A PostgreSQL session advisory lock serializes the key without opening a transaction around external provider calls. If the key already identifies a Solution for the same Opportunity, analysis, and creator, persistence returns that exact record; it does not call generation again or create another version. Reusing the key with different inputs fails closed.
+
 Durable provenance stores the exact admitted `EnterpriseGroundingFact`, source document, citation label and statement path, plus immutable chunk-ID, index-run, content-hash, and excerpt snapshots. It deliberately has no foreign key to replaceable `KnowledgeChunk` rows.
 
 After persistence, technical review is a human workflow over stable database identities:
@@ -179,6 +181,32 @@ SolutionReview PENDING + Draft PENDING_REVIEW
 
 Reviewer assignment is version-scoped. A Presales-authored version requires a different eligible reviewer, and business Admin fallback cannot approve its own authored version. Approval re-evaluates deterministic stale state before committing. Review state and stale state remain separate: a later knowledge or requirement change can make an approved version stale without rewriting review history.
 
+## Durable LangGraph orchestration lane
+
+Phase 6a wraps the persistence and review services without moving their business rules into the graph:
+
+```text
+explicit requirement_analysis_id
+        ↓ generate_solution node
+generate_and_persist_solution_draft(workflow_run_id as idempotency key)
+        ↓ submit_review node
+submit_solution_draft_for_review
+        ↓ wait_for_human node
+official PostgresSaver checkpoint + interrupt
+        ↓ process/checkpointer reconstruction and resume
+        ├── approve node → approve_solution_draft → APPROVED → END
+        └── request_revision node
+                → request_solution_draft_revision
+                ├── CUSTOMER_INFO_REQUIRED → terminal/handoff
+                └── TECHNICAL_REVISION_REQUIRED → terminal/handoff
+```
+
+Graph state contains stable identifiers and routing fields: workflow, Opportunity, selected analysis, requester, Solution, review, reviewer, stage, human action, return reason, and stable error code. It does not retain ORM objects, full Requirement Analysis or Solution payloads, evidence, full provenance, raw provider responses, or credentials. On resume, nodes reload `SolutionDraftRecord`, `SolutionReview`, users, and visibility from PostgreSQL.
+
+The official LangGraph `PostgresSaver` supplies durable checkpoints. Its setup is explicit and idempotent, and the production database contains the standard checkpoint schema. Business authority remains in the SalesMind tables and Django services: a checkpoint cannot approve a Solution, bypass permissions, or rewrite an already committed review decision.
+
+Replay after a committed matching approve/return decision recovers the terminal outcome without creating another decision. A replay whose requested action conflicts with the committed business state returns a typed conflict and leaves history unchanged. There is no automatic revision loop in Phase 6a.
+
 ## Provider boundaries
 
 - **Embedding:** OpenAI-compatible embedding provider, configured/default model `BAAI/bge-m3`, 1,024 dimensions.
@@ -195,7 +223,7 @@ Provider configuration is environment-driven. API keys, tokens, database credent
 - Explicit-negative approved evidence may produce a negative enterprise fact but cannot authorize a positive capability proposal.
 - The verifier is defense in depth and veto-only.
 - No orchestration retry, rewrite, or second retrieval occurs.
-- LangGraph orchestration and frontend behavior are deferred. Solution persistence and technical review are implemented services and must remain the business authority when orchestration is added.
+- LangGraph orchestrates the bounded Solution review flow, but never owns its business decisions. Frontend behavior and automatic revision loops remain deferred.
 
 ## Main code and regression references
 
@@ -211,6 +239,8 @@ Provider configuration is environment-driven. API keys, tokens, database credent
 - `apps/sales/services/solution_draft.py`
 - `apps/sales/services/solution_persistence.py`
 - `apps/sales/services/solution_review.py`
+- `apps/sales/services/solution_review_workflow.py`
+- `apps/sales/services/solution_workflow_checkpoint.py`
 - `apps/sales/api/solution_draft_views.py`
 - `apps/sales/tests/test_solution_admission.py`
 - `apps/sales/tests/test_solution_provenance_pipeline.py`
@@ -220,3 +250,4 @@ Provider configuration is environment-driven. API keys, tokens, database credent
 - `apps/sales/tests/test_solution_review_service.py`
 - `apps/sales/tests/test_solution_review_concurrency.py`
 - `apps/sales/tests/test_solution_review_api.py`
+- `apps/sales/tests/test_solution_review_workflow.py`

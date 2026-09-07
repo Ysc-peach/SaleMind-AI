@@ -1,6 +1,6 @@
 # SalesMind AI Architecture
 
-This document records current repository truth, not a future-state promise. The Phase 5.6 checkpoint is repository HEAD `6c742cb0e0202cc7c9bb52a5912f355341025a55`; its last recorded full-suite result is 1,289 passed tests. These are checkpoint values, not permanent constants.
+This document records current repository truth, not a future-state promise. The Phase 6a checkpoint is repository HEAD `c5766bdcedc932c732b49e622156218e8f2fec0b`; its last recorded full-suite result is 1,312 passed tests. These are checkpoint values, not permanent constants.
 
 The root `README.md` is still a Phase Two delivery document. Its AI/RAG out-of-scope section describes that historical checkpoint and does not describe the current repository.
 
@@ -8,7 +8,7 @@ The root `README.md` is still a Phase Two delivery document. Its AI/RAG out-of-s
 
 SalesMind AI supports enterprise sales and presales work: customer and opportunity management, structured requirement analysis, an internal enterprise knowledge base, grounded RAG answers, and generation of provenance-controlled internal solution drafts.
 
-The repository is a modular Django monolith. The current backend includes immutable, versioned Solution persistence and version-scoped technical review. The Vue frontend, LangGraph orchestration, and deployment packaging are not yet complete.
+The repository is a modular Django monolith. The current backend includes immutable, versioned Solution persistence, version-scoped technical review, and durable LangGraph orchestration for that review flow. The Vue frontend and deployment packaging are not yet complete.
 
 ## Main actors
 
@@ -25,9 +25,11 @@ Vue 3 frontend (planned; not yet complete)
                     ↓
 Django 5.2 + Django REST Framework + JWT
                     ↓
-PostgreSQL + pgvector
+LangGraph solution-review orchestration
                     ↓
 Accounts / Sales / Knowledge / RAG / Solution services
+                    ↓
+PostgreSQL business tables + pgvector
                     ↓
 DeepSeek proposal generation
                     ↓
@@ -39,7 +41,7 @@ Provider names are environment-driven. No credentials belong in repository docum
 ## Django applications and modules
 
 - `apps/accounts/`: custom `User`, fixed business roles, Django Admin integration, JWT login/refresh/current-user APIs, and presales option lookup.
-- `apps/sales/`: `Customer`, `Opportunity`, append-only `OpportunityRequirementAnalysis`, immutable versioned `SolutionDraftRecord`, durable `SolutionDraftProvenance`, version-scoped `SolutionReview`, role-scoped APIs, requirement analysis, retrieval planning, deterministic solution admission, proposal generation orchestration, semantic verification, persistence, stale evaluation, and technical review.
+- `apps/sales/`: `Customer`, `Opportunity`, append-only `OpportunityRequirementAnalysis`, immutable versioned `SolutionDraftRecord`, durable `SolutionDraftProvenance`, version-scoped `SolutionReview`, role-scoped APIs, requirement analysis, retrieval planning, deterministic solution admission, proposal generation orchestration, semantic verification, persistence, stale evaluation, technical review, and thin LangGraph workflow orchestration.
 - `apps/knowledge/`: document upload/validation, parsing, chunking, embeddings, PostgreSQL vector search, safe reindexing, `EnterpriseGroundingFact`, extraction proposals, approval/rejection, and stale lifecycle.
 - `apps/rag/`: grounded question answering over retrieved knowledge evidence.
 - `apps/llm/`: provider contracts and factories for DeepSeek generation and an optional independent OpenAI-compatible verifier.
@@ -109,11 +111,37 @@ If independent verifier settings are absent, the solution service retains the hi
 
 PostgreSQL is the only supported application database. It persists users, customers, opportunities, append-only requirement-analysis history, knowledge documents/chunks, vector embeddings, grounding facts, immutable Solution versions, durable Solution citation provenance, and append-only technical review history.
 
-Migration `sales.0003_solution_draft_persistence` adds `SolutionDraftRecord` and `SolutionDraftProvenance`. Migration `sales.0004_solutionreview` adds `SolutionReview`, its pending-review uniqueness constraint, decision-state checks, and review indexes. Both migrations passed their real `salesmind` database gates and are applied there.
+Migration `sales.0003_solution_draft_persistence` adds `SolutionDraftRecord` and `SolutionDraftProvenance`. Migration `sales.0004_solutionreview` adds `SolutionReview`, its pending-review uniqueness constraint, decision-state checks, and review indexes. Migration `sales.0005_solutiondraftrecord_generation_idempotency` adds a nullable UUID generation idempotency key with uniqueness for non-null values. All three migrations passed their real `salesmind` database gates and are applied there.
 
 `SolutionDraftRecord.review_status` is the current lifecycle projection: `DRAFT`, `PENDING_REVIEW`, `APPROVED`, or `NEEDS_REVISION`. Each review attempt has its own `SolutionReview` with `PENDING`, `APPROVED`, or `RETURNED`, reviewer/submitter identities, timestamps, and an exact return reason where required. Submit, approve, and return use short transactions and row locking. Completed review history and Solution content cannot be overwritten through the API.
 
-Solution stale state is independent from review status. Newer requirement analysis or invalid grounding Fact/provenance can mark even an approved Solution stale without erasing its historical approval. There is no LangGraph state, Redis, Celery, or message queue in the implemented architecture.
+Solution stale state is independent from review status. Newer requirement analysis or invalid grounding Fact/provenance can mark even an approved Solution stale without erasing its historical approval.
+
+## LangGraph solution-review orchestration
+
+Phase 6a adds a deliberately small durable graph around existing services:
+
+```text
+explicit persisted analysis ID
+        ↓
+generate and persist Solution
+        ↓
+submit technical review
+        ↓
+persisted human interrupt
+        ↓
+resume as the acting reviewer
+        ├── approve → terminal
+        └── request revision → terminal/handoff
+```
+
+LangGraph owns routing only. Django services remain responsible for generation, persistence, permissions, stale checks, self-review rules, and review transitions. PostgreSQL business tables remain the business source of truth after resume; checkpoint state cannot overwrite a committed review decision.
+
+Each workflow uses a stable UUID as `generation_idempotency_key`. A PostgreSQL session advisory lock serializes the same key without holding a database transaction across generation or verifier calls. Replay returns the existing Solution version instead of invoking providers or allocating another version. Completed matching review decisions recover as successful terminal outcomes, while a conflicting replay fails closed.
+
+The official LangGraph `PostgresSaver` persists checkpoint state and supports reconstruction in a new application/checkpointer object. Its standard checkpoint schema has passed the real database gate. Checkpoints contain stable IDs and routing data, not ORM objects, complete Solution payloads, evidence corpora, provenance payloads, provider responses, or credentials.
+
+`CUSTOMER_INFO_REQUIRED` and `TECHNICAL_REVISION_REQUIRED` are currently terminal/handoff outcomes. Phase 6a does not automatically create a new Requirement Analysis or generate another Solution version.
 
 ## Current status and intentionally deferred components
 
@@ -129,7 +157,8 @@ Solution stale state is independent from review status. Newer requirement analys
 | Phase 5.6a (Solution persistence/provenance) | Complete; real DB migration gate passed |
 | Phase 5.6b (Solution review workflow) | Complete; real DB migration gate passed |
 | Phase 5.6 (through 5.6b) | Complete |
-| LangGraph workflow | Planned, not implemented |
+| Phase 6a (LangGraph Solution review orchestration) | Complete; real DB migration and checkpoint-schema gates passed |
+| Automatic revision loop | Planned, not implemented |
 | Vue frontend | Planned, not complete |
 | End-to-end deployment | Planned |
 
@@ -151,4 +180,7 @@ The next phase must not be inferred from this status table as authorization to i
 - `apps/sales/services/solution_schema.py`
 - `apps/sales/services/solution_persistence.py`
 - `apps/sales/services/solution_review.py`
+- `apps/sales/services/solution_review_workflow.py`
+- `apps/sales/services/solution_workflow_checkpoint.py`
 - `apps/sales/api/solution_draft_views.py`
+- `apps/sales/migrations/0005_solutiondraftrecord_generation_idempotency.py`
