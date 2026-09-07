@@ -44,6 +44,52 @@ An Opportunity records `customer`, `sales_owner`, optional `presales_owner`, and
 - Customer, `sales_owner`, and `created_by` cannot be reassigned through ordinary PATCH.
 - Requirement-analysis creation/history uses the same opportunity visibility boundary.
 
+## Sales, Presales, and Solution review responsibilities
+
+The approved business contract separates customer ownership from technical-solution ownership:
+
+- **Sales** owns the Customer, Opportunity, customer requirement facts, and follow-up needed to complete missing customer information.
+- The **Presales Owner** owns technical judgment, Solution generation or revision, and the first technical review.
+- A **Solution Reviewer** owns technical approval for a specific Solution version when independent review is required. A Solution Reviewer is another user with business role `presales`; this responsibility does not introduce a new business role.
+
+The normal review path is:
+
+1. AI or Sales initiates a Solution version.
+2. The Presales Owner reviews that version.
+3. If there is no technical issue, the Presales Owner may approve it directly.
+
+`APPROVED` means that the specific Solution version has passed internal technical review and may be used as a formal technical solution in external communication. It does not mean that the customer has signed, the Opportunity has been won, or the Solution will never change.
+
+Independent review is conditional rather than mandatory for every version:
+
+- A Presales Owner reviewing a version initiated by AI, Sales, or another author may approve it directly.
+- If the Presales Owner creates or technically revises a new Solution version, that Presales user must not approve their own version.
+- Another user whose business role is `presales` must review that self-authored version as its Solution Reviewer.
+- Business `admin` retains fallback authority. Django `is_staff` and `is_superuser` flags never grant Solution review authority or bypass these rules.
+
+Reviewer assignment and review history belong to a specific Solution version and its review lifecycle, not to permanent Opportunity ownership. Phase 5.6a persists only the coarse `review_status`; reviewer assignment, review decisions, and transitions are reserved for Phase 5.6b.
+
+## Solution return reasons
+
+Review returns must distinguish two business causes:
+
+### `CUSTOMER_INFO_REQUIRED`
+
+Customer facts are incomplete, such as an unknown database type/version, SSO type, concurrent-user count, network environment, or domestic-technology requirement.
+
+The required flow is:
+
+1. Presales identifies the missing customer information.
+2. Sales confirms it with the customer and updates Requirement Analysis through a new immutable snapshot.
+3. The older Solution becomes stale.
+4. A new Solution version is generated from the selected updated analysis.
+
+### `TECHNICAL_REVISION_REQUIRED`
+
+Customer information is sufficient, but the technical solution requires correction or improvement, such as database compatibility, high availability, SSO integration, or deployment design.
+
+The Presales Owner revises or regenerates the technical solution as a new Solution version. Sales must not substitute for Presales by designing the technical solution.
+
 ## Requirement Analysis
 
 Requirement Analysis has exactly ten dimensions:

@@ -133,3 +133,27 @@ This is a compact ADR-style log of decisions already represented by current code
 **Alternatives rejected.** Long database transactions across model calls, database locks held during network waits, and trusting the original snapshot without revalidation.
 
 **Consequences.** Model calls remain outside long transactions; any admission change causes fail-closed return even if the verifier says `SUPPORTED`.
+
+## D-012 — Version-scoped technical review with conditional independence
+
+**Decision.** Technical approval belongs to a specific Solution version. The Presales Owner may approve a version initiated by AI, Sales, or another author, but a Presales Owner who creates or technically revises a version must not approve that same version. Another existing `presales` user acts as Solution Reviewer when independent review is required; business `admin` remains the fallback authority.
+
+**Context.** Customer and Opportunity ownership are long-lived, while authorship, reviewer assignment, and approval apply to one immutable Solution version. Phase 5.6a already stores version author provenance in `created_by` and a coarse `review_status`, but it has no reviewer relationship or review-history model.
+
+**Why.** Conditional separation of author and approver gives self-authored technical changes an independent check without imposing mandatory second review on every AI- or Sales-initiated solution.
+
+**Alternatives rejected.** A permanent `Opportunity.solution_reviewer`, mandatory two-stage review for every version, allowing Presales to approve their own technical revision, introducing a new reviewer business role, and using Django staff/superuser flags as business approval authority.
+
+**Consequences.** Phase 5.6b should associate reviewer assignment and append-only review history with `SolutionDraftRecord`, not Opportunity. Existing `presales` users fill the reviewer responsibility. Approval means internal technical approval for external solution communication; it does not mean customer signature, Opportunity success, or permanent immutability.
+
+## D-013 — Customer-information and technical-revision returns are distinct
+
+**Decision.** Review returns use separate machine-readable reasons: `CUSTOMER_INFO_REQUIRED` and `TECHNICAL_REVISION_REQUIRED`.
+
+**Context.** A solution can be unready because customer facts are missing or because an otherwise informed technical design needs revision. Those causes have different owners and remediation paths.
+
+**Why.** Sales owns customer clarification, while Presales owns technical design. A single undifferentiated revision state would obscure responsibility and weaken auditability.
+
+**Alternatives rejected.** One generic return reason, asking Sales to perform technical design, or mutating a persisted Requirement Analysis or Solution version in place.
+
+**Consequences.** `CUSTOMER_INFO_REQUIRED` leads Sales to collect facts, create an updated immutable Requirement Analysis, stale the older Solution, and generate a new version. `TECHNICAL_REVISION_REQUIRED` leads Presales to create a revised Solution version. The existing coarse `NEEDS_REVISION` status may remain a lifecycle projection, while the durable review record preserves the exact return reason.
