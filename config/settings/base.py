@@ -106,6 +106,13 @@ VERIFIER_MAX_RETRIES = env.int("VERIFIER_MAX_RETRIES", default=0)
 VERIFIER_MAX_OUTPUT_TOKENS = env.int("VERIFIER_MAX_OUTPUT_TOKENS", default=1500)
 VERIFIER_MAX_CONCURRENCY = env.int("VERIFIER_MAX_CONCURRENCY", default=2)
 
+# LangGraph checkpoints are orchestration infrastructure, not business truth.
+# Schema setup is an explicit deployment operation and never runs at import time.
+LANGGRAPH_CHECKPOINT_DATABASE_URL = env(
+    "LANGGRAPH_CHECKPOINT_DATABASE_URL",
+    default="",
+)
+
 # Structured solution drafts need more output space than ordinary LLM tasks.
 SOLUTION_DRAFT_MAX_OUTPUT_TOKENS = env.int("SOLUTION_DRAFT_MAX_OUTPUT_TOKENS", default=4000)
 

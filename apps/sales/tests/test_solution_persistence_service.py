@@ -3,7 +3,8 @@
 import hashlib
 from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
+from threading import Barrier, Lock
+from time import sleep
 from uuid import uuid4
 
 import pytest
@@ -259,6 +260,139 @@ def test_successful_generations_append_per_opportunity_versions(
     second = generate_and_persist_solution_draft(opportunity, analysis, created_by=owner)
 
     assert (first.version, second.version) == (1, 2)
+
+
+def test_generation_idempotency_replay_returns_existing_without_provider_call(
+    monkeypatch,
+    persistence_context,
+    generated_artifact,
+):
+    from apps.sales.models import SolutionDraftRecord
+    from apps.sales.services import solution_persistence
+
+    owner, _, opportunity, analysis, _ = persistence_context
+    result = generated_artifact[0]
+    calls = 0
+
+    def generate(actual_analysis, **kwargs):
+        nonlocal calls
+        calls += 1
+        return replace(result, analysis_id=actual_analysis.pk)
+
+    monkeypatch.setattr(solution_persistence, "generate_grounded_solution_draft", generate)
+    key = uuid4()
+
+    first = solution_persistence.generate_and_persist_solution_draft(
+        opportunity, analysis, created_by=owner, idempotency_key=key
+    )
+    replay = solution_persistence.generate_and_persist_solution_draft(
+        opportunity, analysis, created_by=owner, idempotency_key=key
+    )
+
+    assert replay.pk == first.pk
+    assert replay.generation_idempotency_key == key
+    assert calls == 1
+    assert SolutionDraftRecord.objects.count() == 1
+
+
+def test_generation_idempotency_key_rejects_mismatched_inputs_before_provider(
+    monkeypatch,
+    persistence_context,
+    generated_artifact,
+):
+    from apps.sales.services import solution_persistence
+
+    owner, _, opportunity, analysis, create_analysis = persistence_context
+    _patch_generation(monkeypatch, generated_artifact[0])
+    key = uuid4()
+    solution_persistence.generate_and_persist_solution_draft(
+        opportunity, analysis, created_by=owner, idempotency_key=key
+    )
+    other_analysis = create_analysis(summary="Different explicit analysis")
+    called = False
+
+    def should_not_run(*args, **kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        solution_persistence, "generate_grounded_solution_draft", should_not_run
+    )
+
+    with pytest.raises(solution_persistence.SolutionPersistenceError):
+        solution_persistence.generate_and_persist_solution_draft(
+            opportunity, other_analysis, created_by=owner, idempotency_key=key
+        )
+
+    assert called is False
+
+
+def test_different_generation_idempotency_keys_create_independent_versions(
+    monkeypatch,
+    persistence_context,
+    generated_artifact,
+):
+    from apps.sales.services import solution_persistence
+
+    owner, _, opportunity, analysis, _ = persistence_context
+    _patch_generation(monkeypatch, generated_artifact[0])
+
+    first = solution_persistence.generate_and_persist_solution_draft(
+        opportunity, analysis, created_by=owner, idempotency_key=uuid4()
+    )
+    second = solution_persistence.generate_and_persist_solution_draft(
+        opportunity, analysis, created_by=owner, idempotency_key=uuid4()
+    )
+
+    assert (first.version, second.version) == (1, 2)
+
+
+def test_concurrent_same_idempotency_key_calls_provider_once_and_persists_once(
+    monkeypatch,
+    persistence_context,
+    generated_artifact,
+):
+    from apps.sales.models import SolutionDraftRecord
+    from apps.sales.services import solution_persistence
+
+    owner, _, opportunity, analysis, _ = persistence_context
+    result = generated_artifact[0]
+    start = Barrier(2)
+    counter_lock = Lock()
+    calls = 0
+    key = uuid4()
+
+    def generate(actual_analysis, **kwargs):
+        nonlocal calls
+        with counter_lock:
+            calls += 1
+        sleep(0.2)
+        return replace(result, analysis_id=actual_analysis.pk)
+
+    monkeypatch.setattr(solution_persistence, "generate_grounded_solution_draft", generate)
+
+    def persist():
+        close_old_connections()
+        try:
+            local_opportunity = Opportunity.objects.get(pk=opportunity.pk)
+            local_analysis = OpportunityRequirementAnalysis.objects.get(pk=analysis.pk)
+            local_owner = type(owner).objects.get(pk=owner.pk)
+            start.wait(timeout=10)
+            return solution_persistence.generate_and_persist_solution_draft(
+                local_opportunity,
+                local_analysis,
+                created_by=local_owner,
+                idempotency_key=key,
+            ).pk
+        finally:
+            connection.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        ids = [future.result() for future in [executor.submit(persist) for _ in range(2)]]
+
+    assert ids[0] == ids[1]
+    assert calls == 1
+    assert SolutionDraftRecord.objects.count() == 1
 
 
 def test_different_opportunities_have_independent_version_sequences(

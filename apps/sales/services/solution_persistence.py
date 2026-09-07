@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import re
 from collections import defaultdict
+from contextlib import contextmanager
 from typing import NoReturn
+from uuid import UUID
 
 from django.contrib.auth import get_user_model
 from django.db import connection, models, transaction
@@ -147,8 +149,9 @@ def generate_and_persist_solution_draft(
     embedding_provider: EmbeddingProvider | None = None,
     llm_provider: LLMProvider | None = None,
     verifier_provider: LLMProvider | None = None,
+    idempotency_key: UUID | None = None,
 ) -> SolutionDraftRecord:
-    """Generate outside a transaction, then atomically append one version."""
+    """Generate once per durable key, then atomically append one version."""
 
     if connection.in_atomic_block or not connection.get_autocommit():
         raise TransactionManagementError(
@@ -159,6 +162,63 @@ def generate_and_persist_solution_draft(
     created_by_id = _saved_pk(created_by, get_user_model())
     if analysis.opportunity_id != opportunity_id:
         raise SolutionPersistenceError("The selected analysis does not belong to this opportunity.")
+
+    if idempotency_key is not None and not isinstance(idempotency_key, UUID):
+        raise SolutionPersistenceError("The generation idempotency key is invalid.")
+
+    if idempotency_key is None:
+        return _generate_and_persist_solution_draft(
+            opportunity,
+            analysis,
+            opportunity_id=opportunity_id,
+            analysis_id=analysis_id,
+            created_by_id=created_by_id,
+            embedding_provider=embedding_provider,
+            llm_provider=llm_provider,
+            verifier_provider=verifier_provider,
+            idempotency_key=None,
+        )
+
+    with _generation_idempotency_lock(idempotency_key):
+        existing = SolutionDraftRecord.objects.filter(
+            generation_idempotency_key=idempotency_key
+        ).first()
+        if existing is not None:
+            if (
+                existing.opportunity_id != opportunity_id
+                or existing.requirement_analysis_id != analysis_id
+                or existing.created_by_id != created_by_id
+            ):
+                raise SolutionPersistenceError(
+                    "The generation idempotency key belongs to different inputs."
+                )
+            return existing
+        return _generate_and_persist_solution_draft(
+            opportunity,
+            analysis,
+            opportunity_id=opportunity_id,
+            analysis_id=analysis_id,
+            created_by_id=created_by_id,
+            embedding_provider=embedding_provider,
+            llm_provider=llm_provider,
+            verifier_provider=verifier_provider,
+            idempotency_key=idempotency_key,
+        )
+
+
+def _generate_and_persist_solution_draft(
+    opportunity: Opportunity,
+    analysis: OpportunityRequirementAnalysis,
+    *,
+    opportunity_id: int,
+    analysis_id: int,
+    created_by_id: int,
+    embedding_provider: EmbeddingProvider | None,
+    llm_provider: LLMProvider | None,
+    verifier_provider: LLMProvider | None,
+    idempotency_key: UUID | None,
+) -> SolutionDraftRecord:
+    """Run providers without a transaction, then persist in one short transaction."""
 
     result = generate_grounded_solution_draft(
         analysis,
@@ -208,6 +268,7 @@ def generate_and_persist_solution_draft(
                 "generation_status": result.generation_status.value,
                 "source_count": len(result.sources),
             },
+            generation_idempotency_key=idempotency_key,
             is_stale=stale,
             stale_at=timezone.now() if stale else None,
             stale_reasons=[reason.value for reason in stale_reasons],
@@ -216,6 +277,24 @@ def generate_and_persist_solution_draft(
         entries = _build_provenance_entries(record, result)
         SolutionDraftProvenance.objects.bulk_create(entries)
         return record
+
+
+@contextmanager
+def _generation_idempotency_lock(idempotency_key: UUID):
+    """Serialize a workflow key without spanning an external-call transaction."""
+
+    lock_id = int.from_bytes(
+        hashlib.sha256(idempotency_key.bytes).digest()[:8],
+        byteorder="big",
+        signed=True,
+    )
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_advisory_lock(%s)", [lock_id])
+    try:
+        yield
+    finally:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_advisory_unlock(%s)", [lock_id])
 
 
 def evaluate_solution_draft_stale_reasons(

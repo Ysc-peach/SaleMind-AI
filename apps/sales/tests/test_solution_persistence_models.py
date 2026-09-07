@@ -85,6 +85,27 @@ def test_solution_versions_are_unique_per_opportunity(persisted_context):
         SolutionDraftRecord.objects.create(**record_values(owner, opportunity, analysis))
 
 
+def test_non_null_generation_idempotency_keys_are_unique(persisted_context):
+    from apps.sales.models import SolutionDraftRecord
+
+    owner, opportunity, analysis = persisted_context
+    key = uuid4()
+    SolutionDraftRecord.objects.create(
+        **record_values(owner, opportunity, analysis, generation_idempotency_key=key)
+    )
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        SolutionDraftRecord.objects.create(
+            **record_values(
+                owner,
+                opportunity,
+                analysis,
+                version=2,
+                generation_idempotency_key=key,
+            )
+        )
+
+
 def test_solution_record_rejects_nonpositive_version(persisted_context):
     from apps.sales.models import SolutionDraftRecord
 
@@ -102,6 +123,7 @@ def test_solution_record_rejects_nonpositive_version(persisted_context):
         ("title", "changed"),
         ("draft_payload", {"changed": True}),
         ("generation_metadata", {"changed": True}),
+        ("generation_idempotency_key", uuid4()),
     ],
 )
 def test_solution_content_identity_cannot_be_edited_in_place(

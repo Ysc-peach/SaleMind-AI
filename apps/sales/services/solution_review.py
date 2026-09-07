@@ -136,6 +136,45 @@ def request_solution_draft_revision(
     )
 
 
+def recover_completed_solution_review(
+    solution: SolutionDraftRecord,
+    review: SolutionReview,
+    *,
+    actor,
+    expected_status,
+    return_reason: str = "",
+    comment: str = "",
+) -> SolutionReview:
+    """Authorize and validate an exact replay without changing audit history."""
+
+    solution_id = _saved_pk(solution, SolutionDraftRecord)
+    review_id = _saved_pk(review, SolutionReview)
+    actor = _saved_user(actor)
+    current_solution = SolutionDraftRecord.objects.select_related("created_by").get(
+        pk=solution_id
+    )
+    current_review = SolutionReview.objects.get(
+        pk=review_id,
+        solution_draft_id=solution_id,
+    )
+    _require_decider(current_solution, current_review, actor)
+    if current_review.status != expected_status:
+        raise SolutionReviewStateError(SolutionReviewErrorCode.INVALID_STATE)
+    if expected_status == SolutionReviewDecisionStatus.APPROVED:
+        if current_solution.review_status != SolutionReviewStatus.APPROVED:
+            raise SolutionReviewStateError(SolutionReviewErrorCode.INVALID_STATE)
+    elif expected_status == SolutionReviewDecisionStatus.RETURNED:
+        if (
+            current_solution.review_status != SolutionReviewStatus.NEEDS_REVISION
+            or current_review.return_reason != return_reason
+            or current_review.comment != comment
+        ):
+            raise SolutionReviewStateError(SolutionReviewErrorCode.INVALID_STATE)
+    else:
+        raise SolutionReviewStateError(SolutionReviewErrorCode.INVALID_STATE)
+    return current_review
+
+
 def _decide_solution_review(
     solution: SolutionDraftRecord,
     *,

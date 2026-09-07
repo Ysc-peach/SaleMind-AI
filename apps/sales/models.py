@@ -235,6 +235,12 @@ class SolutionDraftRecord(models.Model):
     title = models.CharField(_("方案标题"), max_length=255)
     draft_payload = models.JSONField(_("方案结构化快照"))
     generation_metadata = models.JSONField(_("生成元数据"), default=dict)
+    generation_idempotency_key = models.UUIDField(
+        _("生成幂等键"),
+        null=True,
+        blank=True,
+        editable=False,
+    )
     review_status = models.CharField(
         _("审核状态"),
         max_length=24,
@@ -259,6 +265,7 @@ class SolutionDraftRecord(models.Model):
         "title",
         "draft_payload",
         "generation_metadata",
+        "generation_idempotency_key",
         "created_by_id",
     )
     _LIFECYCLE_FIELDS = frozenset(
@@ -271,6 +278,11 @@ class SolutionDraftRecord(models.Model):
             models.UniqueConstraint(
                 fields=["opportunity", "version"],
                 name="sales_solution_opportunity_version_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["generation_idempotency_key"],
+                condition=models.Q(generation_idempotency_key__isnull=False),
+                name="sales_solution_generation_idempotency_unique",
             ),
             models.CheckConstraint(
                 condition=models.Q(version__gte=1),
