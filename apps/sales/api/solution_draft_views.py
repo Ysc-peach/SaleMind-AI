@@ -1,5 +1,6 @@
-"""Phase 5.6a immutable Solution Draft create/list/detail endpoints."""
+"""Immutable Solution Draft persistence and review workflow endpoints."""
 
+from django.contrib.auth import get_user_model
 from rest_framework import status, viewsets
 from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.parsers import JSONParser
@@ -13,14 +14,25 @@ from apps.sales.services.solution_persistence import (
     generate_and_persist_solution_draft,
     refresh_solution_draft_staleness,
 )
+from apps.sales.services.solution_review import (
+    SolutionReviewPermissionError,
+    SolutionReviewStateError,
+    approve_solution_draft,
+    request_solution_draft_revision,
+    submit_solution_draft_for_review,
+)
 
-from .opportunity_access import OpportunityVisibilityMixin, visible_opportunities_for
+from .opportunity_access import OpportunityVisibilityMixin, visible_solution_drafts_for
 from .pagination import DefaultPageNumberPagination
 from .permissions import SolutionDraftPermission
 from .solution_draft_serializers import (
     SolutionDraftCreateSerializer,
     SolutionDraftDetailSerializer,
     SolutionDraftListSerializer,
+    SolutionReviewApproveSerializer,
+    SolutionReviewReturnSerializer,
+    SolutionReviewSerializer,
+    SolutionReviewSubmitSerializer,
 )
 
 
@@ -34,6 +46,14 @@ class SolutionDraftProviderAPIError(APIException):
     status_code = 502
     default_code = "llm_provider_error"
     default_detail = "The language-model provider request failed."
+
+
+class SolutionReviewActionAPIError(APIException):
+    def __init__(self, error):
+        self.status_code = (
+            403 if isinstance(error, SolutionReviewPermissionError) else 409
+        )
+        super().__init__({"code": error.code, "message": error.safe_message})
 
 
 class SolutionDraftCollectionViewSet(OpportunityVisibilityMixin, viewsets.GenericViewSet):
@@ -90,15 +110,14 @@ class SolutionDraftCollectionViewSet(OpportunityVisibilityMixin, viewsets.Generi
 
 class SolutionDraftDetailViewSet(viewsets.GenericViewSet):
     permission_classes = (SolutionDraftPermission,)
-    http_method_names = ["get", "head", "options"]
+    parser_classes = (JSONParser,)
+    http_method_names = ["get", "post", "head", "options"]
     lookup_field = "pk"
     lookup_url_kwarg = "solution_id"
 
     def get_queryset(self):
         return (
-            SolutionDraftRecord.objects.filter(
-                opportunity__in=visible_opportunities_for(self.request.user)
-            )
+            visible_solution_drafts_for(self.request.user)
             .select_related("created_by", "requirement_analysis", "opportunity")
             .prefetch_related("provenance_entries")
         )
@@ -107,3 +126,57 @@ class SolutionDraftDetailViewSet(viewsets.GenericViewSet):
         record = self.get_object()
         refresh_solution_draft_staleness(record)
         return Response(SolutionDraftDetailSerializer(record).data)
+
+    def submit_review(self, request, *args, **kwargs):
+        record = self.get_object()
+        serializer = SolutionReviewSubmitSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        reviewer = None
+        reviewer_id = serializer.validated_data.get("reviewer_id")
+        if reviewer_id is not None:
+            reviewer = get_user_model().objects.filter(pk=reviewer_id).first()
+            if reviewer is None:
+                raise ValidationError({"reviewer_id": "The reviewer does not exist."})
+        try:
+            review = submit_solution_draft_for_review(
+                record,
+                actor=request.user,
+                reviewer=reviewer,
+            )
+        except (SolutionReviewPermissionError, SolutionReviewStateError) as exc:
+            raise SolutionReviewActionAPIError(exc) from exc
+        return Response(SolutionReviewSerializer(review).data, status=status.HTTP_201_CREATED)
+
+    def approve_review(self, request, *args, **kwargs):
+        record = self.get_object()
+        serializer = SolutionReviewApproveSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            review = approve_solution_draft(
+                record,
+                actor=request.user,
+                comment=serializer.validated_data["comment"],
+            )
+        except (SolutionReviewPermissionError, SolutionReviewStateError) as exc:
+            raise SolutionReviewActionAPIError(exc) from exc
+        return Response(SolutionReviewSerializer(review).data)
+
+    def request_revision(self, request, *args, **kwargs):
+        record = self.get_object()
+        serializer = SolutionReviewReturnSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            review = request_solution_draft_revision(
+                record,
+                actor=request.user,
+                return_reason=serializer.validated_data["return_reason"],
+                comment=serializer.validated_data["comment"],
+            )
+        except (SolutionReviewPermissionError, SolutionReviewStateError) as exc:
+            raise SolutionReviewActionAPIError(exc) from exc
+        return Response(SolutionReviewSerializer(review).data)
+
+    def review_history(self, request, *args, **kwargs):
+        record = self.get_object()
+        reviews = record.reviews.select_related("submitted_by", "reviewer").all()
+        return Response({"results": SolutionReviewSerializer(reviews, many=True).data})

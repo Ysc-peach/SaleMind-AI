@@ -25,9 +25,41 @@ solution_draft_collection_view = SolutionDraftCollectionViewSet.as_view(
 solution_draft_detail_view = SolutionDraftDetailViewSet.as_view(
     {"get": "retrieve_draft"}
 )
+solution_draft_submit_view = SolutionDraftDetailViewSet.as_view(
+    {"post": "submit_review"}
+)
+solution_draft_approve_view = SolutionDraftDetailViewSet.as_view(
+    {"post": "approve_review"}
+)
+solution_draft_request_revision_view = SolutionDraftDetailViewSet.as_view(
+    {"post": "request_revision"}
+)
+solution_draft_review_list_view = SolutionDraftDetailViewSet.as_view(
+    {"get": "review_history"}
+)
 
 
 urlpatterns = [
+    path(
+        "solution-drafts/<int:solution_id>/submit/",
+        solution_draft_submit_view,
+        name="solution-draft-submit",
+    ),
+    path(
+        "solution-drafts/<int:solution_id>/approve/",
+        solution_draft_approve_view,
+        name="solution-draft-approve",
+    ),
+    path(
+        "solution-drafts/<int:solution_id>/request-revision/",
+        solution_draft_request_revision_view,
+        name="solution-draft-request-revision",
+    ),
+    path(
+        "solution-drafts/<int:solution_id>/reviews/",
+        solution_draft_review_list_view,
+        name="solution-draft-review-list",
+    ),
     path(
         "opportunities/<int:opportunity_id>/solution-drafts/",
         solution_draft_collection_view,

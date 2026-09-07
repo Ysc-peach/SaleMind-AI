@@ -2,7 +2,12 @@
 
 from rest_framework import serializers
 
-from apps.sales.models import SolutionDraftProvenance, SolutionDraftRecord
+from apps.sales.models import (
+    SolutionDraftProvenance,
+    SolutionDraftRecord,
+    SolutionReturnReason,
+    SolutionReview,
+)
 
 
 class SolutionDraftCreateSerializer(serializers.Serializer):
@@ -66,5 +71,60 @@ class SolutionDraftDetailSerializer(SolutionDraftListSerializer):
         fields = SolutionDraftListSerializer.Meta.fields + (
             "draft_payload",
             "provenance",
+        )
+        read_only_fields = fields
+
+
+class SolutionReviewSubmitSerializer(serializers.Serializer):
+    reviewer_id = serializers.IntegerField(min_value=1, required=False)
+
+    def to_internal_value(self, data):
+        if not isinstance(data, dict) or not set(data) <= {"reviewer_id"}:
+            raise serializers.ValidationError(
+                {"non_field_errors": "Only an optional reviewer_id is accepted."}
+            )
+        return super().to_internal_value(data)
+
+
+class SolutionReviewApproveSerializer(serializers.Serializer):
+    comment = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def to_internal_value(self, data):
+        if not isinstance(data, dict) or not set(data) <= {"comment"}:
+            raise serializers.ValidationError(
+                {"non_field_errors": "Only an optional comment is accepted."}
+            )
+        return super().to_internal_value(data)
+
+
+class SolutionReviewReturnSerializer(serializers.Serializer):
+    return_reason = serializers.ChoiceField(choices=SolutionReturnReason.choices)
+    comment = serializers.CharField(allow_blank=False, trim_whitespace=True)
+
+    def to_internal_value(self, data):
+        if not isinstance(data, dict) or set(data) != {"return_reason", "comment"}:
+            raise serializers.ValidationError(
+                {"non_field_errors": "return_reason and comment are required."}
+            )
+        return super().to_internal_value(data)
+
+
+class SolutionReviewSerializer(serializers.ModelSerializer):
+    solution_draft = serializers.IntegerField(source="solution_draft_id", read_only=True)
+    submitted_by = serializers.IntegerField(source="submitted_by_id", read_only=True)
+    reviewer = serializers.IntegerField(source="reviewer_id", read_only=True)
+
+    class Meta:
+        model = SolutionReview
+        fields = (
+            "id",
+            "solution_draft",
+            "submitted_by",
+            "reviewer",
+            "status",
+            "return_reason",
+            "comment",
+            "submitted_at",
+            "decided_at",
         )
         read_only_fields = fields

@@ -29,6 +29,20 @@ class SolutionReviewStatus(models.TextChoices):
     NEEDS_REVISION = "needs_revision", _("需要修改")
 
 
+class SolutionReviewDecisionStatus(models.TextChoices):
+    PENDING = "pending", _("待审核")
+    APPROVED = "approved", _("已批准")
+    RETURNED = "returned", _("已退回")
+
+
+class SolutionReturnReason(models.TextChoices):
+    CUSTOMER_INFO_REQUIRED = "customer_info_required", _("需要补充客户信息")
+    TECHNICAL_REVISION_REQUIRED = (
+        "technical_revision_required",
+        _("需要修改技术方案"),
+    )
+
+
 class SolutionStaleReason(models.TextChoices):
     NEWER_REQUIREMENT_ANALYSIS = (
         "newer_requirement_analysis",
@@ -311,6 +325,137 @@ class SolutionDraftRecord(models.Model):
         raise ValidationError(
             "Solution Draft versions are immutable.",
             code="immutable_solution_draft",
+        )
+
+
+class SolutionReview(models.Model):
+    """Version-scoped audit record for one Solution review attempt."""
+
+    Status = SolutionReviewDecisionStatus
+    ReturnReason = SolutionReturnReason
+
+    solution_draft = models.ForeignKey(
+        SolutionDraftRecord,
+        on_delete=models.PROTECT,
+        related_name="reviews",
+        verbose_name=_("解决方案草稿版本"),
+    )
+    submitted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="submitted_solution_reviews",
+        verbose_name=_("提交人"),
+    )
+    reviewer = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="assigned_solution_reviews",
+        verbose_name=_("审核人"),
+    )
+    status = models.CharField(
+        _("审核决定状态"),
+        max_length=16,
+        choices=SolutionReviewDecisionStatus.choices,
+        default=SolutionReviewDecisionStatus.PENDING,
+    )
+    return_reason = models.CharField(
+        _("退回原因"),
+        max_length=40,
+        choices=SolutionReturnReason.choices,
+        blank=True,
+        default="",
+    )
+    comment = models.TextField(_("审核意见"), blank=True, default="")
+    submitted_at = models.DateTimeField(_("提交时间"), auto_now_add=True)
+    decided_at = models.DateTimeField(_("决定时间"), null=True, blank=True)
+
+    _IMMUTABLE_FIELDS = (
+        "solution_draft_id",
+        "submitted_by_id",
+        "reviewer_id",
+        "submitted_at",
+    )
+    _DECISION_FIELDS = ("status", "return_reason", "comment", "decided_at")
+
+    class Meta:
+        ordering = ["-submitted_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["solution_draft"],
+                condition=models.Q(status=SolutionReviewDecisionStatus.PENDING),
+                name="sales_solution_one_pending_review",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(status__in=SolutionReviewDecisionStatus.values),
+                name="sales_solution_review_decision_valid",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        status=SolutionReviewDecisionStatus.PENDING,
+                        return_reason="",
+                        comment="",
+                        decided_at__isnull=True,
+                    )
+                    | models.Q(
+                        status=SolutionReviewDecisionStatus.APPROVED,
+                        return_reason="",
+                        decided_at__isnull=False,
+                    )
+                    | models.Q(
+                        status=SolutionReviewDecisionStatus.RETURNED,
+                        return_reason__in=SolutionReturnReason.values,
+                        comment__regex=r"\S",
+                        decided_at__isnull=False,
+                    )
+                ),
+                name="sales_solution_review_decision_state",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["solution_draft", "-submitted_at", "-id"],
+                name="sales_solreview_history_idx",
+            ),
+            models.Index(
+                fields=["reviewer", "status"],
+                name="sales_solreview_reviewer_idx",
+            ),
+        ]
+        verbose_name = _("解决方案审核记录")
+        verbose_name_plural = _("解决方案审核记录")
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding and self.pk is not None:
+            original = type(self).objects.values(
+                *self._IMMUTABLE_FIELDS,
+                *self._DECISION_FIELDS,
+            ).get(pk=self.pk)
+            if any(
+                getattr(self, field) != original[field]
+                for field in self._IMMUTABLE_FIELDS
+            ):
+                raise ValidationError(
+                    "Solution Review identity is immutable.",
+                    code="immutable_solution_review",
+                )
+            if (
+                original["status"] != SolutionReviewDecisionStatus.PENDING
+                and any(
+                    getattr(self, field) != original[field]
+                    for field in self._DECISION_FIELDS
+                )
+            ):
+                raise ValidationError(
+                    "Completed Solution Review decisions are immutable.",
+                    code="immutable_solution_review",
+                )
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError(
+            "Solution Review history is immutable.",
+            code="immutable_solution_review",
         )
 
 
