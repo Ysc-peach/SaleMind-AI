@@ -1,6 +1,6 @@
 # SalesMind AI Architecture
 
-This document records current repository truth, not a future-state promise. It was prepared against repository HEAD `3a3624714d1b84f576a8507a86ce4f14ee25566d`; the implemented Phase 5.5j-B code baseline is `b0ff01064ff9d52da844acd527d80442a151611a`. The last recorded full-suite result for that code baseline is 1,184 passed tests. These are checkpoint values, not permanent constants.
+This document records current repository truth, not a future-state promise. The Phase 5.6 checkpoint is repository HEAD `6c742cb0e0202cc7c9bb52a5912f355341025a55`; its last recorded full-suite result is 1,289 passed tests. These are checkpoint values, not permanent constants.
 
 The root `README.md` is still a Phase Two delivery document. Its AI/RAG out-of-scope section describes that historical checkpoint and does not describe the current repository.
 
@@ -8,13 +8,14 @@ The root `README.md` is still a Phase Two delivery document. Its AI/RAG out-of-s
 
 SalesMind AI supports enterprise sales and presales work: customer and opportunity management, structured requirement analysis, an internal enterprise knowledge base, grounded RAG answers, and generation of provenance-controlled internal solution drafts.
 
-The repository is a modular Django monolith. The current backend is implemented; the Vue frontend, LangGraph orchestration, solution persistence/review lifecycle, and deployment packaging are not yet complete.
+The repository is a modular Django monolith. The current backend includes immutable, versioned Solution persistence and version-scoped technical review. The Vue frontend, LangGraph orchestration, and deployment packaging are not yet complete.
 
 ## Main actors
 
 - **Business Admin** manages shared business data and knowledge, and participates in grounding-fact review through the existing Django Admin boundary.
 - **Sales** owns opportunities, captures requirements, and coordinates presales work.
-- **Presales** sees assigned opportunities and uses requirement, knowledge, and solution assistance.
+- **Presales Owner** owns technical judgment, Solution generation or revision, and the first technical review for assigned opportunities.
+- **Solution Reviewer** is an eligible Presales user assigned to one Solution version when independent review is required.
 - **Technical Django administrators** use `is_staff`/`is_superuser` for framework administration. Those flags are not business roles.
 
 ## High-level architecture
@@ -38,7 +39,7 @@ Provider names are environment-driven. No credentials belong in repository docum
 ## Django applications and modules
 
 - `apps/accounts/`: custom `User`, fixed business roles, Django Admin integration, JWT login/refresh/current-user APIs, and presales option lookup.
-- `apps/sales/`: `Customer`, `Opportunity`, append-only `OpportunityRequirementAnalysis`, role-scoped APIs, requirement analysis, retrieval planning, deterministic solution admission, proposal generation orchestration, semantic verification, and deterministic draft assembly.
+- `apps/sales/`: `Customer`, `Opportunity`, append-only `OpportunityRequirementAnalysis`, immutable versioned `SolutionDraftRecord`, durable `SolutionDraftProvenance`, version-scoped `SolutionReview`, role-scoped APIs, requirement analysis, retrieval planning, deterministic solution admission, proposal generation orchestration, semantic verification, persistence, stale evaluation, and technical review.
 - `apps/knowledge/`: document upload/validation, parsing, chunking, embeddings, PostgreSQL vector search, safe reindexing, `EnterpriseGroundingFact`, extraction proposals, approval/rejection, and stale lifecycle.
 - `apps/rag/`: grounded question answering over retrieved knowledge evidence.
 - `apps/llm/`: provider contracts and factories for DeepSeek generation and an optional independent OpenAI-compatible verifier.
@@ -74,7 +75,9 @@ The requirement-analysis service produces ten fixed typed dimensions with one of
 
 The solution service consumes an explicit persisted requirement-analysis record. It applies deterministic readiness rules, performs requirement-derived knowledge retrieval, builds deterministic admission from current approved grounding facts, and asks the generation LLM only for atomic `proposal` claims.
 
-Program code owns customer facts, enterprise facts, unresolved items, source eligibility, fixed section ordering, title, summary, assumptions, and final assembly. A solution draft is currently returned as a domain result; there is no persisted Solution model or review lifecycle yet. That work belongs to the next phase.
+Program code owns customer facts, enterprise facts, unresolved items, source eligibility, fixed section ordering, title, summary, assumptions, and final assembly. `generate_grounded_solution_draft` remains a read-only domain operation. `generate_and_persist_solution_draft` accepts an explicit persisted analysis, invokes that domain operation outside a database transaction, then performs final provenance validation and appends one immutable Solution version in a short transaction.
+
+Each `SolutionDraftRecord` references its exact `Opportunity` and `OpportunityRequirementAnalysis`, has a per-Opportunity monotonically increasing version, and starts in `DRAFT`. The persisted JSON payload round-trips through explicit domain mappers. It is accompanied by durable citation snapshots in `SolutionDraftProvenance`, not by foreign keys to replaceable `KnowledgeChunk` rows.
 
 ## Grounding and Verification architecture
 
@@ -104,9 +107,13 @@ If independent verifier settings are absent, the solution service retains the hi
 
 ## Persistence
 
-PostgreSQL is the only supported application database. It persists users, customers, opportunities, append-only requirement-analysis history, knowledge documents/chunks, vector embeddings, and grounding facts with approval and provenance metadata.
+PostgreSQL is the only supported application database. It persists users, customers, opportunities, append-only requirement-analysis history, knowledge documents/chunks, vector embeddings, grounding facts, immutable Solution versions, durable Solution citation provenance, and append-only technical review history.
 
-Solution drafts themselves are not persisted in the current phase. There is no solution review lifecycle, LangGraph state, Redis, Celery, or message queue in the implemented architecture.
+Migration `sales.0003_solution_draft_persistence` adds `SolutionDraftRecord` and `SolutionDraftProvenance`. Migration `sales.0004_solutionreview` adds `SolutionReview`, its pending-review uniqueness constraint, decision-state checks, and review indexes. Both migrations passed their real `salesmind` database gates and are applied there.
+
+`SolutionDraftRecord.review_status` is the current lifecycle projection: `DRAFT`, `PENDING_REVIEW`, `APPROVED`, or `NEEDS_REVISION`. Each review attempt has its own `SolutionReview` with `PENDING`, `APPROVED`, or `RETURNED`, reviewer/submitter identities, timestamps, and an exact return reason where required. Submit, approve, and return use short transactions and row locking. Completed review history and Solution content cannot be overwritten through the API.
+
+Solution stale state is independent from review status. Newer requirement analysis or invalid grounding Fact/provenance can mark even an approved Solution stale without erasing its historical approval. There is no LangGraph state, Redis, Celery, or message queue in the implemented architecture.
 
 ## Current status and intentionally deferred components
 
@@ -119,7 +126,9 @@ Solution drafts themselves are not persisted in the current phase. There is no s
 | Phase 4 | Complete |
 | Phase 5.1–5.4 | Complete |
 | Phase 5.5 (through 5.5j-B) | Complete |
-| Phase 5.6 | Next |
+| Phase 5.6a (Solution persistence/provenance) | Complete; real DB migration gate passed |
+| Phase 5.6b (Solution review workflow) | Complete; real DB migration gate passed |
+| Phase 5.6 (through 5.6b) | Complete |
 | LangGraph workflow | Planned, not implemented |
 | Vue frontend | Planned, not complete |
 | End-to-end deployment | Planned |
@@ -140,3 +149,6 @@ The next phase must not be inferred from this status table as authorization to i
 - `apps/sales/services/solution_draft.py`
 - `apps/sales/services/solution_grounding.py`
 - `apps/sales/services/solution_schema.py`
+- `apps/sales/services/solution_persistence.py`
+- `apps/sales/services/solution_review.py`
+- `apps/sales/api/solution_draft_views.py`

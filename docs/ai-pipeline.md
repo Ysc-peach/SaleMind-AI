@@ -56,7 +56,7 @@ The analysis service classifies each dimension as `known`, `unknown`, `unclear`,
 
 ## Grounded Solution Draft request path
 
-The current production path is centered on `generate_grounded_solution_draft` in `apps/sales/services/solution_draft.py`:
+The read-only generation path is centered on `generate_grounded_solution_draft` in `apps/sales/services/solution_draft.py`. The persisted API path wraps it with `generate_and_persist_solution_draft` in `apps/sales/services/solution_persistence.py`:
 
 ```text
 Opportunity raw requirement
@@ -98,7 +98,13 @@ SUPPORTED + ATOMIC only
         ↓
 return-time deterministic admission revalidation
         ↓
-deterministic SolutionDraft assembly and return
+deterministic SolutionDraft assembly
+        ↓
+short persistence transaction
+        ├── final admission/provenance validation
+        ├── lock Opportunity and allocate next version
+        ├── append immutable SolutionDraftRecord
+        └── append durable SolutionDraftProvenance snapshots
 ```
 
 Readiness-blocked and no-evidence paths return before generation and verification. Structurally invalid generated output never reaches the verifier. Zero generated proposals skip the verifier.
@@ -147,6 +153,32 @@ External generation and verification calls happen after the first deterministic 
 
 If reindexing, stale marking, approval changes, source content, or another provenance condition changes during model calls, the request fails closed. A verifier `SUPPORTED` result cannot override this TOCTOU boundary.
 
+## Solution persistence and technical review lane
+
+The persistence request always names an existing `OpportunityRequirementAnalysis`; it never silently substitutes the latest analysis. Model calls occur before the short persistence transaction. Inside that transaction, the service locks the Opportunity, revalidates current grounding admission, allocates the next per-Opportunity version, and atomically writes `SolutionDraftRecord` plus its citation provenance. Any failure creates neither a partial record nor orphan provenance.
+
+Durable provenance stores the exact admitted `EnterpriseGroundingFact`, source document, citation label and statement path, plus immutable chunk-ID, index-run, content-hash, and excerpt snapshots. It deliberately has no foreign key to replaceable `KnowledgeChunk` rows.
+
+After persistence, technical review is a human workflow over stable database identities:
+
+```text
+SolutionDraftRecord DRAFT
+        ↓ submit_solution_draft_for_review
+SolutionReview PENDING + Draft PENDING_REVIEW
+        ↓ human review boundary
+        ├── approve_solution_draft
+        │       ↓
+        │   Review APPROVED + Draft APPROVED
+        │
+        └── request_solution_draft_revision
+                ↓
+            Review RETURNED + Draft NEEDS_REVISION
+                ├── CUSTOMER_INFO_REQUIRED → Sales obtains facts and creates a new analysis
+                └── TECHNICAL_REVISION_REQUIRED → Presales creates a new Solution version
+```
+
+Reviewer assignment is version-scoped. A Presales-authored version requires a different eligible reviewer, and business Admin fallback cannot approve its own authored version. Approval re-evaluates deterministic stale state before committing. Review state and stale state remain separate: a later knowledge or requirement change can make an approved version stale without rewriting review history.
+
 ## Provider boundaries
 
 - **Embedding:** OpenAI-compatible embedding provider, configured/default model `BAAI/bge-m3`, 1,024 dimensions.
@@ -163,7 +195,7 @@ Provider configuration is environment-driven. API keys, tokens, database credent
 - Explicit-negative approved evidence may produce a negative enterprise fact but cannot authorize a positive capability proposal.
 - The verifier is defense in depth and veto-only.
 - No orchestration retry, rewrite, or second retrieval occurs.
-- Draft persistence, review workflow, LangGraph orchestration, and frontend behavior are deferred.
+- LangGraph orchestration and frontend behavior are deferred. Solution persistence and technical review are implemented services and must remain the business authority when orchestration is added.
 
 ## Main code and regression references
 
@@ -177,7 +209,14 @@ Provider configuration is environment-driven. API keys, tokens, database credent
 - `apps/sales/services/solution_grounding.py`
 - `apps/sales/services/solution_grounding_prompt.py`
 - `apps/sales/services/solution_draft.py`
+- `apps/sales/services/solution_persistence.py`
+- `apps/sales/services/solution_review.py`
+- `apps/sales/api/solution_draft_views.py`
 - `apps/sales/tests/test_solution_admission.py`
 - `apps/sales/tests/test_solution_provenance_pipeline.py`
 - `apps/sales/tests/test_solution_proposal_only_verification.py`
 - `apps/sales/tests/test_solution_proposal_bounded_concurrency.py`
+- `apps/sales/tests/test_solution_persistence_service.py`
+- `apps/sales/tests/test_solution_review_service.py`
+- `apps/sales/tests/test_solution_review_concurrency.py`
+- `apps/sales/tests/test_solution_review_api.py`

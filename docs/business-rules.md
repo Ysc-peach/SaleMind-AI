@@ -67,7 +67,19 @@ Independent review is conditional rather than mandatory for every version:
 - Another user whose business role is `presales` must review that self-authored version as its Solution Reviewer.
 - Business `admin` retains fallback authority. Django `is_staff` and `is_superuser` flags never grant Solution review authority or bypass these rules.
 
-Reviewer assignment and review history belong to a specific Solution version and its review lifecycle, not to permanent Opportunity ownership. Phase 5.6a persists only the coarse `review_status`; reviewer assignment, review decisions, and transitions are reserved for Phase 5.6b.
+Reviewer assignment and review history belong to a specific Solution version and its review lifecycle, not to permanent Opportunity ownership. Each review attempt is a separate `SolutionReview` audit record. A Solution version exposes `review_status` only as the current projection: `DRAFT`, `PENDING_REVIEW`, `APPROVED`, or `NEEDS_REVISION`.
+
+The implemented state rules are:
+
+- Only a current, non-stale `DRAFT` can be submitted, producing one `PENDING` review and changing the projection to `PENDING_REVIEW` atomically.
+- The owning Sales user submits to the Opportunity's assigned Presales Owner. If none is assigned, submission fails closed rather than selecting a reviewer implicitly.
+- An eligible assigned Presales reviewer, or business Admin fallback who is not the version author, may decide a pending review. Sales cannot approve.
+- Approval rechecks deterministic stale/current state, records an immutable `APPROVED` decision, and changes the projection to `APPROVED` atomically.
+- Return records an immutable `RETURNED` decision with a required reason and non-blank comment, and changes the projection to `NEEDS_REVISION` atomically.
+- A Solution author cannot review their own version. `is_staff` and `is_superuser` do not bypass this rule or any business-role check.
+- At most one pending review exists for a Solution version. Completed review decisions, reviewer assignment, and Solution payload are not overwritten.
+- An independently assigned reviewer may view the exact Solution version assigned to them; that assignment does not grant visibility to the whole Opportunity or its other Solution versions.
+- Stale state and review status are independent. A historically approved version may later become stale without losing its approval record; a stale pending version cannot be approved.
 
 ## Solution return reasons
 

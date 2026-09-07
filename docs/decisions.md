@@ -138,13 +138,13 @@ This is a compact ADR-style log of decisions already represented by current code
 
 **Decision.** Technical approval belongs to a specific Solution version. The Presales Owner may approve a version initiated by AI, Sales, or another author, but a Presales Owner who creates or technically revises a version must not approve that same version. Another existing `presales` user acts as Solution Reviewer when independent review is required; business `admin` remains the fallback authority.
 
-**Context.** Customer and Opportunity ownership are long-lived, while authorship, reviewer assignment, and approval apply to one immutable Solution version. Phase 5.6a already stores version author provenance in `created_by` and a coarse `review_status`, but it has no reviewer relationship or review-history model.
+**Context.** Customer and Opportunity ownership are long-lived, while authorship, reviewer assignment, and approval apply to one immutable Solution version. `SolutionDraftRecord.created_by` records the version author, and `SolutionReview` records each reviewer assignment and decision.
 
 **Why.** Conditional separation of author and approver gives self-authored technical changes an independent check without imposing mandatory second review on every AI- or Sales-initiated solution.
 
 **Alternatives rejected.** A permanent `Opportunity.solution_reviewer`, mandatory two-stage review for every version, allowing Presales to approve their own technical revision, introducing a new reviewer business role, and using Django staff/superuser flags as business approval authority.
 
-**Consequences.** Phase 5.6b should associate reviewer assignment and append-only review history with `SolutionDraftRecord`, not Opportunity. Existing `presales` users fill the reviewer responsibility. Approval means internal technical approval for external solution communication; it does not mean customer signature, Opportunity success, or permanent immutability.
+**Consequences.** Reviewer assignment and append-only review history are associated with `SolutionDraftRecord`, not Opportunity. Existing `presales` users fill the reviewer responsibility. Self-review is prohibited even for business Admin authors. Approval means internal technical approval for external solution communication; it does not mean customer signature, Opportunity success, or permanent freshness.
 
 ## D-013 — Customer-information and technical-revision returns are distinct
 
@@ -156,4 +156,28 @@ This is a compact ADR-style log of decisions already represented by current code
 
 **Alternatives rejected.** One generic return reason, asking Sales to perform technical design, or mutating a persisted Requirement Analysis or Solution version in place.
 
-**Consequences.** `CUSTOMER_INFO_REQUIRED` leads Sales to collect facts, create an updated immutable Requirement Analysis, stale the older Solution, and generate a new version. `TECHNICAL_REVISION_REQUIRED` leads Presales to create a revised Solution version. The existing coarse `NEEDS_REVISION` status may remain a lifecycle projection, while the durable review record preserves the exact return reason.
+**Consequences.** `CUSTOMER_INFO_REQUIRED` leads Sales to collect facts, create an updated immutable Requirement Analysis, stale the older Solution, and generate a new version. `TECHNICAL_REVISION_REQUIRED` leads Presales to create a revised Solution version. `NEEDS_REVISION` is the current lifecycle projection, while the durable review record preserves the exact return reason.
+
+## D-014 — Immutable versioned Solution persistence with durable provenance
+
+**Decision.** Persist each successful Solution as a new immutable `SolutionDraftRecord` version linked to one explicit Opportunity and one explicit `OpportunityRequirementAnalysis`, with citation history stored in `SolutionDraftProvenance` snapshots.
+
+**Context.** The in-memory `SolutionDraft` domain result was insufficient for history, review, or audit after knowledge reindexing. Requirement analyses and knowledge chunks have independent lifecycles, so persistence must retain exact generation inputs without copying the full analysis or depending on replaceable chunk rows.
+
+**Why.** Per-Opportunity versions preserve history; the explicit analysis foreign key prevents silent latest-snapshot substitution; durable Fact/document and chunk/index/hash/excerpt snapshots preserve evidence auditability after reindexing.
+
+**Alternatives rejected.** Mutating one Solution row in place, copying Requirement Analysis JSON into every Solution, defaulting to the latest analysis, foreign-keying provenance to replaceable `KnowledgeChunk`, and writing ORM records inside external model calls.
+
+**Consequences.** `generate_grounded_solution_draft` remains read-only. `generate_and_persist_solution_draft` invokes it outside a transaction, then performs final provenance validation, Opportunity locking, version allocation, and atomic record/provenance insertion in a short transaction. Migration `sales.0003_solution_draft_persistence` is applied in the real `salesmind` database.
+
+## D-015 — Transactional review state projection with immutable version history
+
+**Decision.** Keep `SolutionDraftRecord.review_status` as the current state projection and preserve every version-scoped review attempt as a separate `SolutionReview`. Keep stale state independent from review state.
+
+**Context.** Submit, approve, and return are concurrent business actions, while historical approvals must remain auditable even if requirements or grounding provenance later change.
+
+**Why.** A transactional projection makes current API state efficient, while protected, immutable review records preserve who submitted, who reviewed, the decision, reason, comment, and timestamps. Separating stale and review axes distinguishes historical approval from current factual fitness.
+
+**Alternatives rejected.** Directly patching review status, overwriting one mutable review row, deleting review history, coupling stale to `NEEDS_REVISION`, allowing self-review, and using Django staff/superuser flags as review authority.
+
+**Consequences.** The implemented service state machine is `DRAFT → PENDING_REVIEW → APPROVED` or `NEEDS_REVISION`. It uses short transactions, row locks, one-active-pending-review enforcement, action-specific permissions, self-review prohibition, and approval-time stale revalidation. Migration `sales.0004_solutionreview` is applied in the real `salesmind` database.
