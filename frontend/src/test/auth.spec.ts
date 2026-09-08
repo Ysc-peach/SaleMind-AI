@@ -80,4 +80,19 @@ describe('authentication', () => {
     expect(calls.filter(p=>p==='/protected/old')).toHaveLength(1)
     expect(calls.filter(p=>p==='/auth/refresh/')).toHaveLength(0)
   })
+  it('discards a late non-401 error from a replaced session',async()=>{
+    const auth=useAuthStore(); await auth.login('sales','synthetic')
+    let release:()=>void=()=>{}; const gate=new Promise<void>(r=>{release=r})
+    http.defaults.adapter=async config=>{
+      if(config.url==='/protected/conflict'){
+        await gate
+        throw new AxiosError('old-conflict','ERR_BAD_REQUEST',config,null,{data:{},status:409,statusText:'',headers:{},config})
+      }
+      return adapter(config)
+    }
+    const pending=http.get('/protected/conflict').catch(error=>error)
+    await new Promise(r=>setTimeout(r,0)); auth.logout(); await auth.login('sales','synthetic'); release()
+    expect((await pending).message).toBe('session_changed')
+    expect(calls.filter(path=>path==='/protected/conflict')).toHaveLength(0)
+  })
 })

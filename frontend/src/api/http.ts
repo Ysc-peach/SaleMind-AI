@@ -17,8 +17,8 @@ http.interceptors.response.use(response => {
   return response
 }, async error => {
   const config = error.config
+  if(config && auth && config._authSession !== auth.session()) throw new Error('session_changed')
   if (error.response?.status !== 401 || !config || !auth) throw error
-  if(config._authSession !== auth.session()) throw error
   if (config._authReplayed) { auth.expire(); throw error }
   config._authReplayed = true
   try {
