@@ -61,4 +61,23 @@ describe('authentication', () => {
     expect(calls.filter(p => p === '/protected/a')).toHaveLength(2)
     expect(calls.filter(p => p === '/auth/refresh/')).toHaveLength(1)
   })
+  it('does not refresh again when a late 401 used the previous token', async () => {
+    const auth=useAuthStore(); await auth.login('sales','synthetic')
+    http.defaults.adapter=async config=>{
+      if(config.url==='/protected/late'&&config.headers.Authorization==='Bearer test-access')await new Promise(r=>setTimeout(r,40))
+      return adapter(config)
+    }
+    await Promise.all([http.get('/protected/a'),http.get('/protected/late')])
+    expect(calls.filter(p=>p==='/auth/refresh/')).toHaveLength(1)
+  })
+  it('never replays an old session request under a new login',async()=>{
+    const auth=useAuthStore(); await auth.login('sales','synthetic')
+    let release:()=>void=()=>{}
+    const gate=new Promise<void>(r=>{release=r})
+    http.defaults.adapter=async config=>{if(config.url==='/protected/old')await gate;return adapter(config)}
+    const old=http.get('/protected/old').catch(()=>null)
+    await new Promise(r=>setTimeout(r,0)); auth.logout(); await auth.login('sales','synthetic'); release(); await old
+    expect(calls.filter(p=>p==='/protected/old')).toHaveLength(1)
+    expect(calls.filter(p=>p==='/auth/refresh/')).toHaveLength(0)
+  })
 })

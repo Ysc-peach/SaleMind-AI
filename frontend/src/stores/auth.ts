@@ -43,6 +43,6 @@ export const useAuthStore = defineStore('auth', () => {
     })()
     return restoring
   }
-  bindAuth({ token: () => accessToken.value, refresh, expire })
+  bindAuth({ token: () => accessToken.value, session: () => epoch, refresh, expire })
   return { accessToken, user, restored, login, logout, restore, refresh }
 })
