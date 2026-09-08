@@ -1,0 +1,39 @@
+.statement-type {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #edf3fc;
+  color: #245ab0;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.citation {
+  display: inline-block;
+  margin-right: 8px;
+  font-size: 13px;
+}
+
+.status-row {
+  margin-bottom: 12px;
+}
+
+.stale-badge,
+.current-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.stale-badge {
+  background: #fff3dc;
+  color: #8a5b00;
+}
+
+.current-badge {
+  background: #eaf7ef;
+  color: #247044;
+}

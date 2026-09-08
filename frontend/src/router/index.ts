@@ -7,6 +7,7 @@ export const router = createRouter({ history: createWebHistory(), routes: [
     { path: '', redirect: '/opportunities' },
     { path: 'opportunities', component: () => import('../views/OpportunityListView.vue') },
     { path: 'opportunities/:id(\\d+)', component: () => import('../views/OpportunityWorkspaceView.vue') },
+    { path: 'solutions/:id(\\d+)', component: () => import('../views/SolutionDetailView.vue') },
   ] },
   { path: '/:pathMatch(.*)*', redirect: '/opportunities' },
 ] })
