@@ -47,6 +47,11 @@ from apps.sales.services.solution_schema import (
     SolutionStatement,
     SolutionStatementType,
 )
+from apps.sales.services.solution_payloads import (
+    SolutionPayloadError,
+    solution_draft_v1_from_payload,
+    solution_draft_v1_to_payload,
+)
 
 
 class SolutionPersistenceError(Exception):
@@ -59,86 +64,18 @@ class SolutionPersistenceError(Exception):
 
 def solution_draft_to_payload(draft: SolutionDraft) -> dict:
     """Map the frozen domain value to a stable JSON-compatible structure."""
-
-    if not isinstance(draft, SolutionDraft):
+    try:
+        return solution_draft_v1_to_payload(draft)
+    except SolutionPayloadError:
         _invalid_payload()
-    payload = {
-        "title": draft.title,
-        "executive_summary": [_statement_to_payload(item) for item in draft.executive_summary],
-        "solution_sections": [
-            {
-                "key": section.key,
-                "title": section.title,
-                "statements": [_statement_to_payload(item) for item in section.statements],
-            }
-            for section in draft.solution_sections
-        ],
-        "assumptions": [
-            {
-                "text": item.text,
-                "related_fields": [field.value for field in item.related_fields],
-            }
-            for item in draft.assumptions
-        ],
-    }
-    if solution_draft_from_payload(payload) != draft:
-        _invalid_payload()
-    return payload
 
 
 def solution_draft_from_payload(payload: object) -> SolutionDraft:
     """Recreate a domain value only from the canonical persistence schema."""
-
-    _object(payload, {"title", "executive_summary", "solution_sections", "assumptions"})
-    title = _text(payload["title"])
-    summary = _statements(payload["executive_summary"], maximum=8)
-    sections_payload = payload["solution_sections"]
-    if not isinstance(sections_payload, list) or len(sections_payload) != len(SECTION_DEFINITIONS):
+    try:
+        return solution_draft_v1_from_payload(payload)
+    except SolutionPayloadError:
         _invalid_payload()
-    sections = []
-    for value, (expected_key, expected_title) in zip(
-        sections_payload, SECTION_DEFINITIONS, strict=True
-    ):
-        _object(value, {"key", "title", "statements"})
-        if value["key"] != expected_key or value["title"] != expected_title:
-            _invalid_payload()
-        sections.append(
-            SolutionSection(
-                key=expected_key,
-                title=expected_title,
-                statements=_statements(value["statements"], maximum=12),
-            )
-        )
-    assumptions_payload = payload["assumptions"]
-    if not isinstance(assumptions_payload, list) or len(assumptions_payload) > 10:
-        _invalid_payload()
-    assumptions = []
-    for value in assumptions_payload:
-        _object(value, {"text", "related_fields"})
-        fields = value["related_fields"]
-        if (
-            not isinstance(fields, list)
-            or not fields
-            or len(fields) != len(set(fields))
-            or any(
-                not isinstance(field, str)
-                or field not in RequirementDimension._value2member_map_
-                for field in fields
-            )
-        ):
-            _invalid_payload()
-        assumptions.append(
-            SolutionAssumption(
-                text=_text(value["text"]),
-                related_fields=tuple(RequirementDimension(field) for field in fields),
-            )
-        )
-    return SolutionDraft(
-        title=title,
-        executive_summary=summary,
-        solution_sections=tuple(sections),
-        assumptions=tuple(assumptions),
-    )
 
 
 def generate_and_persist_solution_draft(
