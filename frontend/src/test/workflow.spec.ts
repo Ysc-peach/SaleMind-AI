@@ -14,7 +14,7 @@ let draft: any, history: any[], calls: {url:string;method:string;body:any;params
 beforeEach(() => {
   setActivePinia(createPinia()); const auth = useAuthStore(); auth.restored = true
   auth.user = { id:1, username:'sales', role:'sales', email:'', first_name:'', last_name:'' }
-  draft = { id:21, opportunity:7, analysis_id:14, version:1, title:'合成技术方案', review_status:'draft', is_stale:false, stale_reasons:[], created_by:1, created_at:snapshot.created_at, draft_payload:{ title:'合成技术方案', executive_summary:[{type:'enterprise_fact', text:'支持私有化部署', citations:['K1']}], solution_sections:[], assumptions:[] }, provenance:[{citation_label:'K1', source_document_id:5, source_excerpt:'支持私有化部署', source_content_hash:'INTERNAL_HASH', source_index_run_id:'INTERNAL_RUN'}] }
+  draft = { id:21, opportunity:7, analysis_id:14, version:1, schema_version:1, title:'合成技术方案', review_status:'draft', is_stale:false, stale_reasons:[], created_by:1, created_at:snapshot.created_at, draft_payload:{ title:'合成技术方案', executive_summary:[{type:'enterprise_fact', text:'支持私有化部署', citations:['K1']}], solution_sections:[], assumptions:[] }, provenance:[{citation_label:'K1', source_document_id:5, source_excerpt:'支持私有化部署', source_content_hash:'INTERNAL_HASH', source_index_run_id:'INTERNAL_RUN'}] }
   history = []; calls = []; conflictAction=false; analysisTotal=1; opportunityContext={id:7,sales_owner:1,presales_owner:2}
   http.defaults.adapter = async config => {
     const url = config.url!, method = config.method!, body = config.data ? JSON.parse(config.data) : undefined
@@ -82,6 +82,13 @@ it('renders structured content and scoped source, without internal provenance id
   const w=await mountPage(SolutionDetail)
   expect(w.text()).toContain('支持私有化部署'); expect(w.text()).toContain('草稿'); expect(w.text()).toContain('文档 #5')
   expect(w.text()).not.toContain('INTERNAL_HASH'); expect(w.text()).not.toContain('INTERNAL_RUN'); w.unmount()
+})
+it('fails closed with a safe message for an unsupported persisted schema',async()=>{
+  draft.schema_version=99
+  const w=await mountPage(SolutionDetail)
+  expect(w.get('[data-test="unsupported-schema"]').text()).toContain('不支持的结构版本')
+  expect(w.text()).not.toContain('[object Object]')
+  w.unmount()
 })
 it('stale draft renders reasons and cannot offer submit',async()=>{
   draft.is_stale=true; draft.stale_reasons=['newer_requirement_analysis']
