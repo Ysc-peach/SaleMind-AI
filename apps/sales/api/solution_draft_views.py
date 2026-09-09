@@ -91,6 +91,7 @@ class SolutionDraftCollectionViewSet(OpportunityVisibilityMixin, viewsets.Generi
                 opportunity,
                 analysis,
                 created_by=request.user,
+                schema_version=2,
             )
         except SolutionPersistenceError as exc:
             raise SolutionDraftAPIError() from exc
@@ -119,7 +120,7 @@ class SolutionDraftDetailViewSet(viewsets.GenericViewSet):
         return (
             visible_solution_drafts_for(self.request.user)
             .select_related("created_by", "requirement_analysis", "opportunity")
-            .prefetch_related("provenance_entries")
+            .prefetch_related("provenance_entries__source_document")
         )
 
     def retrieve_draft(self, request, *args, **kwargs):

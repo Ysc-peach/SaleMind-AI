@@ -33,6 +33,7 @@ class SolutionDraftListSerializer(serializers.ModelSerializer):
             "opportunity",
             "analysis_id",
             "version",
+            "schema_version",
             "title",
             "review_status",
             "is_stale",
@@ -66,13 +67,49 @@ class SolutionDraftDetailSerializer(SolutionDraftListSerializer):
     provenance = SolutionDraftProvenanceSerializer(
         source="provenance_entries", many=True, read_only=True
     )
+    source_registry = serializers.SerializerMethodField()
+    claim_sources = serializers.SerializerMethodField()
 
     class Meta(SolutionDraftListSerializer.Meta):
         fields = SolutionDraftListSerializer.Meta.fields + (
             "draft_payload",
             "provenance",
+            "source_registry",
+            "claim_sources",
         )
         read_only_fields = fields
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if instance.schema_version == 1:
+            data.pop("source_registry", None)
+            data.pop("claim_sources", None)
+        elif instance.schema_version == 2:
+            data.pop("provenance", None)
+        else:
+            raise serializers.ValidationError("Unsupported Solution Draft schema version.")
+        return data
+
+    def get_source_registry(self, instance):
+        registry = {}
+        for entry in instance.provenance_entries.all():
+            registry.setdefault(entry.citation_label, {
+                "source_id": entry.citation_label,
+                "document_id": entry.source_document_id,
+                "document_title": entry.source_document.title,
+                "source_excerpt": entry.source_excerpt,
+            })
+        return list(registry.values())
+
+    def get_claim_sources(self, instance):
+        result = {}
+        for entry in instance.provenance_entries.all():
+            if not entry.claim_id:
+                raise serializers.ValidationError("V2 claim provenance is incomplete.")
+            labels = result.setdefault(entry.claim_id, [])
+            if entry.citation_label not in labels:
+                labels.append(entry.citation_label)
+        return result
 
 
 class SolutionReviewSubmitSerializer(serializers.Serializer):

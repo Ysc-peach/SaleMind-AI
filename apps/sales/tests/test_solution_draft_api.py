@@ -126,7 +126,7 @@ def test_authorized_roles_can_list_and_retrieve_solution_versions(api_context, a
     item = list_response.json()["results"][0]
     assert set(item) == {
         "id", "opportunity", "analysis_id", "version", "title", "review_status",
-        "is_stale", "stale_reasons", "created_by", "created_at",
+        "schema_version", "is_stale", "stale_reasons", "created_by", "created_at",
     }
     assert "draft_payload" not in item
     assert "provenance" not in item
@@ -168,6 +168,7 @@ def test_create_requires_explicit_analysis_and_passes_exact_record_to_service(
             opportunity_id=opportunity.pk,
             analysis_id=analysis.pk,
             created_by_id=created_by.pk,
+            schema_version=kwargs.get("schema_version"),
         )
         return api_context["record"]
 
@@ -190,6 +191,7 @@ def test_create_requires_explicit_analysis_and_passes_exact_record_to_service(
         "opportunity_id": api_context["opportunity"].pk,
         "analysis_id": api_context["analysis"].pk,
         "created_by_id": api_context["owner"].pk,
+        "schema_version": 2,
     }
 
 
