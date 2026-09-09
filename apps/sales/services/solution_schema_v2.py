@@ -12,6 +12,20 @@ from apps.sales.services.requirement_analysis import (
 from apps.sales.services.solution_errors import SolutionDraftError, SolutionDraftErrorCode
 
 
+_FIELD_LABELS = {
+    RequirementDimension.BUSINESS_GOAL: "业务目标",
+    RequirementDimension.USE_SCENARIO: "使用场景",
+    RequirementDimension.USER_SCALE: "使用人数",
+    RequirementDimension.DEPLOYMENT_REQUIREMENT: "部署要求",
+    RequirementDimension.DATA_SECURITY_REQUIREMENT: "数据安全要求",
+    RequirementDimension.EXISTING_ENVIRONMENT: "现有环境",
+    RequirementDimension.INTEGRATION_REQUIREMENT: "集成要求",
+    RequirementDimension.TIMELINE: "时间要求",
+    RequirementDimension.BUDGET: "预算",
+    RequirementDimension.TECHNICAL_CONSTRAINTS: "技术约束",
+}
+
+
 class SolutionClaimTypeV2(StrEnum):
     CUSTOMER_FACT = "customer_fact"
     ENTERPRISE_FACT = "enterprise_fact"
@@ -183,6 +197,246 @@ class SolutionDraftV2:
     assumption_claim_ids: tuple[str, ...]
     open_questions: tuple[OpenQuestionV2, ...]
     out_of_scope: tuple[ScopeItemV2, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class V2ClaimProvenanceBinding:
+    claim_id: str
+    citation_label: str
+    fact_id: int
+
+
+@dataclass(frozen=True, slots=True)
+class V2DeterministicContent:
+    claims: tuple[SolutionAtomicClaimV2, ...]
+    customer_context: CustomerContextV2
+    enterprise_claim_ids: tuple[str, ...]
+    unresolved_claim_ids: tuple[str, ...]
+    assumption_claim_ids: tuple[str, ...]
+    open_questions: tuple[OpenQuestionV2, ...]
+    provenance_bindings: tuple[V2ClaimProvenanceBinding, ...]
+
+    def claim_by_id(self, claim_id: str) -> SolutionAtomicClaimV2:
+        for claim in self.claims:
+            if claim.claim_id == claim_id:
+                return claim
+        _invalid()
+
+
+@dataclass(frozen=True, slots=True)
+class _DeterministicClaimSeed:
+    statement_type: SolutionClaimTypeV2
+    text: str
+    citations: tuple[str, ...] = ()
+    related_requirement_fields: tuple[RequirementDimension, ...] = ()
+    fact_ids_by_citation: tuple[tuple[str, int], ...] = ()
+
+
+def build_v2_deterministic_items(analysis, admission) -> V2DeterministicContent:
+    """Create all non-proposal V2 claims from typed analysis and admission only."""
+
+    from apps.knowledge.models import EnterpriseGroundingFactStatus
+    from apps.knowledge.services.grounding_facts import GROUNDING_SUBJECT_REGISTRY
+    from apps.sales.services.requirement_analysis import OpportunityRequirementAnalysis
+    from apps.sales.services.solution_admission import GroundingAdmission
+    from apps.sales.services.solution_schema import (
+        SolutionStatementType,
+        build_solution_unresolved_items,
+    )
+
+    if not isinstance(analysis, OpportunityRequirementAnalysis) or not isinstance(
+        admission, GroundingAdmission
+    ):
+        _invalid()
+
+    seeds: list[_DeterministicClaimSeed] = []
+    requirement_seed_indexes: dict[RequirementDimension, int] = {}
+    unresolved_by_field = {
+        item.field: item for item in build_solution_unresolved_items(analysis)
+    }
+    for field in RequirementDimension:
+        value = getattr(analysis.requirements, field.value)
+        requirement_seed_indexes[field] = len(seeds)
+        if value.status is RequirementStatus.KNOWN:
+            if not isinstance(value.value, str) or not value.value.strip():
+                _invalid()
+            seeds.append(
+                _DeterministicClaimSeed(
+                    statement_type=SolutionClaimTypeV2.CUSTOMER_FACT,
+                    text=f"{_FIELD_LABELS[field]}：{value.value}。",
+                    related_requirement_fields=(field,),
+                )
+            )
+        else:
+            unresolved = unresolved_by_field.get(field)
+            if unresolved is None:
+                _invalid()
+            seeds.append(
+                _DeterministicClaimSeed(
+                    statement_type=SolutionClaimTypeV2.UNRESOLVED,
+                    text=unresolved.text,
+                    related_requirement_fields=(field,),
+                )
+            )
+
+    provenance_by_claim_identity = {
+        id(item.claim): item for item in admission.enterprise_provenance
+    }
+    decision_by_subject = {
+        item.subject_key: item for item in admission.enterprise_decisions
+    }
+    if len(decision_by_subject) != len(admission.enterprise_decisions):
+        _invalid()
+
+    enterprise_seed_indexes: list[int] = []
+    enterprise_unresolved_seed_indexes: list[int] = []
+    seen_enterprise_fact_ids: set[int] = set()
+    for v1_claim in admission.claims.claims:
+        if v1_claim.statement_type is not SolutionStatementType.ENTERPRISE_FACT:
+            continue
+        provenance = provenance_by_claim_identity.get(id(v1_claim))
+        if (
+            provenance is None
+            or provenance.fact_id in seen_enterprise_fact_ids
+            or provenance.subject_key not in decision_by_subject
+        ):
+            _invalid()
+        decision = decision_by_subject[provenance.subject_key]
+        status = EnterpriseGroundingFactStatus(decision.status)
+        if status not in {
+            EnterpriseGroundingFactStatus.CONFIRMED_SUPPORTED,
+            EnterpriseGroundingFactStatus.CONFIRMED_UNSUPPORTED,
+        } or provenance.fact_id not in decision.enterprise_fact_ids:
+            _invalid()
+        seen_enterprise_fact_ids.add(provenance.fact_id)
+        enterprise_seed_indexes.append(len(seeds))
+        seeds.append(
+            _DeterministicClaimSeed(
+                statement_type=SolutionClaimTypeV2.ENTERPRISE_FACT,
+                text=v1_claim.text,
+                citations=v1_claim.citations,
+                fact_ids_by_citation=tuple(
+                    (label, provenance.fact_id) for label in v1_claim.citations
+                ),
+            )
+        )
+
+    if seen_enterprise_fact_ids != {
+        item.fact_id for item in admission.enterprise_provenance
+    }:
+        _invalid()
+
+    for decision in admission.enterprise_decisions:
+        status = EnterpriseGroundingFactStatus(decision.status)
+        if status not in {
+            EnterpriseGroundingFactStatus.UNCONFIRMED,
+            EnterpriseGroundingFactStatus.CONFLICT,
+        }:
+            continue
+        label = GROUNDING_SUBJECT_REGISTRY.get(decision.subject_key)
+        if label is None:
+            _invalid()
+        text = (
+            f"当前企业资料对{label}存在冲突，需要人工或售前确认。"
+            if status is EnterpriseGroundingFactStatus.CONFLICT
+            else f"当前企业资料未确认{label}，需要进一步确认。"
+        )
+        enterprise_unresolved_seed_indexes.append(len(seeds))
+        seeds.append(
+            _DeterministicClaimSeed(
+                statement_type=SolutionClaimTypeV2.UNRESOLVED,
+                text=text,
+            )
+        )
+
+    assumption_seed_indexes: list[int] = []
+    for field in RequirementDimension:
+        value = getattr(analysis.requirements, field.value)
+        if value.status is RequirementStatus.KNOWN:
+            continue
+        assumption_seed_indexes.append(len(seeds))
+        seeds.append(
+            _DeterministicClaimSeed(
+                statement_type=SolutionClaimTypeV2.ASSUMPTION,
+                text=f"方案实施以前置确认{_FIELD_LABELS[field]}为条件。",
+                related_requirement_fields=(field,),
+            )
+        )
+
+    claims = tuple(
+        SolutionAtomicClaimV2(
+            claim_id=f"C{index:04d}",
+            statement_type=seed.statement_type,
+            text=seed.text,
+            citations=seed.citations,
+            related_requirement_fields=seed.related_requirement_fields,
+        )
+        for index, seed in enumerate(seeds, start=1)
+    )
+    claim_ids = tuple(item.claim_id for item in claims)
+    requirement_refs = tuple(
+        CustomerRequirementRefV2(
+            field=field,
+            status=getattr(analysis.requirements, field.value).status,
+            claim_ids=(claim_ids[requirement_seed_indexes[field]],),
+        )
+        for field in RequirementDimension
+    )
+    open_questions = tuple(
+        OpenQuestionV2(
+            question_id=f"Q{index:03d}",
+            requirement_field=field,
+            requirement_status=getattr(analysis.requirements, field.value).status,
+            unresolved_claim_id=claim_ids[requirement_seed_indexes[field]],
+        )
+        for index, field in enumerate(
+            (
+                field
+                for field in RequirementDimension
+                if getattr(analysis.requirements, field.value).status
+                is not RequirementStatus.KNOWN
+            ),
+            start=1,
+        )
+    )
+    bindings = tuple(
+        V2ClaimProvenanceBinding(
+            claim_id=claim_ids[seed_index],
+            citation_label=label,
+            fact_id=fact_id,
+        )
+        for seed_index in enterprise_seed_indexes
+        for label, fact_id in seeds[seed_index].fact_ids_by_citation
+    )
+    customer_ids = tuple(
+        claim_ids[index]
+        for field, index in requirement_seed_indexes.items()
+        if getattr(analysis.requirements, field.value).status is RequirementStatus.KNOWN
+    )
+    requirement_unresolved_ids = tuple(
+        claim_ids[index]
+        for field, index in requirement_seed_indexes.items()
+        if getattr(analysis.requirements, field.value).status
+        is not RequirementStatus.KNOWN
+    )
+    return V2DeterministicContent(
+        claims=claims,
+        customer_context=CustomerContextV2(
+            confirmed_claim_ids=customer_ids,
+            unresolved_claim_ids=requirement_unresolved_ids,
+            requirement_fields=requirement_refs,
+        ),
+        enterprise_claim_ids=tuple(claim_ids[index] for index in enterprise_seed_indexes),
+        unresolved_claim_ids=(
+            requirement_unresolved_ids
+            + tuple(claim_ids[index] for index in enterprise_unresolved_seed_indexes)
+        ),
+        assumption_claim_ids=tuple(
+            claim_ids[index] for index in assumption_seed_indexes
+        ),
+        open_questions=open_questions,
+        provenance_bindings=bindings,
+    )
 
 
 _CLAIM_ID = re.compile(r"C[0-9]{4,}")
