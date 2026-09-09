@@ -63,6 +63,19 @@ class SolutionDraftProvenanceSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class _SolutionDraftV1DetailSerializer(SolutionDraftListSerializer):
+    provenance = SolutionDraftProvenanceSerializer(
+        source="provenance_entries", many=True, read_only=True
+    )
+
+    class Meta(SolutionDraftListSerializer.Meta):
+        fields = SolutionDraftListSerializer.Meta.fields + (
+            "draft_payload",
+            "provenance",
+        )
+        read_only_fields = fields
+
+
 class SolutionDraftDetailSerializer(SolutionDraftListSerializer):
     provenance = SolutionDraftProvenanceSerializer(
         source="provenance_entries", many=True, read_only=True
@@ -80,14 +93,15 @@ class SolutionDraftDetailSerializer(SolutionDraftListSerializer):
         read_only_fields = fields
 
     def to_representation(self, instance):
-        data = super().to_representation(instance)
         if instance.schema_version == 1:
-            data.pop("source_registry", None)
-            data.pop("claim_sources", None)
-        elif instance.schema_version == 2:
-            data.pop("provenance", None)
-        else:
+            return _SolutionDraftV1DetailSerializer(
+                instance,
+                context=self.context,
+            ).data
+        if instance.schema_version != 2:
             raise serializers.ValidationError("Unsupported Solution Draft schema version.")
+        data = super().to_representation(instance)
+        data.pop("provenance", None)
         return data
 
     def get_source_registry(self, instance):

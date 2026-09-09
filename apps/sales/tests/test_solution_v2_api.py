@@ -89,6 +89,101 @@ def test_v1_and_v2_list_items_expose_authoritative_schema_version(api_context, v
     assert all("draft_payload" not in item for item in response.json()["results"])
 
 
+def _add_historical_v1_provenance(api_context):
+    owner = api_context["owner"]
+    document = KnowledgeDocument.objects.create(
+        title="Historical V1 source",
+        document_type="technical",
+        source_file="knowledge/documents/v1-source.md",
+        original_filename="v1-source.md",
+        mime_type="text/markdown",
+        file_size=28,
+        checksum_sha256="c" * 64,
+        status="ready",
+        chunk_count=1,
+        embedding_provider="legacy",
+        embedding_model="legacy",
+        embedding_dimensions=1024,
+        last_indexed_at=timezone.now(),
+        last_index_run_id=uuid4(),
+        created_by=owner,
+    )
+    excerpt = "历史 V1 来源快照。"
+    fact = EnterpriseGroundingFact.objects.create(
+        subject_key="private_deployment",
+        statement=excerpt,
+        status="confirmed_supported",
+        source_document=document,
+        source_chunk_id=700,
+        source_excerpt=excerpt,
+        source_index_run_id=document.last_index_run_id,
+        source_content_hash="d" * 64,
+        approval_status="approved",
+        approved_by=owner,
+        approved_at=timezone.now(),
+    )
+    return SolutionDraftProvenance.objects.create(
+        solution_draft=api_context["record"],
+        statement_path="solution_sections.deployment.statements[0]",
+        claim_id=None,
+        citation_label="S1",
+        enterprise_grounding_fact=fact,
+        source_document=document,
+        source_chunk_id=fact.source_chunk_id,
+        source_index_run_id=fact.source_index_run_id,
+        source_content_hash=fact.source_content_hash,
+        source_excerpt=fact.source_excerpt,
+    )
+
+
+def test_v1_detail_accepts_historical_null_claim_id_without_v2_projection(api_context):
+    provenance = _add_historical_v1_provenance(api_context)
+
+    response = client_for(api_context["owner"]).get(
+        reverse(
+            "solution-draft-detail",
+            kwargs={"solution_id": api_context["record"].pk},
+        )
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["schema_version"] == 1
+    assert body["draft_payload"] == api_context["record"].draft_payload
+    assert body["provenance"][0]["citation_label"] == provenance.citation_label
+    assert "source_registry" not in body
+    assert "claim_sources" not in body
+
+
+def test_v1_detail_does_not_evaluate_v2_only_projection_getters(monkeypatch, api_context):
+    from apps.sales.api.solution_draft_serializers import SolutionDraftDetailSerializer
+
+    _add_historical_v1_provenance(api_context)
+
+    def v2_only_projection_called(*args, **kwargs):
+        pytest.fail("V1 detail must not evaluate V2-only provenance projections")
+
+    monkeypatch.setattr(
+        SolutionDraftDetailSerializer,
+        "get_source_registry",
+        v2_only_projection_called,
+    )
+    monkeypatch.setattr(
+        SolutionDraftDetailSerializer,
+        "get_claim_sources",
+        v2_only_projection_called,
+    )
+
+    response = client_for(api_context["owner"]).get(
+        reverse(
+            "solution-draft-detail",
+            kwargs={"solution_id": api_context["record"].pk},
+        )
+    )
+
+    assert response.status_code == 200
+
+
 def test_v2_detail_derives_deduplicated_claim_sources_from_durable_provenance(
     api_context, v2_api_record
 ):
@@ -108,6 +203,19 @@ def test_v2_detail_derives_deduplicated_claim_sources_from_durable_provenance(
     }]
     assert body["claim_sources"] == {"C0002": ["S1"], "C0003": ["S1"]}
     assert "provenance" not in body
+
+
+def test_v2_detail_with_incomplete_claim_provenance_still_fails_closed(
+    api_context, v2_api_record
+):
+    v2_api_record.provenance_entries.filter(claim_id="C0002").update(claim_id=None)
+
+    response = client_for(api_context["owner"]).get(
+        reverse("solution-draft-detail", kwargs={"solution_id": v2_api_record.pk})
+    )
+
+    assert response.status_code == 400
+    assert response.json() == ["V2 claim provenance is incomplete."]
 
 
 def test_v2_business_detail_omits_internal_provenance_and_provider_data(
