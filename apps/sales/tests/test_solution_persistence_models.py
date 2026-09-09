@@ -75,6 +75,18 @@ def test_solution_record_enums_and_defaults_are_fixed(persisted_context):
     assert record.stale_reasons == []
 
 
+def test_historical_solution_record_defaults_to_schema_version_one(persisted_context):
+    """Dropping the model default would misclassify every historical V1 row."""
+    from apps.sales.models import SolutionDraftRecord
+
+    owner, opportunity, analysis = persisted_context
+    record = SolutionDraftRecord.objects.create(
+        **record_values(owner, opportunity, analysis)
+    )
+
+    assert record.schema_version == 1
+
+
 def test_solution_versions_are_unique_per_opportunity(persisted_context):
     from apps.sales.models import SolutionDraftRecord
 
@@ -119,6 +131,7 @@ def test_solution_record_rejects_nonpositive_version(persisted_context):
 @pytest.mark.parametrize(
     "field,new_value",
     [
+        ("schema_version", 2),
         ("version", 2),
         ("title", "changed"),
         ("draft_payload", {"changed": True}),
@@ -176,9 +189,122 @@ def test_provenance_has_snapshot_not_replaceable_chunk_foreign_key(persisted_con
         "source_index_run_id",
         "source_content_hash",
         "source_excerpt",
+        "claim_id",
     } <= field_names
     assert "knowledge.KnowledgeChunk" not in foreign_targets
     assert SolutionDraftProvenance._meta.get_field("enterprise_grounding_fact").null is False
+    assert SolutionDraftProvenance._meta.get_field("claim_id").null is True
+
+
+def test_v1_provenance_allows_null_claim_id(persisted_context):
+    """Historical V1 provenance has no stable claim identity and remains valid."""
+    from apps.knowledge.models import EnterpriseGroundingFact, KnowledgeDocument
+    from apps.sales.models import SolutionDraftProvenance, SolutionDraftRecord
+
+    owner, opportunity, analysis = persisted_context
+    document = KnowledgeDocument.objects.create(
+        title="V1 source",
+        document_type="technical",
+        source_file="knowledge/documents/v1-source.md",
+        original_filename="v1-source.md",
+        mime_type="text/markdown",
+        file_size=10,
+        checksum_sha256="c" * 64,
+        status="ready",
+        chunk_count=1,
+        embedding_provider="fake",
+        embedding_model="fake-model",
+        embedding_dimensions=1024,
+        last_indexed_at=datetime.now(datetime_timezone.utc),
+        last_index_run_id=uuid4(),
+        created_by=owner,
+    )
+    fact = EnterpriseGroundingFact.objects.create(
+        subject_key="v1-private-deployment",
+        statement="V1 evidence.",
+        status="confirmed_supported",
+        source_document=document,
+        source_chunk_id=8,
+        source_excerpt="V1 evidence.",
+        source_index_run_id=document.last_index_run_id,
+        source_content_hash="d" * 64,
+        approval_status="approved",
+        approved_by=owner,
+        approved_at=datetime.now(datetime_timezone.utc),
+    )
+    record = SolutionDraftRecord.objects.create(
+        **record_values(owner, opportunity, analysis)
+    )
+
+    provenance = SolutionDraftProvenance.objects.create(
+        solution_draft=record,
+        claim_id=None,
+        statement_path="solution_sections.deployment.statements[0]",
+        citation_label="S1",
+        enterprise_grounding_fact=fact,
+        source_document=document,
+        source_chunk_id=fact.source_chunk_id,
+        source_index_run_id=fact.source_index_run_id,
+        source_content_hash=fact.source_content_hash,
+        source_excerpt=fact.source_excerpt,
+    )
+
+    assert provenance.claim_id is None
+
+
+def test_provenance_rejects_blank_non_null_claim_id(persisted_context):
+    """A present V2 claim identifier must identify an actual atomic claim."""
+    from apps.knowledge.models import EnterpriseGroundingFact, KnowledgeDocument
+    from apps.sales.models import SolutionDraftProvenance, SolutionDraftRecord
+
+    owner, opportunity, analysis = persisted_context
+    document = KnowledgeDocument.objects.create(
+        title="V2 source",
+        document_type="technical",
+        source_file="knowledge/documents/v2-source.md",
+        original_filename="v2-source.md",
+        mime_type="text/markdown",
+        file_size=10,
+        checksum_sha256="e" * 64,
+        status="ready",
+        chunk_count=1,
+        embedding_provider="fake",
+        embedding_model="fake-model",
+        embedding_dimensions=1024,
+        last_indexed_at=datetime.now(datetime_timezone.utc),
+        last_index_run_id=uuid4(),
+        created_by=owner,
+    )
+    fact = EnterpriseGroundingFact.objects.create(
+        subject_key="v2-private-deployment",
+        statement="V2 evidence.",
+        status="confirmed_supported",
+        source_document=document,
+        source_chunk_id=9,
+        source_excerpt="V2 evidence.",
+        source_index_run_id=document.last_index_run_id,
+        source_content_hash="f" * 64,
+        approval_status="approved",
+        approved_by=owner,
+        approved_at=datetime.now(datetime_timezone.utc),
+    )
+    record = SolutionDraftRecord.objects.create(
+        **record_values(owner, opportunity, analysis)
+    )
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        SolutionDraftProvenance.objects.create(
+            solution_draft=record,
+            claim_id="",
+            statement_path="items.C0001",
+            citation_label="S1",
+            enterprise_grounding_fact=fact,
+            source_document=document,
+            source_chunk_id=fact.source_chunk_id,
+            source_index_run_id=fact.source_index_run_id,
+            source_content_hash=fact.source_content_hash,
+            source_excerpt=fact.source_excerpt,
+        )
 
 
 def test_solution_and_provenance_audit_relations_are_protected(persisted_context):

@@ -241,6 +241,11 @@ class SolutionDraftRecord(models.Model):
         blank=True,
         editable=False,
     )
+    schema_version = models.PositiveSmallIntegerField(
+        _("方案结构版本"),
+        default=1,
+        editable=False,
+    )
     review_status = models.CharField(
         _("审核状态"),
         max_length=24,
@@ -266,6 +271,7 @@ class SolutionDraftRecord(models.Model):
         "draft_payload",
         "generation_metadata",
         "generation_idempotency_key",
+        "schema_version",
         "created_by_id",
     )
     _LIFECYCLE_FIELDS = frozenset(
@@ -287,6 +293,10 @@ class SolutionDraftRecord(models.Model):
             models.CheckConstraint(
                 condition=models.Q(version__gte=1),
                 name="sales_solution_version_positive",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(schema_version__in=(1, 2)),
+                name="sales_solution_schema_version_valid",
             ),
             models.CheckConstraint(
                 condition=models.Q(review_status__in=SolutionReviewStatus.values),
@@ -481,6 +491,13 @@ class SolutionDraftProvenance(models.Model):
         verbose_name=_("方案草稿版本"),
     )
     statement_path = models.CharField(_("陈述路径"), max_length=255)
+    claim_id = models.CharField(
+        _("原子声明 ID"),
+        max_length=64,
+        null=True,
+        blank=True,
+        editable=False,
+    )
     citation_label = models.CharField(_("引用标签"), max_length=32)
     enterprise_grounding_fact = models.ForeignKey(
         "knowledge.EnterpriseGroundingFact",
@@ -516,6 +533,13 @@ class SolutionDraftProvenance(models.Model):
                 name="sales_solution_statement_path_nonempty",
             ),
             models.CheckConstraint(
+                condition=(
+                    models.Q(claim_id__isnull=True)
+                    | models.Q(claim_id__regex=r"\S")
+                ),
+                name="sales_solution_claim_id_nonempty",
+            ),
+            models.CheckConstraint(
                 condition=models.Q(citation_label__regex=r"^S[1-9][0-9]*$"),
                 name="sales_solution_citation_label_valid",
             ),
@@ -528,6 +552,10 @@ class SolutionDraftProvenance(models.Model):
             models.Index(
                 fields=["enterprise_grounding_fact"],
                 name="sales_solprov_fact_idx",
+            ),
+            models.Index(
+                fields=["solution_draft", "claim_id"],
+                name="sales_solprov_claim_idx",
             ),
         ]
         verbose_name = _("解决方案引用来源")
