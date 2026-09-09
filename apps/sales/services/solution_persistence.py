@@ -49,9 +49,11 @@ from apps.sales.services.solution_schema import (
 )
 from apps.sales.services.solution_payloads import (
     SolutionPayloadError,
+    serialize_solution_domain,
     solution_draft_v1_from_payload,
     solution_draft_v1_to_payload,
 )
+from apps.sales.services.solution_schema_v2 import SolutionDraftV2
 
 
 class SolutionPersistenceError(Exception):
@@ -87,6 +89,7 @@ def generate_and_persist_solution_draft(
     llm_provider: LLMProvider | None = None,
     verifier_provider: LLMProvider | None = None,
     idempotency_key: UUID | None = None,
+    schema_version: int = 1,
 ) -> SolutionDraftRecord:
     """Generate once per durable key, then atomically append one version."""
 
@@ -99,6 +102,12 @@ def generate_and_persist_solution_draft(
     created_by_id = _saved_pk(created_by, get_user_model())
     if analysis.opportunity_id != opportunity_id:
         raise SolutionPersistenceError("The selected analysis does not belong to this opportunity.")
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version not in {1, 2}
+    ):
+        raise SolutionPersistenceError("The Solution Draft schema version is invalid.")
 
     if idempotency_key is not None and not isinstance(idempotency_key, UUID):
         raise SolutionPersistenceError("The generation idempotency key is invalid.")
@@ -114,6 +123,7 @@ def generate_and_persist_solution_draft(
             llm_provider=llm_provider,
             verifier_provider=verifier_provider,
             idempotency_key=None,
+            schema_version=schema_version,
         )
 
     with _generation_idempotency_lock(idempotency_key):
@@ -125,6 +135,7 @@ def generate_and_persist_solution_draft(
                 existing.opportunity_id != opportunity_id
                 or existing.requirement_analysis_id != analysis_id
                 or existing.created_by_id != created_by_id
+                or existing.schema_version != schema_version
             ):
                 raise SolutionPersistenceError(
                     "The generation idempotency key belongs to different inputs."
@@ -140,6 +151,7 @@ def generate_and_persist_solution_draft(
             llm_provider=llm_provider,
             verifier_provider=verifier_provider,
             idempotency_key=idempotency_key,
+            schema_version=schema_version,
         )
 
 
@@ -154,6 +166,7 @@ def _generate_and_persist_solution_draft(
     llm_provider: LLMProvider | None,
     verifier_provider: LLMProvider | None,
     idempotency_key: UUID | None,
+    schema_version: int,
 ) -> SolutionDraftRecord:
     """Run providers without a transaction, then persist in one short transaction."""
 
@@ -162,6 +175,7 @@ def _generate_and_persist_solution_draft(
         embedding_provider=embedding_provider,
         llm_provider=llm_provider,
         verifier_provider=verifier_provider,
+        schema_version=schema_version,
     )
     if (
         not isinstance(result, GroundedSolutionDraftResult)
@@ -169,8 +183,15 @@ def _generate_and_persist_solution_draft(
         or result.generation_status is not SolutionGenerationStatus.GENERATED
         or result.draft is None
         or result.admission is None
+        or result.schema_version != schema_version
     ):
         raise SolutionPersistenceError("No validated Solution Draft was generated.")
+    try:
+        serialized = serialize_solution_domain(result.draft)
+    except SolutionPayloadError as exc:
+        raise SolutionPersistenceError("The Solution Draft payload is invalid.") from exc
+    if serialized.schema_version != schema_version:
+        raise SolutionPersistenceError("The Solution Draft schema does not match the request.")
 
     with transaction.atomic():
         locked_opportunity = Opportunity.objects.select_for_update().get(pk=opportunity_id)
@@ -200,12 +221,13 @@ def _generate_and_persist_solution_draft(
             requirement_analysis=locked_analysis,
             version=current_version + 1,
             title=result.draft.title,
-            draft_payload=solution_draft_to_payload(result.draft),
+            draft_payload=serialized.payload,
             generation_metadata={
                 "generation_status": result.generation_status.value,
                 "source_count": len(result.sources),
             },
             generation_idempotency_key=idempotency_key,
+            schema_version=schema_version,
             is_stale=stale,
             stale_at=timezone.now() if stale else None,
             stale_reasons=[reason.value for reason in stale_reasons],
@@ -331,6 +353,10 @@ def _build_provenance_entries(
     draft = result.draft
     if admission is None or draft is None:
         raise SolutionPersistenceError()
+    if result.schema_version == 2:
+        if not isinstance(draft, SolutionDraftV2):
+            raise SolutionPersistenceError("The Solution Draft schema is invalid.")
+        return _build_v2_provenance_entries(record, result)
     provenance_by_claim = defaultdict(list)
     provenance_by_label = defaultdict(list)
     fact_ids = {item.fact_id for item in admission.enterprise_provenance}
@@ -393,6 +419,59 @@ def _build_provenance_entries(
                         source_excerpt=fact.source_excerpt,
                     )
                 )
+    return entries
+
+
+def _build_v2_provenance_entries(
+    record: SolutionDraftRecord,
+    result: GroundedSolutionDraftResult,
+) -> list[SolutionDraftProvenance]:
+    draft = result.draft
+    admission = result.admission
+    if not isinstance(draft, SolutionDraftV2) or admission is None:
+        raise SolutionPersistenceError("The Solution Draft schema is invalid.")
+    claims = {claim.claim_id: claim for claim in draft.claims}
+    admitted_fact_ids = {item.fact_id for item in admission.enterprise_provenance}
+    facts = {
+        fact.pk: fact
+        for fact in EnterpriseGroundingFact.objects.select_related("source_document")
+        .filter(pk__in=admitted_fact_ids)
+    }
+    expected_pairs = {
+        (claim.claim_id, citation)
+        for claim in draft.claims
+        for citation in claim.citations
+    }
+    actual_pairs: set[tuple[str, str]] = set()
+    identities: set[tuple[str, str, int]] = set()
+    entries: list[SolutionDraftProvenance] = []
+    for binding in result.v2_provenance_bindings:
+        claim = claims.get(binding.claim_id)
+        fact = facts.get(binding.fact_id)
+        identity = (binding.claim_id, binding.citation_label, binding.fact_id)
+        if (
+            claim is None
+            or binding.citation_label not in claim.citations
+            or fact is None
+            or identity in identities
+        ):
+            raise SolutionPersistenceError("V2 claim provenance is incomplete.")
+        identities.add(identity)
+        actual_pairs.add((binding.claim_id, binding.citation_label))
+        entries.append(SolutionDraftProvenance(
+            solution_draft=record,
+            statement_path=f"claims.{binding.claim_id}",
+            claim_id=binding.claim_id,
+            citation_label=binding.citation_label,
+            enterprise_grounding_fact=fact,
+            source_document_id=fact.source_document_id,
+            source_chunk_id=fact.source_chunk_id,
+            source_index_run_id=fact.source_index_run_id,
+            source_content_hash=fact.source_content_hash,
+            source_excerpt=fact.source_excerpt,
+        ))
+    if actual_pairs != expected_pairs:
+        raise SolutionPersistenceError("V2 claim provenance is incomplete.")
     return entries
 
 
