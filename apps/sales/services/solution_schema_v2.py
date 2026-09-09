@@ -224,6 +224,12 @@ class V2DeterministicContent:
 
 
 @dataclass(frozen=True, slots=True)
+class V2AssemblyResult:
+    draft: SolutionDraftV2
+    provenance_bindings: tuple[V2ClaimProvenanceBinding, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _DeterministicClaimSeed:
     statement_type: SolutionClaimTypeV2
     text: str
@@ -437,6 +443,228 @@ def build_v2_deterministic_items(analysis, admission) -> V2DeterministicContent:
         open_questions=open_questions,
         provenance_bindings=bindings,
     )
+
+
+def assemble_solution_draft_v2(
+    deterministic: V2DeterministicContent,
+    proposals,
+) -> V2AssemblyResult:
+    """Assemble the closed V2 structure without inventing semantic content."""
+
+    from apps.sales.services.solution_prompt_v2 import (
+        AtomicSolutionProposalSetV2,
+        SolutionV2ContainerKind,
+        SolutionV2PlacementField,
+        SolutionV2Section,
+    )
+
+    if not isinstance(deterministic, V2DeterministicContent) or not isinstance(
+        proposals, AtomicSolutionProposalSetV2
+    ):
+        _invalid()
+
+    claims = list(deterministic.claims)
+    proposal_claims: list[tuple[SolutionAtomicClaimV2, object]] = []
+    for index, proposal in enumerate(proposals.proposals, start=len(claims) + 1):
+        claim = SolutionAtomicClaimV2(
+            claim_id=f"C{index:04d}",
+            statement_type=SolutionClaimTypeV2.PROPOSAL,
+            text=proposal.text,
+            citations=proposal.citations,
+        )
+        claims.append(claim)
+        proposal_claims.append((claim, proposal.placement))
+
+    by_label: dict[str, list[int]] = {}
+    for binding in deterministic.provenance_bindings:
+        by_label.setdefault(binding.citation_label, []).append(binding.fact_id)
+    bindings = list(deterministic.provenance_bindings)
+    for claim, _ in proposal_claims:
+        for label in claim.citations:
+            fact_ids = by_label.get(label, [])
+            if not fact_ids:
+                _invalid()
+            bindings.extend(
+                V2ClaimProvenanceBinding(claim.claim_id, label, fact_id)
+                for fact_id in fact_ids
+            )
+
+    proposed_overview = list(deterministic.enterprise_claim_ids)
+    proposed_overview.extend(
+        claim_id
+        for claim_id in deterministic.unresolved_claim_ids
+        if claim_id not in deterministic.customer_context.unresolved_claim_ids
+    )
+    groups: dict[str, list[str]] = {}
+    architecture_overview: list[str] = []
+    components: dict[str, dict[str, list[str]]] = {}
+    topic_blocks: dict[str, list[str]] = {}
+    phases: dict[str, dict[str, list[str]]] = {}
+    risks: dict[str, dict[str, list[str]]] = {}
+    criteria: dict[str, str] = {}
+    milestones: dict[str, dict[str, list[str]]] = {}
+    scopes: dict[str, str] = {}
+
+    for claim, placement in proposal_claims:
+        claim_id = claim.claim_id
+        section = placement.section
+        kind = placement.container_kind
+        field = placement.field
+        key = placement.container_key
+        if section is SolutionV2Section.PROPOSED_SOLUTION:
+            if kind is SolutionV2ContainerKind.ROOT:
+                proposed_overview.append(claim_id)
+            else:
+                groups.setdefault(key, []).append(claim_id)
+        elif section is SolutionV2Section.ARCHITECTURE:
+            if kind is SolutionV2ContainerKind.ROOT:
+                architecture_overview.append(claim_id)
+            else:
+                bucket = components.setdefault(key, {
+                    "responsibilities": [], "rationale": [], "interfaces": [],
+                })
+                bucket[field.value].append(claim_id)
+        elif section is SolutionV2Section.DEPLOYMENT_AND_INTEGRATION:
+            topic_blocks.setdefault(key, []).append(claim_id)
+        elif section is SolutionV2Section.IMPLEMENTATION_PLAN:
+            bucket = phases.setdefault(key, {
+                "objective": [], "tasks": [], "deliverables": [], "timing": [],
+            })
+            bucket[field.value].append(claim_id)
+        elif section is SolutionV2Section.RISKS:
+            bucket = risks.setdefault(key, {
+                "condition": [], "impact": [], "mitigation": [], "trigger": [],
+            })
+            bucket[field.value].append(claim_id)
+        elif section is SolutionV2Section.ACCEPTANCE_CRITERIA:
+            if key in criteria:
+                _invalid()
+            criteria[key] = claim_id
+        elif section is SolutionV2Section.MILESTONES:
+            bucket = milestones.setdefault(key, {"outcome": [], "timing": []})
+            bucket[field.value].append(claim_id)
+        elif section is SolutionV2Section.OUT_OF_SCOPE:
+            if key in scopes:
+                _invalid()
+            scopes[key] = claim_id
+        else:
+            _invalid()
+
+    if any(len(value["timing"]) > 1 for value in phases.values()) or any(
+        len(value["timing"]) > 1 for value in milestones.values()
+    ):
+        _invalid()
+    if any(len(value["condition"]) != 1 for value in risks.values()):
+        _invalid()
+
+    criterion_items = tuple(
+        AcceptanceCriterionV2(key, claim_id, AcceptanceClassification.PROPOSED)
+        for key, claim_id in criteria.items()
+    )
+    phase_items = tuple(
+        ImplementationPhaseV2(
+            phase_id=key,
+            name=_display_label(key),
+            objective_claim_ids=tuple(value["objective"]),
+            task_claim_ids=tuple(value["tasks"]),
+            owner_roles=(OwnerRoleV2.TBD,),
+            deliverable_claim_ids=tuple(value["deliverables"]),
+            dependency_phase_ids=(),
+            acceptance_criterion_ids=(),
+            timing_claim_id=value["timing"][0] if value["timing"] else None,
+            timing_classification=(
+                TimingClassification.PROPOSED if value["timing"] else None
+            ),
+        )
+        for key, value in phases.items()
+    )
+    milestone_items = tuple(
+        MilestoneV2(
+            milestone_id=key,
+            name=_display_label(key),
+            related_phase_ids=(),
+            outcome_claim_ids=tuple(value["outcome"]),
+            timing_claim_id=value["timing"][0] if value["timing"] else None,
+            timing_classification=(
+                TimingClassification.PROPOSED if value["timing"] else None
+            ),
+        )
+        for key, value in milestones.items()
+    )
+    draft = SolutionDraftV2(
+        title="商机需求可执行技术方案",
+        claims=tuple(claims),
+        executive_summary_claim_ids=tuple(
+            dict.fromkeys(
+                deterministic.customer_context.confirmed_claim_ids[:3]
+                + tuple(proposed_overview[:3])
+                + deterministic.customer_context.unresolved_claim_ids[:2]
+            )
+        )[:8],
+        customer_context=deterministic.customer_context,
+        proposed_solution=ProposedSolutionV2(
+            overview_claim_ids=tuple(proposed_overview),
+            capability_groups=tuple(
+                CapabilityGroupV2(key, _display_label(key), tuple(claim_ids))
+                for key, claim_ids in groups.items()
+            ),
+        ),
+        architecture=ArchitectureV2(
+            overview_claim_ids=tuple(architecture_overview),
+            components=tuple(
+                ArchitectureComponentV2(
+                    component_id=key,
+                    name=_display_label(key),
+                    responsibility_claim_ids=tuple(value["responsibilities"]),
+                    rationale_claim_ids=tuple(value["rationale"]),
+                    dependency_component_ids=(),
+                    interface_claim_ids=tuple(value["interfaces"]),
+                )
+                for key, value in components.items()
+            ),
+        ),
+        deployment_and_integration=tuple(
+            SolutionTopicBlockV2(
+                block_id=key,
+                topic=_topic_from_key(key),
+                title=_display_label(key),
+                claim_ids=tuple(claim_ids),
+            )
+            for key, claim_ids in topic_blocks.items()
+        ),
+        implementation_plan=ImplementationPlanV2(phase_items),
+        risks=tuple(
+            RiskItemV2(
+                risk_id=key,
+                condition_claim_id=value["condition"][0],
+                impact_claim_ids=tuple(value["impact"]),
+                mitigation_claim_ids=tuple(value["mitigation"]),
+                trigger_claim_ids=tuple(value["trigger"]),
+            )
+            for key, value in risks.items()
+        ),
+        acceptance_criteria=criterion_items,
+        milestones=milestone_items,
+        assumption_claim_ids=deterministic.assumption_claim_ids,
+        open_questions=deterministic.open_questions,
+        out_of_scope=tuple(
+            ScopeItemV2(key, claim_id, AcceptanceClassification.PROPOSED)
+            for key, claim_id in scopes.items()
+        ),
+    )
+    validate_solution_draft_v2(draft)
+    return V2AssemblyResult(draft, tuple(bindings))
+
+
+def _display_label(identifier: str) -> str:
+    return identifier.replace("_", " ")
+
+
+def _topic_from_key(identifier: str) -> SolutionTopicV2:
+    try:
+        return SolutionTopicV2(identifier)
+    except ValueError:
+        _invalid()
 
 
 _CLAIM_ID = re.compile(r"C[0-9]{4,}")

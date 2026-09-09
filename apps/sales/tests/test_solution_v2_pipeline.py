@@ -1,5 +1,11 @@
 """Deterministic and probabilistic assembly boundaries for Solution V2."""
 
+import json
+
+import pytest
+
+from apps.llm.base import LLMGeneration, LLMProvider
+from apps.rag.tests.test_answering import search_result
 from apps.sales.services.requirement_analysis import (
     ClarifyingQuestion,
     OpportunityRequirementAnalysis,
@@ -19,6 +25,10 @@ from apps.sales.services.solution_schema import (
     SolutionSectionKey,
     SolutionStatementType,
 )
+from apps.sales.tests.solution_fakes import analysis_record
+
+
+pytestmark = pytest.mark.django_db
 
 
 def field(status, value=None):
@@ -188,3 +198,151 @@ def test_unconfirmed_enterprise_decision_never_becomes_enterprise_fact():
         item.statement_type is SolutionClaimTypeV2.UNRESOLVED and "SSO" in item.text
         for item in result.claims
     )
+
+
+class _GenerationProvider(LLMProvider):
+    provider_name = "v2-generation-fake"
+    model_name = "v2-generation-fake"
+
+    def __init__(self, proposals):
+        self.proposals = proposals
+        self.calls = []
+
+    def generate(self, messages, *, max_output_tokens=None):
+        self.calls.append(messages)
+        return LLMGeneration(content=json.dumps({"proposals": self.proposals}, ensure_ascii=False))
+
+
+class _VerifierProvider(LLMProvider):
+    provider_name = "v2-verifier-fake"
+    model_name = "v2-verifier-fake"
+
+    def __init__(self, *, relation="SUPPORTED", callback=None):
+        self.relation = relation
+        self.callback = callback
+        self.calls = []
+
+    def generate(self, messages, *, max_output_tokens=None):
+        import html
+        import re
+
+        match = re.search(
+            r"<grounding_claim_packets>(.*?)</grounding_claim_packets>",
+            messages[-1]["content"],
+            flags=re.DOTALL,
+        )
+        packet = json.loads(html.unescape(match.group(1)))["claims"]
+        self.calls.append(packet)
+        if self.callback:
+            self.callback()
+        return LLMGeneration(content=json.dumps({"results": [{
+            "location": packet[0]["location"],
+            "relation": self.relation,
+            "atomicity": "ATOMIC",
+        }]}))
+
+
+def _proposal(text, *, section="architecture", kind="architecture_component", key="knowledge_service", field="responsibilities"):
+    return {
+        "placement": {
+            "section": section,
+            "container_kind": kind,
+            "container_key": key,
+            "field": field,
+        },
+        "text": text,
+        "citations": ["S1"],
+    }
+
+
+def _generate_v2(monkeypatch, proposals, *, verifier=None, admissions=None):
+    from apps.sales.services import solution_draft as service
+
+    monkeypatch.setattr(service, "search_knowledge", lambda **kwargs: [search_result()])
+    sequence = iter(admissions or (admission_fixture(), admission_fixture()))
+    monkeypatch.setattr(service, "build_solution_admission", lambda *args: next(sequence))
+    generation = _GenerationProvider(proposals)
+    return service.generate_grounded_solution_draft(
+        analysis_record(),
+        llm_provider=generation,
+        verifier_provider=verifier,
+        schema_version=2,
+    ), generation
+
+
+def test_explicit_v2_selection_builds_structured_draft_and_skips_verifier_for_deterministic_claims(monkeypatch):
+    from apps.sales.services.solution_schema_v2 import SolutionClaimTypeV2, SolutionDraftV2
+
+    verifier = _VerifierProvider()
+    (result, generation) = _generate_v2(monkeypatch, [], verifier=verifier)
+
+    assert result.schema_version == 2
+    assert isinstance(result.draft, SolutionDraftV2)
+    assert verifier.calls == []
+    assert "container_kind" in generation.calls[0][0]["content"]
+    assert any(claim.statement_type is SolutionClaimTypeV2.ENTERPRISE_FACT for claim in result.draft.claims)
+    assert any(
+        claim.statement_type is SolutionClaimTypeV2.UNRESOLVED and "SSO" in claim.text
+        for claim in result.draft.claims
+    )
+
+
+def test_each_v2_proposal_is_verified_independently_and_placement_order_survives(monkeypatch):
+    proposals = (
+        _proposal("建议知识服务承担统一检索职责。"),
+        _proposal(
+            "建议将私有化部署纳入总体方案。",
+            section="proposed_solution",
+            kind="root",
+            key=None,
+            field="overview",
+        ),
+    )
+    verifier = _VerifierProvider()
+
+    (result, _) = _generate_v2(monkeypatch, proposals, verifier=verifier)
+
+    assert len(verifier.calls) == 2
+    assert all(len(call) == 1 for call in verifier.calls)
+    assert [call[0]["text"] for call in verifier.calls] == [item["text"] for item in proposals]
+    component = result.draft.architecture.components[0]
+    by_id = {claim.claim_id: claim for claim in result.draft.claims}
+    assert by_id[component.responsibility_claim_ids[0]].text == proposals[0]["text"]
+    assert by_id[result.draft.proposed_solution.overview_claim_ids[-1]].text == proposals[1]["text"]
+
+
+def test_v2_proposal_verifier_rejection_aborts_whole_draft_without_partial_leak(monkeypatch):
+    from apps.sales.services.solution_grounding import SolutionDraftGroundingError
+
+    verifier = _VerifierProvider(relation="INSUFFICIENT")
+    with pytest.raises(SolutionDraftGroundingError):
+        _generate_v2(monkeypatch, [_proposal("证据不足的方案建议。")], verifier=verifier)
+
+    assert len(verifier.calls) == 1
+
+
+def test_v2_return_time_admission_drift_fails_before_assembly(monkeypatch):
+    from dataclasses import replace
+    from apps.sales.services.solution_errors import SolutionDraftError
+
+    original = admission_fixture()
+    changed = replace(original, allowed_proposal_source_labels=())
+
+    with pytest.raises(SolutionDraftError) as exc:
+        _generate_v2(
+            monkeypatch,
+            [_proposal("建议知识服务承担统一检索职责。")],
+            verifier=_VerifierProvider(),
+            admissions=(original, changed),
+        )
+
+    assert exc.value.code == "invalid_solution_draft_input"
+
+
+def test_unknown_generation_schema_fails_before_search(monkeypatch):
+    from apps.sales.services import solution_draft as service
+    from apps.sales.services.solution_errors import SolutionDraftError
+
+    monkeypatch.setattr(service, "search_knowledge", lambda **kwargs: pytest.fail("must not search"))
+    with pytest.raises(SolutionDraftError):
+        service.generate_grounded_solution_draft(analysis_record(), schema_version=99)

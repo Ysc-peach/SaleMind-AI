@@ -14,8 +14,15 @@ from apps.sales.models import OpportunityRequirementAnalysis as AnalysisRecord
 from apps.sales.services.requirement_analysis_history import analysis_record_to_domain
 from apps.sales.services.solution_admission import GroundingAdmission, build_solution_admission
 from apps.sales.services.solution_errors import SolutionDraftError, SolutionDraftErrorCode
-from apps.sales.services.solution_grounding import verify_atomic_solution_proposals
+from apps.sales.services.solution_grounding import (
+    verify_atomic_solution_proposals,
+    verify_atomic_solution_v2_proposals,
+)
 from apps.sales.services.solution_prompt import build_solution_messages
+from apps.sales.services.solution_prompt_v2 import (
+    build_solution_v2_messages,
+    parse_atomic_solution_v2_proposals,
+)
 from apps.sales.services.solution_readiness import (
     SolutionReadiness, SolutionReadinessStatus, check_solution_readiness,
 )
@@ -27,6 +34,12 @@ from apps.sales.services.solution_schema import (
     assemble_solution_draft,
     build_solution_unresolved_items,
     parse_atomic_solution_proposals,
+)
+from apps.sales.services.solution_schema_v2 import (
+    SolutionDraftV2,
+    V2ClaimProvenanceBinding,
+    assemble_solution_draft_v2,
+    build_v2_deterministic_items,
 )
 
 
@@ -41,10 +54,12 @@ class GroundedSolutionDraftResult:
     analysis_id: int
     readiness: SolutionReadiness
     generation_status: SolutionGenerationStatus
-    draft: SolutionDraft | None
+    draft: SolutionDraft | SolutionDraftV2 | None
     sources: tuple[SolutionSource, ...]
     unresolved_items: tuple[SolutionUnresolvedItem, ...]
     admission: GroundingAdmission | None
+    schema_version: int = 1
+    v2_provenance_bindings: tuple[V2ClaimProvenanceBinding, ...] = ()
 
 
 def generate_grounded_solution_draft(
@@ -53,13 +68,21 @@ def generate_grounded_solution_draft(
     embedding_provider: EmbeddingProvider | None = None,
     llm_provider: LLMProvider | None = None,
     verifier_provider: LLMProvider | None = None,
+    schema_version: int = 1,
 ) -> GroundedSolutionDraftResult:
     """No latest lookup, persistence, HTTP, SDK logic, or exception rewriting.
 
     Callers resolve authorization and supply the chosen saved history record.
     Neither current Opportunity facts nor full raw input are re-read here.
     """
-    if not isinstance(analysis, AnalysisRecord) or analysis.pk is None or analysis._state.adding:
+    if (
+        not isinstance(analysis, AnalysisRecord)
+        or analysis.pk is None
+        or analysis._state.adding
+        or not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version not in {1, 2}
+    ):
         raise SolutionDraftError(SolutionDraftErrorCode.INVALID_INPUT)
     analysis_id = analysis.pk
     typed = analysis_record_to_domain(analysis)
@@ -71,7 +94,7 @@ def generate_grounded_solution_draft(
     }:
         return GroundedSolutionDraftResult(
             analysis_id, readiness, SolutionGenerationStatus.BLOCKED_BY_READINESS,
-            None, (), unresolved_items, None,
+            None, (), unresolved_items, None, schema_version=schema_version,
         )
     groups = [search_knowledge(
         query=intent.query, top_k=3, document_type=None, provider=embedding_provider,
@@ -80,20 +103,32 @@ def generate_grounded_solution_draft(
     if not sources:
         return GroundedSolutionDraftResult(
             analysis_id, readiness, SolutionGenerationStatus.INSUFFICIENT_EVIDENCE,
-            None, (), unresolved_items, None,
+            None, (), unresolved_items, None, schema_version=schema_version,
         )
     admission = build_solution_admission(typed, sources)
     provider = llm_provider if llm_provider is not None else get_llm_provider()
+    messages = (
+        build_solution_messages(typed, readiness, sources, admission)
+        if schema_version == 1
+        else build_solution_v2_messages(typed, readiness, sources, admission)
+    )
     generation = provider.generate(
-        build_solution_messages(typed, readiness, sources, admission),
+        messages,
         max_output_tokens=settings.SOLUTION_DRAFT_MAX_OUTPUT_TOKENS,
     )
-    proposals = parse_atomic_solution_proposals(
-        generation.content,
-        allowed_source_labels=admission.allowed_proposal_source_labels,
-    )
-    claims = AtomicSolutionClaimSet(admission.claims.claims + proposals.claims)
-    if proposals.claims:
+    if schema_version == 1:
+        proposals = parse_atomic_solution_proposals(
+            generation.content,
+            allowed_source_labels=admission.allowed_proposal_source_labels,
+        )
+        has_proposals = bool(proposals.claims)
+    else:
+        proposals = parse_atomic_solution_v2_proposals(
+            generation.content,
+            allowed_source_labels=admission.allowed_proposal_source_labels,
+        )
+        has_proposals = bool(proposals.proposals)
+    if has_proposals:
         active_verifier = verifier_provider
         if active_verifier is None:
             configured_verifier = settings.VERIFIER_PROVIDER
@@ -102,19 +137,39 @@ def generate_grounded_solution_draft(
                 if isinstance(configured_verifier, str) and configured_verifier.strip()
                 else provider
             )
-        verify_atomic_solution_proposals(
-            analysis=typed,
-            proposals=proposals,
-            sources=sources,
-            llm_provider=active_verifier,
-        )
+        if schema_version == 1:
+            verify_atomic_solution_proposals(
+                analysis=typed,
+                proposals=proposals,
+                sources=sources,
+                llm_provider=active_verifier,
+            )
+        else:
+            verify_atomic_solution_v2_proposals(
+                analysis=typed,
+                proposals=proposals,
+                sources=sources,
+                llm_provider=active_verifier,
+            )
     # External model calls must stay outside database transactions. Rebuild the
     # deterministic admission afterward so a concurrent reindex/approval change
     # cannot return claims whose provenance is no longer current.
     if build_solution_admission(typed, sources) != admission:
         raise SolutionDraftError(SolutionDraftErrorCode.INVALID_INPUT)
-    draft = assemble_solution_draft(claims, typed)
+    if schema_version == 1:
+        claims = AtomicSolutionClaimSet(admission.claims.claims + proposals.claims)
+        draft = assemble_solution_draft(claims, typed)
+        bindings = ()
+    else:
+        assembly = assemble_solution_draft_v2(
+            build_v2_deterministic_items(typed, admission),
+            proposals,
+        )
+        draft = assembly.draft
+        bindings = assembly.provenance_bindings
     return GroundedSolutionDraftResult(
         analysis_id, readiness, SolutionGenerationStatus.GENERATED,
         draft, sources, unresolved_items, admission,
+        schema_version=schema_version,
+        v2_provenance_bindings=bindings,
     )

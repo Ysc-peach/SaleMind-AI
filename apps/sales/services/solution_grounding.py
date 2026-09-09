@@ -192,6 +192,55 @@ def verify_atomic_solution_proposals(
     )
 
 
+def verify_atomic_solution_v2_proposals(
+    *,
+    analysis: OpportunityRequirementAnalysis,
+    proposals,
+    sources: tuple[SolutionSource, ...],
+    llm_provider: LLMProvider | None = None,
+):
+    """Reuse the proposal-only verifier while retaining the closed V2 placement IR."""
+
+    from apps.sales.services.solution_prompt_v2 import (
+        AtomicSolutionProposalSetV2,
+        SolutionV2Section,
+    )
+    from apps.sales.services.solution_schema import (
+        AtomicSolutionClaim,
+        AtomicSolutionClaimSet,
+        SolutionSectionKey,
+    )
+
+    if not isinstance(proposals, AtomicSolutionProposalSetV2) or not proposals.proposals:
+        raise SolutionDraftGroundingError(SolutionGroundingErrorCode.INVALID_INPUT)
+    section_map = {
+        SolutionV2Section.PROPOSED_SOLUTION: SolutionSectionKey.OVERALL_APPROACH,
+        SolutionV2Section.ARCHITECTURE: SolutionSectionKey.OVERALL_APPROACH,
+        SolutionV2Section.DEPLOYMENT_AND_INTEGRATION: SolutionSectionKey.DEPLOYMENT,
+        SolutionV2Section.IMPLEMENTATION_PLAN: SolutionSectionKey.IMPLEMENTATION,
+        SolutionV2Section.RISKS: SolutionSectionKey.IMPLEMENTATION,
+        SolutionV2Section.ACCEPTANCE_CRITERIA: SolutionSectionKey.IMPLEMENTATION,
+        SolutionV2Section.MILESTONES: SolutionSectionKey.IMPLEMENTATION,
+        SolutionV2Section.OUT_OF_SCOPE: SolutionSectionKey.OVERALL_APPROACH,
+    }
+    adapted = AtomicSolutionClaimSet(tuple(
+        AtomicSolutionClaim(
+            section=section_map[proposal.placement.section],
+            statement_type=SolutionStatementType.PROPOSAL,
+            text=proposal.text,
+            citations=proposal.citations,
+        )
+        for proposal in proposals.proposals
+    ))
+    verify_atomic_solution_proposals(
+        analysis=analysis,
+        proposals=adapted,
+        sources=sources,
+        llm_provider=llm_provider,
+    )
+    return proposals
+
+
 def _verify_packets(
     packets: tuple[GroundingClaimPacket, ...],
     llm_provider: LLMProvider | None,
