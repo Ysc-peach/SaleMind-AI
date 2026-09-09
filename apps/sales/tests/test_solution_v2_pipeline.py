@@ -311,6 +311,20 @@ def test_each_v2_proposal_is_verified_independently_and_placement_order_survives
     assert by_id[result.draft.proposed_solution.overview_claim_ids[-1]].text == proposals[1]["text"]
 
 
+def test_model_container_key_never_becomes_a_visible_semantic_label(monkeypatch):
+    verifier = _VerifierProvider()
+    (result, _) = _generate_v2(
+        monkeypatch,
+        [_proposal("建议设置兼容性评估组件。", key="supports_oracle")],
+        verifier=verifier,
+    )
+
+    component = result.draft.architecture.components[0]
+    assert component.component_id == "supports_oracle"
+    assert component.name == "架构组件 1"
+    assert "oracle" not in component.name.lower()
+
+
 def test_v2_proposal_verifier_rejection_aborts_whole_draft_without_partial_leak(monkeypatch):
     from apps.sales.services.solution_grounding import SolutionDraftGroundingError
 

@@ -67,6 +67,7 @@ def workflow_context(make_user, monkeypatch):
                 "analysis_id": actual_analysis.pk,
                 "created_by_id": created_by.pk,
                 "idempotency_key": idempotency_key,
+                "schema_version": kwargs.get("schema_version"),
             }
         )
         existing = SolutionDraftRecord.objects.filter(
@@ -87,6 +88,7 @@ def workflow_context(make_user, monkeypatch):
             },
             generation_metadata={"generation_status": "generated"},
             generation_idempotency_key=idempotency_key,
+            schema_version=kwargs.get("schema_version", 1),
             created_by=created_by,
         )
 
@@ -155,9 +157,11 @@ def test_explicit_analysis_reaches_generation_and_pending_review_precedes_interr
     call = workflow_context["generation_calls"][0]
     assert call["analysis_id"] == workflow_context["analysis"].pk
     assert call["idempotency_key"] == UUID(state["workflow_run_id"])
+    assert call["schema_version"] == 2
     solution = SolutionDraftRecord.objects.get(pk=result["solution_draft_id"])
     review = SolutionReview.objects.get(pk=result["solution_review_id"])
     assert solution.requirement_analysis_id == workflow_context["analysis"].pk
+    assert solution.schema_version == 2
     assert solution.review_status == SolutionReviewStatus.PENDING_REVIEW
     assert review.status == SolutionReviewDecisionStatus.PENDING
     assert result["workflow_outcome"] == "waiting_for_review"

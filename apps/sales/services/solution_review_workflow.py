@@ -135,6 +135,7 @@ def _generate_solution_node(state: SolutionReviewWorkflowState) -> dict:
             analysis,
             created_by=requested_by,
             idempotency_key=workflow_key,
+            schema_version=2,
         )
     except (
         KeyError,

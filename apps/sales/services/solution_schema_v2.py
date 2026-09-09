@@ -564,7 +564,7 @@ def assemble_solution_draft_v2(
     phase_items = tuple(
         ImplementationPhaseV2(
             phase_id=key,
-            name=_display_label(key),
+            name=f"实施阶段 {phase_index}",
             objective_claim_ids=tuple(value["objective"]),
             task_claim_ids=tuple(value["tasks"]),
             owner_roles=(OwnerRoleV2.TBD,),
@@ -576,12 +576,12 @@ def assemble_solution_draft_v2(
                 TimingClassification.PROPOSED if value["timing"] else None
             ),
         )
-        for key, value in phases.items()
+        for phase_index, (key, value) in enumerate(phases.items(), start=1)
     )
     milestone_items = tuple(
         MilestoneV2(
             milestone_id=key,
-            name=_display_label(key),
+            name=f"里程碑 {milestone_index}",
             related_phase_ids=(),
             outcome_claim_ids=tuple(value["outcome"]),
             timing_claim_id=value["timing"][0] if value["timing"] else None,
@@ -589,7 +589,7 @@ def assemble_solution_draft_v2(
                 TimingClassification.PROPOSED if value["timing"] else None
             ),
         )
-        for key, value in milestones.items()
+        for milestone_index, (key, value) in enumerate(milestones.items(), start=1)
     )
     draft = SolutionDraftV2(
         title="商机需求可执行技术方案",
@@ -605,8 +605,8 @@ def assemble_solution_draft_v2(
         proposed_solution=ProposedSolutionV2(
             overview_claim_ids=tuple(proposed_overview),
             capability_groups=tuple(
-                CapabilityGroupV2(key, _display_label(key), tuple(claim_ids))
-                for key, claim_ids in groups.items()
+                CapabilityGroupV2(key, f"方案分组 {index}", tuple(claim_ids))
+                for index, (key, claim_ids) in enumerate(groups.items(), start=1)
             ),
         ),
         architecture=ArchitectureV2(
@@ -614,20 +614,20 @@ def assemble_solution_draft_v2(
             components=tuple(
                 ArchitectureComponentV2(
                     component_id=key,
-                    name=_display_label(key),
+                    name=f"架构组件 {index}",
                     responsibility_claim_ids=tuple(value["responsibilities"]),
                     rationale_claim_ids=tuple(value["rationale"]),
                     dependency_component_ids=(),
                     interface_claim_ids=tuple(value["interfaces"]),
                 )
-                for key, value in components.items()
+                for index, (key, value) in enumerate(components.items(), start=1)
             ),
         ),
         deployment_and_integration=tuple(
             SolutionTopicBlockV2(
                 block_id=key,
                 topic=_topic_from_key(key),
-                title=_display_label(key),
+                title=_topic_label(_topic_from_key(key)),
                 claim_ids=tuple(claim_ids),
             )
             for key, claim_ids in topic_blocks.items()
@@ -656,8 +656,13 @@ def assemble_solution_draft_v2(
     return V2AssemblyResult(draft, tuple(bindings))
 
 
-def _display_label(identifier: str) -> str:
-    return identifier.replace("_", " ")
+def _topic_label(topic: SolutionTopicV2) -> str:
+    return {
+        SolutionTopicV2.DEPLOYMENT: "部署",
+        SolutionTopicV2.INTEGRATION: "集成",
+        SolutionTopicV2.DATA_SECURITY: "数据安全",
+        SolutionTopicV2.ENVIRONMENT: "现有环境",
+    }[topic]
 
 
 def _topic_from_key(identifier: str) -> SolutionTopicV2:

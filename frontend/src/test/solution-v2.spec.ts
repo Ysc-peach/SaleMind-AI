@@ -60,6 +60,10 @@ it('opens only sources mapped to the selected claim and omits audit internals',a
   expect(wrapper.text()).toContain('产品能力说明')
   expect(wrapper.text()).toContain('支持私有化部署。')
   expect(wrapper.text()).not.toContain('验收指标需要协商。')
+  await wrapper.get('aside button').trigger('click')
+  await wrapper.get('[data-test="sources-C0006"]').trigger('click')
+  expect(wrapper.text()).toContain('验收指标需要协商。')
+  expect(wrapper.text()).not.toContain('产品能力说明')
   for(const forbidden of ['content hash','index run','grounding ID','provider raw']){
     expect(wrapper.text()).not.toContain(forbidden)
   }
