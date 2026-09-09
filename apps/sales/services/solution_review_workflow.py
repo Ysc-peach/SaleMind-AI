@@ -36,6 +36,7 @@ from apps.sales.services.solution_review import (
     SolutionReviewError,
     approve_solution_draft,
     recover_completed_solution_review,
+    recover_pending_solution_review,
     request_solution_draft_revision,
     submit_solution_draft_for_review,
 )
@@ -44,14 +45,16 @@ from apps.sales.services.solution_review import (
 class SolutionWorkflowStage(StrEnum):
     READY = "ready"
     GENERATED = "generated"
-    WAITING_FOR_REVIEW = "waiting_for_review"
+    WAITING_FOR_SALES_CONFIRMATION = "waiting_for_sales_confirmation"
+    WAITING_FOR_PRESALES_REVIEW = "waiting_for_presales_review"
     DECIDING = "deciding"
     TERMINAL = "terminal"
 
 
 class SolutionWorkflowOutcome(StrEnum):
     GENERATED = "generated"
-    WAITING_FOR_REVIEW = "waiting_for_review"
+    WAITING_FOR_SALES_CONFIRMATION = "waiting_for_sales_confirmation"
+    WAITING_FOR_PRESALES_REVIEW = "waiting_for_presales_review"
     APPROVED = "approved"
     CUSTOMER_INFO_REQUIRED = "customer_info_required"
     TECHNICAL_REVISION_REQUIRED = "technical_revision_required"
@@ -61,6 +64,7 @@ class SolutionWorkflowOutcome(StrEnum):
 
 
 class SolutionHumanAction(StrEnum):
+    SUBMIT_FOR_REVIEW = "submit_for_review"
     APPROVE = "approve"
     REQUEST_REVISION = "request_revision"
 
@@ -90,24 +94,36 @@ def build_solution_review_graph(checkpointer):
         raise ValueError("A persistent workflow checkpointer is required.")
     builder = StateGraph(SolutionReviewWorkflowState)
     builder.add_node("generate_solution", _generate_solution_node)
+    builder.add_node(
+        "wait_for_sales_confirmation",
+        _wait_for_sales_confirmation_node,
+    )
     builder.add_node("submit_review", _submit_review_node)
-    builder.add_node("wait_for_human", _wait_for_human_node)
+    builder.add_node("wait_for_presales_review", _wait_for_presales_review_node)
     builder.add_node("approve", _approve_node)
     builder.add_node("request_revision", _request_revision_node)
     builder.add_edge(START, "generate_solution")
     builder.add_conditional_edges(
         "generate_solution",
         _route_after_generation,
-        {"submit": "submit_review", "end": END},
+        {"wait": "wait_for_sales_confirmation", "end": END},
+    )
+    builder.add_conditional_edges(
+        "wait_for_sales_confirmation",
+        _route_sales_confirmation,
+        {
+            SolutionHumanAction.SUBMIT_FOR_REVIEW.value: "submit_review",
+            "end": END,
+        },
     )
     builder.add_conditional_edges(
         "submit_review",
         _route_after_submit,
-        {"wait": "wait_for_human", "end": END},
+        {"wait": "wait_for_presales_review", "end": END},
     )
     builder.add_conditional_edges(
-        "wait_for_human",
-        _route_human_action,
+        "wait_for_presales_review",
+        _route_presales_action,
         {
             SolutionHumanAction.APPROVE.value: "approve",
             SolutionHumanAction.REQUEST_REVISION.value: "request_revision",
@@ -150,8 +166,36 @@ def _generate_solution_node(state: SolutionReviewWorkflowState) -> dict:
     return {
         "solution_draft_id": record.pk,
         "solution_version": record.version,
-        "workflow_stage": SolutionWorkflowStage.GENERATED.value,
-        "workflow_outcome": SolutionWorkflowOutcome.GENERATED.value,
+        "workflow_stage": (
+            SolutionWorkflowStage.WAITING_FOR_SALES_CONFIRMATION.value
+        ),
+        "workflow_outcome": (
+            SolutionWorkflowOutcome.WAITING_FOR_SALES_CONFIRMATION.value
+        ),
+        "error_code": "",
+    }
+
+
+def _wait_for_sales_confirmation_node(state: SolutionReviewWorkflowState) -> dict:
+    decision = interrupt(
+        {
+            "solution_draft_id": state["solution_draft_id"],
+            "solution_version": state["solution_version"],
+            "allowed_actions": [SolutionHumanAction.SUBMIT_FOR_REVIEW.value],
+        }
+    )
+    if not isinstance(decision, dict):
+        return _failure(SolutionWorkflowOutcome.CONFLICT, "invalid_sales_confirmation")
+    action = decision.get("action")
+    actor_id = decision.get("actor_id")
+    if (
+        action != SolutionHumanAction.SUBMIT_FOR_REVIEW
+        or not isinstance(actor_id, int)
+    ):
+        return _failure(SolutionWorkflowOutcome.CONFLICT, "invalid_sales_confirmation")
+    return {
+        "human_action": action,
+        "actor_id": actor_id,
         "error_code": "",
     }
 
@@ -159,27 +203,35 @@ def _generate_solution_node(state: SolutionReviewWorkflowState) -> dict:
 def _submit_review_node(state: SolutionReviewWorkflowState) -> dict:
     try:
         solution = SolutionDraftRecord.objects.get(pk=state["solution_draft_id"])
-        actor = get_user_model().objects.get(pk=state["requested_by_id"])
+        actor = get_user_model().objects.get(pk=state["actor_id"])
         reviewer = None
         if state.get("reviewer_id") is not None:
             reviewer = get_user_model().objects.get(pk=state["reviewer_id"])
-        review = submit_solution_draft_for_review(
-            solution,
-            actor=actor,
-            reviewer=reviewer,
-        )
+        try:
+            review = submit_solution_draft_for_review(
+                solution,
+                actor=actor,
+                reviewer=reviewer,
+            )
+        except SolutionReviewError:
+            review = recover_pending_solution_review(
+                solution,
+                actor=actor,
+                expected_reviewer=reviewer,
+            )
     except (KeyError, ObjectDoesNotExist, SolutionReviewError):
         return _failure(SolutionWorkflowOutcome.BLOCKED, "solution_review_submit_blocked")
     return {
         "solution_review_id": review.pk,
         "reviewer_id": review.reviewer_id,
-        "workflow_stage": SolutionWorkflowStage.WAITING_FOR_REVIEW.value,
-        "workflow_outcome": SolutionWorkflowOutcome.WAITING_FOR_REVIEW.value,
+        "workflow_stage": SolutionWorkflowStage.WAITING_FOR_PRESALES_REVIEW.value,
+        "workflow_outcome": SolutionWorkflowOutcome.WAITING_FOR_PRESALES_REVIEW.value,
+        "human_action": "",
         "error_code": "",
     }
 
 
-def _wait_for_human_node(state: SolutionReviewWorkflowState) -> dict:
+def _wait_for_presales_review_node(state: SolutionReviewWorkflowState) -> dict:
     decision = interrupt(
         {
             "solution_draft_id": state["solution_draft_id"],
@@ -284,23 +336,38 @@ def _decision_objects(state: SolutionReviewWorkflowState):
 
 def _route_after_generation(state: SolutionReviewWorkflowState) -> str:
     return (
-        "submit"
-        if state.get("workflow_outcome") == SolutionWorkflowOutcome.GENERATED
+        "wait"
+        if state.get("workflow_outcome")
+        == SolutionWorkflowOutcome.WAITING_FOR_SALES_CONFIRMATION
         else "end"
     )
+
+
+def _route_sales_confirmation(state: SolutionReviewWorkflowState) -> str:
+    action = state.get("human_action", "")
+    return action if action == SolutionHumanAction.SUBMIT_FOR_REVIEW else "end"
 
 
 def _route_after_submit(state: SolutionReviewWorkflowState) -> str:
     return (
         "wait"
-        if state.get("workflow_outcome") == SolutionWorkflowOutcome.WAITING_FOR_REVIEW
+        if state.get("workflow_outcome")
+        == SolutionWorkflowOutcome.WAITING_FOR_PRESALES_REVIEW
         else "end"
     )
 
 
-def _route_human_action(state: SolutionReviewWorkflowState) -> str:
+def _route_presales_action(state: SolutionReviewWorkflowState) -> str:
     action = state.get("human_action", "")
-    return action if action in SolutionHumanAction._value2member_map_ else "end"
+    return (
+        action
+        if action
+        in {
+            SolutionHumanAction.APPROVE.value,
+            SolutionHumanAction.REQUEST_REVISION.value,
+        }
+        else "end"
+    )
 
 
 def _terminal(outcome: SolutionWorkflowOutcome) -> dict:

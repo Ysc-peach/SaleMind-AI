@@ -23,6 +23,7 @@ from apps.sales.models import (
 from apps.sales.services.solution_review import (
     approve_solution_draft,
     request_solution_draft_revision,
+    submit_solution_draft_for_review,
 )
 from apps.sales.tests.solution_fakes import analysis_payload
 
@@ -135,6 +136,23 @@ def _interrupt_value(result):
     return result["__interrupt__"][0].value
 
 
+def _submit_for_review(graph, config, context, *, actor_key="sales"):
+    return graph.invoke(
+        Command(
+            resume={
+                "actor_id": context[actor_key].pk,
+                "action": "submit_for_review",
+            }
+        ),
+        config,
+    )
+
+
+def _reach_presales_interrupt(graph, config, context, *, state=None, actor_key="sales"):
+    graph.invoke(state or _initial(context), config)
+    return _submit_for_review(graph, config, context, actor_key=actor_key)
+
+
 def _test_database_conninfo():
     params = connection.get_connection_params()
     return make_conninfo(
@@ -146,7 +164,7 @@ def _test_database_conninfo():
     )
 
 
-def test_explicit_analysis_reaches_generation_and_pending_review_precedes_interrupt(
+def test_explicit_analysis_reaches_generation_and_draft_precedes_sales_interrupt(
     workflow_context,
 ):
     graph = _compiled()
@@ -159,36 +177,102 @@ def test_explicit_analysis_reaches_generation_and_pending_review_precedes_interr
     assert call["idempotency_key"] == UUID(state["workflow_run_id"])
     assert call["schema_version"] == 2
     solution = SolutionDraftRecord.objects.get(pk=result["solution_draft_id"])
-    review = SolutionReview.objects.get(pk=result["solution_review_id"])
     assert solution.requirement_analysis_id == workflow_context["analysis"].pk
     assert solution.schema_version == 2
-    assert solution.review_status == SolutionReviewStatus.PENDING_REVIEW
-    assert review.status == SolutionReviewDecisionStatus.PENDING
-    assert result["workflow_outcome"] == "waiting_for_review"
+    assert solution.review_status == SolutionReviewStatus.DRAFT
+    assert not SolutionReview.objects.filter(solution_draft=solution).exists()
+    assert result["workflow_stage"] == "waiting_for_sales_confirmation"
+    assert result["workflow_outcome"] == "waiting_for_sales_confirmation"
 
 
-def test_interrupt_payload_contains_only_minimal_non_sensitive_ids(workflow_context):
+def test_first_interrupt_contains_only_sales_confirmation_fields(workflow_context):
     result = _compiled().invoke(_initial(workflow_context), _config())
 
     payload = _interrupt_value(result)
 
     assert set(payload) == {
         "solution_draft_id",
-        "solution_review_id",
-        "reviewer_id",
+        "solution_version",
         "allowed_actions",
     }
-    assert payload["allowed_actions"] == ["approve", "request_revision"]
+    assert payload["allowed_actions"] == ["submit_for_review"]
     serialized = repr(payload).lower()
     assert "draft_payload" not in serialized
     assert "api_key" not in serialized
     assert "evidence" not in serialized
+    checkpoint_state = repr(result).lower()
+    assert "draft_payload" not in checkpoint_state
+    assert "solution_sections" not in checkpoint_state
+    assert "provenance" not in checkpoint_state
+
+
+def test_sales_resume_submits_with_existing_service_then_reaches_presales_interrupt(
+    workflow_context,
+):
+    graph = _compiled()
+    config = _config()
+    graph.invoke(_initial(workflow_context), config)
+
+    result = _submit_for_review(graph, config, workflow_context)
+
+    solution = SolutionDraftRecord.objects.get(pk=result["solution_draft_id"])
+    review = SolutionReview.objects.get(pk=result["solution_review_id"])
+    payload = _interrupt_value(result)
+    assert solution.review_status == SolutionReviewStatus.PENDING_REVIEW
+    assert review.status == SolutionReviewDecisionStatus.PENDING
+    assert review.submitted_by_id == workflow_context["sales"].pk
+    assert result["workflow_stage"] == "waiting_for_presales_review"
+    assert result["workflow_outcome"] == "waiting_for_presales_review"
+    assert payload == {
+        "solution_draft_id": solution.pk,
+        "solution_review_id": review.pk,
+        "reviewer_id": workflow_context["presales"].pk,
+        "allowed_actions": ["approve", "request_revision"],
+    }
+
+
+def test_submit_committed_before_checkpoint_replay_recovers_pending_review(
+    workflow_context,
+):
+    graph = _compiled()
+    config = _config()
+    interrupted = graph.invoke(_initial(workflow_context), config)
+    solution = SolutionDraftRecord.objects.get(pk=interrupted["solution_draft_id"])
+    committed_review = submit_solution_draft_for_review(
+        solution,
+        actor=workflow_context["sales"],
+    )
+
+    result = _submit_for_review(graph, config, workflow_context)
+
+    assert _interrupt_value(result)["solution_review_id"] == committed_review.pk
+    assert result["workflow_outcome"] == "waiting_for_presales_review"
+    assert SolutionReview.objects.filter(solution_draft=solution).count() == 1
+
+
+def test_unauthorized_sales_confirmation_remains_service_authoritative(
+    workflow_context,
+):
+    graph = _compiled()
+    config = _config()
+    graph.invoke(_initial(workflow_context), config)
+
+    result = _submit_for_review(
+        graph,
+        config,
+        workflow_context,
+        actor_key="unrelated_sales",
+    )
+
+    assert result["workflow_outcome"] == "blocked"
+    assert result["error_code"] == "solution_review_submit_blocked"
+    assert not SolutionReview.objects.exists()
 
 
 def test_approve_resume_calls_service_and_finishes(workflow_context):
     graph = _compiled()
     config = _config()
-    graph.invoke(_initial(workflow_context), config)
+    _reach_presales_interrupt(graph, config, workflow_context)
 
     result = graph.invoke(
         Command(
@@ -221,7 +305,7 @@ def test_revision_resume_routes_both_terminal_reasons(
 ):
     graph = _compiled()
     config = _config()
-    graph.invoke(_initial(workflow_context), config)
+    _reach_presales_interrupt(graph, config, workflow_context)
 
     result = graph.invoke(
         Command(
@@ -246,7 +330,7 @@ def test_committed_approve_before_checkpoint_replay_recovers_terminal_state(
 ):
     graph = _compiled()
     config = _config()
-    interrupted = graph.invoke(_initial(workflow_context), config)
+    interrupted = _reach_presales_interrupt(graph, config, workflow_context)
     solution = SolutionDraftRecord.objects.get(pk=interrupted["solution_draft_id"])
     approve_solution_draft(solution, actor=workflow_context["presales"])
 
@@ -264,7 +348,7 @@ def test_committed_return_before_checkpoint_replay_recovers_exact_decision(
 ):
     graph = _compiled()
     config = _config()
-    interrupted = graph.invoke(_initial(workflow_context), config)
+    interrupted = _reach_presales_interrupt(graph, config, workflow_context)
     solution = SolutionDraftRecord.objects.get(pk=interrupted["solution_draft_id"])
     reason = SolutionReturnReason.CUSTOMER_INFO_REQUIRED
     comment = "Need the customer database version."
@@ -296,7 +380,7 @@ def test_conflicting_replay_decision_fails_closed_without_rewriting_history(
 ):
     graph = _compiled()
     config = _config()
-    interrupted = graph.invoke(_initial(workflow_context), config)
+    interrupted = _reach_presales_interrupt(graph, config, workflow_context)
     solution = SolutionDraftRecord.objects.get(pk=interrupted["solution_draft_id"])
     approve_solution_draft(solution, actor=workflow_context["presales"])
 
@@ -322,7 +406,7 @@ def test_conflicting_replay_decision_fails_closed_without_rewriting_history(
 def test_graph_never_mutates_solution_payload(workflow_context):
     graph = _compiled()
     config = _config()
-    interrupted = graph.invoke(_initial(workflow_context), config)
+    interrupted = _reach_presales_interrupt(graph, config, workflow_context)
     solution = SolutionDraftRecord.objects.get(pk=interrupted["solution_draft_id"])
     original = deepcopy(solution.draft_payload)
 
@@ -355,11 +439,19 @@ def test_presales_authored_workflow_delegates_independent_reviewer_selection(
     state["requested_by_id"] = workflow_context["presales"].pk
     state["reviewer_id"] = workflow_context["other_presales"].pk
 
-    result = _compiled().invoke(state, _config())
+    graph = _compiled()
+    config = _config()
+    result = _reach_presales_interrupt(
+        graph,
+        config,
+        workflow_context,
+        state=state,
+        actor_key="presales",
+    )
 
     review = SolutionReview.objects.get(pk=result["solution_review_id"])
     assert review.reviewer_id == workflow_context["other_presales"].pk
-    assert result["workflow_outcome"] == "waiting_for_review"
+    assert result["workflow_outcome"] == "waiting_for_presales_review"
 
 
 def test_presales_authored_workflow_self_review_is_blocked_by_existing_service(
@@ -369,7 +461,15 @@ def test_presales_authored_workflow_self_review_is_blocked_by_existing_service(
     state["requested_by_id"] = workflow_context["presales"].pk
     state["reviewer_id"] = workflow_context["presales"].pk
 
-    result = _compiled().invoke(state, _config())
+    graph = _compiled()
+    config = _config()
+    graph.invoke(state, config)
+    result = _submit_for_review(
+        graph,
+        config,
+        workflow_context,
+        actor_key="presales",
+    )
 
     assert result["workflow_outcome"] == "blocked"
     assert not SolutionReview.objects.exists()
@@ -407,7 +507,10 @@ def test_stale_submit_is_blocked_by_existing_review_service(
         generate_then_supersede,
     )
 
-    result = _compiled().invoke(_initial(workflow_context), _config())
+    graph = _compiled()
+    config = _config()
+    graph.invoke(_initial(workflow_context), config)
+    result = _submit_for_review(graph, config, workflow_context)
 
     solution = SolutionDraftRecord.objects.get(pk=result["solution_draft_id"])
     from apps.sales.services.solution_persistence import evaluate_solution_draft_stale_reasons
@@ -459,10 +562,24 @@ def test_postgres_checkpoint_survives_graph_and_connection_reconstruction(
         first_graph = build_solution_review_graph(first_checkpointer)
         interrupted = first_graph.invoke(initial, config)
         _interrupt_value(interrupted)
+        assert not SolutionReview.objects.exists()
 
     with open_solution_workflow_checkpointer(conninfo) as reconstructed_checkpointer:
         reconstructed_graph = build_solution_review_graph(reconstructed_checkpointer)
-        result = reconstructed_graph.invoke(
+        pending = reconstructed_graph.invoke(
+            Command(
+                resume={
+                    "actor_id": workflow_context["sales"].pk,
+                    "action": "submit_for_review",
+                }
+            ),
+            config,
+        )
+        _interrupt_value(pending)
+
+    with open_solution_workflow_checkpointer(conninfo) as final_checkpointer:
+        final_graph = build_solution_review_graph(final_checkpointer)
+        result = final_graph.invoke(
             Command(
                 resume={
                     "actor_id": workflow_context["presales"].pk,
@@ -491,8 +608,18 @@ def test_postgres_checkpoint_reconstruction_routes_revision_from_database_state(
     reason = SolutionReturnReason.TECHNICAL_REVISION_REQUIRED
 
     with open_solution_workflow_checkpointer(conninfo) as first_checkpointer:
-        interrupted = build_solution_review_graph(first_checkpointer).invoke(
+        first_graph = build_solution_review_graph(first_checkpointer)
+        first_graph.invoke(
             _initial(workflow_context),
+            config,
+        )
+        interrupted = first_graph.invoke(
+            Command(
+                resume={
+                    "actor_id": workflow_context["sales"].pk,
+                    "action": "submit_for_review",
+                }
+            ),
             config,
         )
         persisted_review_id = interrupted["solution_review_id"]

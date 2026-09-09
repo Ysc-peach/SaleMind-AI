@@ -175,6 +175,44 @@ def recover_completed_solution_review(
     return current_review
 
 
+def recover_pending_solution_review(
+    solution: SolutionDraftRecord,
+    *,
+    actor,
+    expected_reviewer=None,
+) -> SolutionReview:
+    """Authorize and restore one already-committed submit replay."""
+
+    solution_id = _saved_pk(solution, SolutionDraftRecord)
+    actor = _saved_user(actor)
+    expected_reviewer = _optional_saved_user(expected_reviewer)
+    current_solution = (
+        SolutionDraftRecord.objects.select_related(
+            "opportunity__presales_owner",
+            "opportunity__sales_owner",
+            "created_by",
+        )
+        .get(pk=solution_id)
+    )
+    _require_submitter(current_solution, actor)
+    if current_solution.review_status != SolutionReviewStatus.PENDING_REVIEW:
+        raise SolutionReviewStateError(SolutionReviewErrorCode.INVALID_STATE)
+    current_review = SolutionReview.objects.filter(
+        solution_draft_id=solution_id,
+        status=SolutionReviewDecisionStatus.PENDING,
+    ).first()
+    if current_review is None:
+        raise SolutionReviewStateError(SolutionReviewErrorCode.NO_PENDING_REVIEW)
+    if current_review.submitted_by_id != actor.pk:
+        raise SolutionReviewPermissionError(SolutionReviewErrorCode.PERMISSION_DENIED)
+    if (
+        expected_reviewer is not None
+        and current_review.reviewer_id != expected_reviewer.pk
+    ):
+        raise SolutionReviewStateError(SolutionReviewErrorCode.INVALID_REVIEWER)
+    return current_review
+
+
 def _decide_solution_review(
     solution: SolutionDraftRecord,
     *,
