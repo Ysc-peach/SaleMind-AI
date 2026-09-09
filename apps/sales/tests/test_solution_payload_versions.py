@@ -14,4 +14,3 @@ def test_solution_schema_version_is_a_database_column():
 
     assert field.default == 1
     assert field.null is False
-
