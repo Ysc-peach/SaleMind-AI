@@ -64,12 +64,18 @@ class SolutionDraftProvenanceSerializer(serializers.ModelSerializer):
 
 
 class _SolutionDraftV1DetailSerializer(SolutionDraftListSerializer):
+    workflow_id = serializers.UUIDField(
+        source="generation_idempotency_key",
+        read_only=True,
+        allow_null=True,
+    )
     provenance = SolutionDraftProvenanceSerializer(
         source="provenance_entries", many=True, read_only=True
     )
 
     class Meta(SolutionDraftListSerializer.Meta):
         fields = SolutionDraftListSerializer.Meta.fields + (
+            "workflow_id",
             "draft_payload",
             "provenance",
         )
@@ -77,6 +83,11 @@ class _SolutionDraftV1DetailSerializer(SolutionDraftListSerializer):
 
 
 class SolutionDraftDetailSerializer(SolutionDraftListSerializer):
+    workflow_id = serializers.UUIDField(
+        source="generation_idempotency_key",
+        read_only=True,
+        allow_null=True,
+    )
     provenance = SolutionDraftProvenanceSerializer(
         source="provenance_entries", many=True, read_only=True
     )
@@ -85,6 +96,7 @@ class SolutionDraftDetailSerializer(SolutionDraftListSerializer):
 
     class Meta(SolutionDraftListSerializer.Meta):
         fields = SolutionDraftListSerializer.Meta.fields + (
+            "workflow_id",
             "draft_payload",
             "provenance",
             "source_registry",

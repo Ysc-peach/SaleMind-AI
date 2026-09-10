@@ -8,6 +8,10 @@ from .solution_draft_views import (
     SolutionDraftCollectionViewSet,
     SolutionDraftDetailViewSet,
 )
+from .solution_workflow_views import (
+    SolutionWorkflowCollectionViewSet,
+    SolutionWorkflowDetailViewSet,
+)
 
 
 customer_create_view = CustomerViewSet.as_view({"post": "create"})
@@ -37,9 +41,33 @@ solution_draft_request_revision_view = SolutionDraftDetailViewSet.as_view(
 solution_draft_review_list_view = SolutionDraftDetailViewSet.as_view(
     {"get": "review_history"}
 )
+solution_workflow_start_view = SolutionWorkflowCollectionViewSet.as_view(
+    {"post": "start"}
+)
+solution_workflow_detail_view = SolutionWorkflowDetailViewSet.as_view(
+    {"get": "retrieve_workflow"}
+)
+solution_workflow_resume_view = SolutionWorkflowDetailViewSet.as_view(
+    {"post": "resume"}
+)
 
 
 urlpatterns = [
+    path(
+        "opportunities/<int:opportunity_id>/solution-workflows/",
+        solution_workflow_start_view,
+        name="solution-workflow-start",
+    ),
+    path(
+        "solution-workflows/<uuid:workflow_id>/resume/",
+        solution_workflow_resume_view,
+        name="solution-workflow-resume",
+    ),
+    path(
+        "solution-workflows/<uuid:workflow_id>/",
+        solution_workflow_detail_view,
+        name="solution-workflow-detail",
+    ),
     path(
         "solution-drafts/<int:solution_id>/submit/",
         solution_draft_submit_view,
