@@ -24,6 +24,7 @@ beforeEach(() => {
     else if(url.endsWith('approve/')) { draft.review_status='approved'; history[0].status='approved'; data=history[0] }
     else if(url.endsWith('request-revision/')) { draft.review_status='needs_revision'; history[0]={...history[0], status:'returned', ...body}; data=history[0] }
     else if(url.endsWith('reviews/')) data={results:history}
+    else if(url.endsWith('solution-workflows/')) data={workflow_id:'8de65214-6e04-4d32-a97a-8afc68483051',status:'WAITING_FOR_SALES_CONFIRMATION',solution_draft_id:21,solution_version:1,solution_review_id:null,reviewer_id:null,allowed_actions:['SUBMIT_FOR_REVIEW'],error_code:''}
     else if(url.includes('requirement-analyses/')) data = /(?:14|latest)\/$/.test(url) || method==='post' ? snapshot : {count:analysisTotal,results:[snapshot]}
     else if(url==='/opportunities/7/') data=opportunityContext
     else data=draft
@@ -41,7 +42,7 @@ it('requires explicit analysis selection, preserves its id and does not auto-sub
   await w.get('select').setValue('14'); await flushPromises()
   expect(w.text()).toContain('300人')
   await w.get('[data-test="generate"]').trigger('click'); await flushPromises()
-  expect(calls.find(c=>c.method==='post'&&c.url.endsWith('solution-drafts/'))?.body).toEqual({analysis_id:14})
+  expect(calls.find(c=>c.method==='post'&&c.url.endsWith('solution-workflows/'))?.body).toEqual({analysis_id:14})
   expect(calls.filter(c=>c.method==='get'&&c.url==='/solution-drafts/21/')).toHaveLength(0)
   expect(calls.some(c=>c.url.endsWith('submit/'))).toBe(false); w.unmount()
 })
@@ -71,12 +72,12 @@ it('disables duplicate generation while the selected snapshot request is pending
   const w=await mountPage(AnalysisPanel,{opportunityId:7}); await w.get('select').setValue('14'); await flushPromises()
   const base=http.defaults.adapter as AxiosAdapter; let release:()=>void=()=>{}
   const gate=new Promise<void>(resolve=>{release=resolve})
-  http.defaults.adapter=async config=>{if(config.method==='post'&&config.url?.endsWith('solution-drafts/'))await gate;return base(config)}
+  http.defaults.adapter=async config=>{if(config.method==='post'&&config.url?.endsWith('solution-workflows/'))await gate;return base(config)}
   const button=w.get('[data-test="generate"]'); await button.trigger('click'); await button.trigger('click')
   expect(button.attributes('disabled')).toBeDefined()
-  expect(calls.filter(c=>c.method==='post'&&c.url.endsWith('solution-drafts/'))).toHaveLength(0)
+  expect(calls.filter(c=>c.method==='post'&&c.url.endsWith('solution-workflows/'))).toHaveLength(0)
   release(); await flushPromises()
-  expect(calls.filter(c=>c.method==='post'&&c.url.endsWith('solution-drafts/'))).toHaveLength(1); w.unmount()
+  expect(calls.filter(c=>c.method==='post'&&c.url.endsWith('solution-workflows/'))).toHaveLength(1); w.unmount()
 })
 it('renders structured content and scoped source, without internal provenance identifiers',async()=>{
   const w=await mountPage(SolutionDetail)

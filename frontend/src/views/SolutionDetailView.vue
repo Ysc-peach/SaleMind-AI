@@ -5,32 +5,41 @@ import { useAuthStore } from '../stores/auth'
 import { getSolution } from '../api/solutions'
 import { getOpportunity } from '../api/opportunities'
 import { reviewHistory, submitReview, approveReview, returnReview } from '../api/reviews'
-import type { Solution, SolutionV1, SolutionV2, Review, ReturnReason } from '../types/workflow'
+import { getSolutionWorkflow, resumeSolutionWorkflow } from '../api/workflows'
+import type { Solution, SolutionV1, SolutionV2, Review, ReturnReason, SolutionWorkflow } from '../types/workflow'
 import type { Opportunity } from '../types/domain'
 import { safeError } from '../utils/errors'
 import { label, dateTime } from '../utils/labels'
 import Notice from '../components/Notice.vue'
 import SolutionV1Renderer from '../components/solution/SolutionV1Renderer.vue'
 import SolutionV2Renderer from '../components/solution/SolutionV2Renderer.vue'
+import WorkflowProgress from '../components/workflow/WorkflowProgress.vue'
 const route=useRoute(),auth=useAuthStore()
-const draft=ref<Solution>(),opportunity=ref<Opportunity>(),reviews=ref<Review[]>([]),loading=ref(false),busy=ref(false),error=ref(''),historyError=ref('')
+const draft=ref<Solution>(),opportunity=ref<Opportunity>(),reviews=ref<Review[]>([]),workflow=ref<SolutionWorkflow>(),loading=ref(false),busy=ref(false),error=ref(''),historyError=ref('')
 const reason=ref<ReturnReason|''>(''),comment=ref(''),reviewerId=ref('')
 const pending=computed(()=>reviews.value.find(r=>r.status==='pending'))
 const ownOpportunity=computed(()=>!!opportunity.value&&(opportunity.value.sales_owner===auth.user?.id||opportunity.value.presales_owner===auth.user?.id))
-const canSubmit=computed(()=>draft.value?.review_status==='draft'&&!draft.value.is_stale&&(auth.user?.role==='admin'||ownOpportunity.value))
+const workflowAllows=(action:'SUBMIT_FOR_REVIEW'|'APPROVE'|'REQUEST_REVISION')=>!draft.value?.workflow_id||!!workflow.value?.allowed_actions.includes(action)
+const canSubmit=computed(()=>draft.value?.review_status==='draft'&&!draft.value.is_stale&&workflowAllows('SUBMIT_FOR_REVIEW')&&(auth.user?.role==='admin'||ownOpportunity.value))
 const independent=computed(()=>auth.user?.role==='presales'&&draft.value?.created_by===auth.user.id)
 const needsExplicitReviewer=computed(()=>independent.value||(auth.user?.role==='admin'&&draft.value?.created_by===auth.user.id&&!opportunity.value?.presales_owner))
-const canDecide=computed(()=>draft.value?.review_status==='pending_review'&&pending.value&&auth.user?.id!==draft.value.created_by&&(auth.user?.role==='admin'||(auth.user?.role==='presales'&&pending.value.reviewer===auth.user.id)))
+const canDecide=computed(()=>draft.value?.review_status==='pending_review'&&pending.value&&workflowAllows('APPROVE')&&workflowAllows('REQUEST_REVISION')&&auth.user?.id!==draft.value.created_by&&(auth.user?.role==='admin'||(auth.user?.role==='presales'&&pending.value.reviewer===auth.user.id)))
 let request=0
 async function load(){
-  const current=++request; loading.value=true;error.value='';historyError.value='';draft.value=undefined;reviews.value=[];opportunity.value=undefined
+  const current=++request; loading.value=true;error.value='';historyError.value='';draft.value=undefined;reviews.value=[];workflow.value=undefined;opportunity.value=undefined
   try{
     const data=await getSolution(Number(route.params.id)); if(current!==request)return; draft.value=data
     // An independent reviewer may read the version without Opportunity visibility.
-    const [history,context]=await Promise.allSettled([reviewHistory(data.id),getOpportunity(data.opportunity)])
+    const [history,context,workflowStatus]=await Promise.allSettled([
+      reviewHistory(data.id),
+      getOpportunity(data.opportunity),
+      data.workflow_id?getSolutionWorkflow(data.workflow_id):Promise.resolve(undefined),
+    ])
     if(current!==request)return
     if(history.status==='fulfilled')reviews.value=history.value;else historyError.value=safeError(history.reason)
     if(context.status==='fulfilled')opportunity.value=context.value
+    if(workflowStatus.status==='fulfilled')workflow.value=workflowStatus.value
+    else if(data.workflow_id)historyError.value=safeError(workflowStatus.reason)
   }catch(e){if(current===request)error.value=safeError(e)}finally{if(current===request)loading.value=false}
 }
 async function act(action:'submit'|'approve'|'return'){
@@ -38,9 +47,15 @@ async function act(action:'submit'|'approve'|'return'){
   if(action==='return'&&(!reason.value||!comment.value.trim()))return
   busy.value=true;error.value=''
   try{
-    if(action==='submit')await submitReview(draft.value.id,needsExplicitReviewer.value?Number(reviewerId.value):undefined)
-    if(action==='approve')await approveReview(draft.value.id)
-    if(action==='return')await returnReview(draft.value.id,reason.value as ReturnReason,comment.value.trim())
+    if(draft.value.workflow_id){
+      if(action==='submit')await resumeSolutionWorkflow(draft.value.workflow_id,{action:'SUBMIT_FOR_REVIEW'})
+      if(action==='approve')await resumeSolutionWorkflow(draft.value.workflow_id,{action:'APPROVE'})
+      if(action==='return')await resumeSolutionWorkflow(draft.value.workflow_id,{action:'REQUEST_REVISION',return_reason:(reason.value as ReturnReason).toUpperCase() as Uppercase<ReturnReason>,comment:comment.value.trim()})
+    }else{
+      if(action==='submit')await submitReview(draft.value.id,needsExplicitReviewer.value?Number(reviewerId.value):undefined)
+      if(action==='approve')await approveReview(draft.value.id)
+      if(action==='return')await returnReview(draft.value.id,reason.value as ReturnReason,comment.value.trim())
+    }
     await load();comment.value='';reason.value=''
   }catch(e){
     const message=safeError(e)
@@ -51,6 +66,7 @@ async function act(action:'submit'|'approve'|'return'){
 watch(()=>route.params.id,()=>{reason.value='';comment.value='';reviewerId.value='';load()},{immediate:true})
 </script>
 <template><Notice :loading="loading" :error="error" /><template v-if="draft"><RouterLink v-if="opportunity" :to="`/opportunities/${draft.opportunity}?tab=solutions`" class="back-link">← 商机工作区</RouterLink><div class="page-heading"><div><p class="eyebrow">SOLUTION V{{draft.version}} · 分析快照 #{{draft.analysis_id}}</p><h1>{{draft.title}}</h1><p class="muted">{{dateTime(draft.created_at)}} · 创建人 #{{draft.created_by}}</p></div><el-button :disabled="busy||loading" @click="load">刷新</el-button></div><div class="row status-row"><el-tag>{{label(draft.review_status)}}</el-tag><span :class="draft.is_stale?'stale-badge':'current-badge'">{{draft.is_stale?'已过期':'当前有效'}}</span></div><div v-if="draft.is_stale" class="notice"><strong>此版本需要重新核对依据</strong><p v-for="item in draft.stale_reasons" :key="item">{{label(item)}}</p><p>审核历史仍保留，过期状态不等于撤销历史批准。</p></div>
+<WorkflowProgress v-if="workflow" :workflow="workflow" />
 <SolutionV1Renderer v-if="draft.schema_version===1" :solution="draft as SolutionV1" />
 <SolutionV2Renderer v-else-if="draft.schema_version===2" :payload="(draft as SolutionV2).draft_payload" :source-registry="(draft as SolutionV2).source_registry" :claim-sources="(draft as SolutionV2).claim_sources" />
 <section v-else class="panel notice" data-test="unsupported-schema">此方案使用当前前端不支持的结构版本，请刷新应用或联系管理员。</section>

@@ -2,7 +2,7 @@
 import { ref, watch, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { analysisHistory, getAnalysis, latestAnalysis, createAnalysis } from '../api/analysis'
-import { generateSolution } from '../api/solutions'
+import { newWorkflowRequestKey, startSolutionWorkflow } from '../api/workflows'
 import type { Analysis, AnalysisSummary } from '../types/workflow'
 import { safeError } from '../utils/errors'
 import { label, dateTime } from '../utils/labels'
@@ -10,6 +10,7 @@ import Notice from './Notice.vue'
 const props=defineProps<{opportunityId:number}>(), router=useRouter()
 const rows=ref<AnalysisSummary[]>([]), selected=ref(''), detail=ref<Analysis>(), latest=ref<Analysis>()
 const loading=ref(false), busy=ref(false), error=ref(''), feedback=ref(''), page=ref(1), total=ref(0)
+const pendingWorkflowKey=ref('')
 let request=0, alive=true
 onBeforeUnmount(()=>{alive=false; request++})
 async function load() {
@@ -42,10 +43,15 @@ async function analyze(){
 async function generate(){
   if(busy.value||!detail.value||Number(selected.value)!==detail.value.id)return
   busy.value=true; error.value=''
-  try { const result=await generateSolution(props.opportunityId,detail.value.id); if(alive)await router.push(`/solutions/${result.id}`) }
+  try {
+    pendingWorkflowKey.value ||= newWorkflowRequestKey()
+    const result=await startSolutionWorkflow(props.opportunityId,detail.value.id,pendingWorkflowKey.value)
+    if(alive){pendingWorkflowKey.value='';await router.push(`/solutions/${result.solution_draft_id}`)}
+  }
   catch(e){if(alive)error.value=safeError(e)} finally{if(alive)busy.value=false}
 }
-watch(()=>props.opportunityId,()=>{selected.value='';detail.value=undefined;latest.value=undefined;feedback.value='';page.value=1;load()},{immediate:true})
+watch(()=>props.opportunityId,()=>{selected.value='';detail.value=undefined;latest.value=undefined;feedback.value='';pendingWorkflowKey.value='';page.value=1;load()},{immediate:true})
+watch(selected,()=>{pendingWorkflowKey.value=''})
 function changePage(nextPage:number){selected.value='';detail.value=undefined;feedback.value='';page.value=nextPage;load()}
 </script>
 <template><section class="panel"><div class="page-heading"><div><h2>AI需求分析</h2><p class="muted">分析是不可修改的快照。请明确选择一个快照，再生成技术方案。</p></div><el-button :disabled="busy||loading" @click="analyze">创建新分析</el-button></div>

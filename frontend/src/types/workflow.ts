@@ -12,6 +12,7 @@ export interface SolutionSummaryV2 extends SolutionSummaryBase {schema_version:2
 export type SolutionSummary = SolutionSummaryV1 | SolutionSummaryV2
 
 export interface SolutionV1 extends SolutionSummaryV1 {
+  workflow_id:string|null
   draft_payload:{title:string;executive_summary:Statement[];solution_sections:{key:string;title:string;statements:Statement[]}[];assumptions:{text:string;related_fields:string[]}[]}
   provenance:{statement_path:string;citation_label:string;source_document_id:number;source_excerpt:string}[]
 }
@@ -36,6 +37,7 @@ export interface V2Payload {
 }
 export interface SafeSolutionSource {source_id:string;document_id:number;document_title:string;source_excerpt:string}
 export interface SolutionV2 extends SolutionSummaryV2 {
+  workflow_id:string|null
   draft_payload:V2Payload
   source_registry:SafeSolutionSource[]
   claim_sources:Record<string,string[]>
@@ -44,3 +46,25 @@ export type Solution = SolutionV1 | SolutionV2
 
 export type ReturnReason = 'customer_info_required'|'technical_revision_required'
 export interface Review {id:number;solution_draft:number;submitted_by:number;reviewer:number;status:string;return_reason:ReturnReason|'';comment:string;submitted_at:string;decided_at:string|null}
+
+export type SolutionWorkflowStatus =
+  | 'GENERATING'
+  | 'WAITING_FOR_SALES_CONFIRMATION'
+  | 'WAITING_FOR_PRESALES_REVIEW'
+  | 'APPROVED'
+  | 'CUSTOMER_INFO_REQUIRED'
+  | 'TECHNICAL_REVISION_REQUIRED'
+  | 'BLOCKED'
+  | 'FAILED'
+  | 'CONFLICT'
+export type SolutionWorkflowAction = 'SUBMIT_FOR_REVIEW'|'APPROVE'|'REQUEST_REVISION'
+export interface SolutionWorkflow {
+  workflow_id:string
+  status:SolutionWorkflowStatus
+  solution_draft_id:number|null
+  solution_version:number|null
+  solution_review_id:number|null
+  reviewer_id:number|null
+  allowed_actions:SolutionWorkflowAction[]
+  error_code:string
+}
