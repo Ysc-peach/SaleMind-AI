@@ -12,6 +12,7 @@ from .solution_workflow_views import (
     SolutionWorkflowCollectionViewSet,
     SolutionWorkflowDetailViewSet,
 )
+from .workspace_views import ReviewerInboxAPIView, SalesWorkspaceAPIView
 
 
 customer_create_view = CustomerViewSet.as_view({"post": "create"})
@@ -53,6 +54,16 @@ solution_workflow_resume_view = SolutionWorkflowDetailViewSet.as_view(
 
 
 urlpatterns = [
+    path(
+        "workspaces/sales/",
+        SalesWorkspaceAPIView.as_view(),
+        name="sales-workspace",
+    ),
+    path(
+        "reviews/inbox/",
+        ReviewerInboxAPIView.as_view(),
+        name="reviewer-inbox",
+    ),
     path(
         "opportunities/<int:opportunity_id>/solution-workflows/",
         solution_workflow_start_view,

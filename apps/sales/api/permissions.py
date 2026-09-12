@@ -41,3 +41,22 @@ class SolutionDraftPermission(BasePermission):
             and request.user.role
             in (UserRole.ADMIN, UserRole.SALES, UserRole.PRESALES)
         )
+
+
+class SalesWorkspacePermission(BasePermission):
+    """The Sales workspace is an owning-Sales projection, not a staff console."""
+
+    def has_permission(self, request, view):
+        return bool(
+            request.user.is_authenticated and request.user.role == UserRole.SALES
+        )
+
+
+class ReviewerInboxPermission(BasePermission):
+    """Only business reviewers can open their own version-scoped inbox."""
+
+    def has_permission(self, request, view):
+        return bool(
+            request.user.is_authenticated
+            and request.user.role in (UserRole.PRESALES, UserRole.ADMIN)
+        )

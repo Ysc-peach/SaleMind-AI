@@ -7,6 +7,26 @@ from apps.accounts.models import User, UserRole
 from ..models import Customer, Opportunity
 
 
+def user_display_name(user) -> str:
+    """Return the smallest useful business display name without exposing profile data."""
+
+    if user is None:
+        return ""
+    return user.get_full_name().strip() or user.username
+
+
+class OpportunityDisplaySerializer(serializers.ModelSerializer):
+    customer_name = serializers.CharField(source="customer.name", read_only=True)
+    sales_owner_name = serializers.SerializerMethodField()
+    presales_owner_name = serializers.SerializerMethodField()
+
+    def get_sales_owner_name(self, obj):
+        return user_display_name(obj.sales_owner)
+
+    def get_presales_owner_name(self, obj):
+        return user_display_name(obj.presales_owner)
+
+
 class OpportunitySummarySerializer(serializers.ModelSerializer):
     """Expose only the non-sensitive fields needed for collision search."""
 
@@ -96,7 +116,7 @@ class RejectForbiddenFieldsMixin:
         return super().to_internal_value(data)
 
 
-class OpportunityListSerializer(serializers.ModelSerializer):
+class OpportunityListSerializer(OpportunityDisplaySerializer):
     """Compact safe representation for an Opportunity collection."""
 
     class Meta:
@@ -105,8 +125,11 @@ class OpportunityListSerializer(serializers.ModelSerializer):
             "id",
             "project_name",
             "customer",
+            "customer_name",
             "sales_owner",
+            "sales_owner_name",
             "presales_owner",
+            "presales_owner_name",
             "stage",
             "status",
             "budget",
@@ -116,7 +139,7 @@ class OpportunityListSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class OpportunityDetailSerializer(serializers.ModelSerializer):
+class OpportunityDetailSerializer(OpportunityDisplaySerializer):
     """Full read shape for an Opportunity visible to an authorized user."""
 
     class Meta:
@@ -125,8 +148,11 @@ class OpportunityDetailSerializer(serializers.ModelSerializer):
             "id",
             "project_name",
             "customer",
+            "customer_name",
             "sales_owner",
+            "sales_owner_name",
             "presales_owner",
+            "presales_owner_name",
             "raw_requirement",
             "budget",
             "stage",
