@@ -8,7 +8,7 @@ const auth = useAuthStore(), router = useRouter(), route = useRoute()
 async function login() {
   if(busy.value) return
   busy.value = true; error.value = ''
-  try { await auth.login(username.value, password.value); const next = String(route.query.next ?? ''); await router.replace(next.startsWith('/') && !next.startsWith('//') && !next.startsWith('/login') ? next : '/opportunities') }
+  try { await auth.login(username.value, password.value); const next = String(route.query.next ?? ''); await router.replace(next.startsWith('/') && !next.startsWith('//') && !next.startsWith('/login') ? next : '/workspace') }
   catch(e) { error.value = safeError(e) } finally { password.value = ''; busy.value = false }
 }
 </script>

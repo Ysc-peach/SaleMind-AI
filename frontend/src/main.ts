@@ -10,6 +10,7 @@ import App from './App.vue'
 import { router } from './router'
 import './styles/main.css'
 import './styles/workflow.css'
+import './styles/role-workspaces.css'
 import './styles/workflow.css'
 const app=createApp(App).use(createPinia()).use(router)
 for(const component of [ElButton,ElTag,ElTable,ElTableColumn,ElPagination]) app.use(component)

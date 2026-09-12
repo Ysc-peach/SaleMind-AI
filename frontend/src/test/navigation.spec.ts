@@ -9,6 +9,7 @@ function router() {
   const r = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/login', component: {}, meta: { guest: true } },
     { path: '/opportunities', component: {}, meta: { authenticated: true } },
+    { path: '/workspace', component: {}, meta: { authenticated: true } },
   ] }); installGuards(r); return r
 }
 describe('route protection', () => {
@@ -19,6 +20,6 @@ describe('route protection', () => {
   it('redirects signed-in users away from login', async () => {
     const auth = useAuthStore(); auth.restored = true
     auth.user = { id: 1, username: 's', role: 'sales', email: '', first_name: '', last_name: '' }
-    const r = router(); await r.push('/login'); expect(r.currentRoute.value.path).toBe('/opportunities')
+    const r = router(); await r.push('/login'); expect(r.currentRoute.value.path).toBe('/workspace')
   })
 })
