@@ -46,6 +46,29 @@ it('renders the structured V2 sections through claim references instead of a JSO
   expect(wrapper.text()).not.toContain('"claim_id"')
 })
 
+it('provides long-page navigation and a reviewer focus summary',()=>{
+  const wrapper=mount(SolutionV2Renderer,{props:{
+    payload,
+    sourceRegistry:[
+      {source_id:'S1',document_id:5,document_title:'产品能力说明',source_excerpt:'支持私有化部署。'},
+      {source_id:'S2',document_id:6,document_title:'验收说明',source_excerpt:'验收指标需要协商。'},
+    ],
+    claimSources:{C0002:['S1'],C0003:['S1'],C0006:['S2']},
+  },global:{plugins:[ElementPlus]}})
+
+  const nav=wrapper.get('[data-test="solution-section-nav"]')
+  for(const target of ['summary','customer','proposal','architecture','deployment','implementation','risks','acceptance','milestones','assumptions','questions','scope']){
+    expect(nav.find(`a[href="#v2-${target}"]`).exists()).toBe(true)
+  }
+  const focus=wrapper.get('[data-test="review-focus"]')
+  expect(focus.text()).toContain('审核重点')
+  expect(focus.text()).toContain('具体上线日期待确认。')
+  expect(focus.text()).toContain('建议验证可用性目标。')
+  expect(focus.text()).toContain('1 项风险')
+  expect(focus.text()).toContain('1 项待确认')
+  expect(focus.text()).toContain('1 项验收条件')
+})
+
 it('opens only sources mapped to the selected claim and omits audit internals',async()=>{
   const wrapper=mount(SolutionV2Renderer,{props:{
     payload,
@@ -67,4 +90,22 @@ it('opens only sources mapped to the selected claim and omits audit internals',a
   for(const forbidden of ['content hash','index run','grounding ID','provider raw']){
     expect(wrapper.text()).not.toContain(forbidden)
   }
+})
+
+it('deduplicates a claim source, keeps claim context, and hides internal source ids',async()=>{
+  const wrapper=mount(SolutionV2Renderer,{props:{
+    payload,
+    sourceRegistry:[
+      {source_id:'S1',document_id:5,document_title:'产品能力说明',source_excerpt:'支持私有化部署。'},
+      {source_id:'S1',document_id:5,document_title:'产品能力说明',source_excerpt:'支持私有化部署。'},
+    ],
+    claimSources:{C0003:['S1','S1']},
+  },global:{plugins:[ElementPlus]}})
+
+  expect(wrapper.get('[data-test="sources-C0003"]').text()).toContain('1 条来源')
+  await wrapper.get('[data-test="sources-C0003"]').trigger('click')
+  const drawer=wrapper.get('[data-test="source-drawer"]')
+  expect(drawer.text()).toContain('建议采用知识服务组件。')
+  expect(drawer.findAll('[data-test="source-card"]')).toHaveLength(1)
+  expect(drawer.text()).not.toContain('S1')
 })

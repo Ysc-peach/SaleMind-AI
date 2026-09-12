@@ -115,6 +115,36 @@ async function mountDetail() {
   return wrapper
 }
 
+function useV2Draft() {
+  draft.schema_version = 2
+  draft.draft_payload = {
+    title:'合成技术方案',
+    claims:[
+      {claim_id:'C1',statement_type:'customer_fact',text:'客户需要企业知识查询。',citations:[],related_requirement_fields:[]},
+      {claim_id:'C2',statement_type:'proposal',text:'建议采用知识服务组件。',citations:['S1'],related_requirement_fields:[]},
+      {claim_id:'C3',statement_type:'unresolved',text:'上线日期待确认。',citations:[],related_requirement_fields:[]},
+      {claim_id:'C4',statement_type:'proposal',text:'建议在验收前验证可用性目标。',citations:['S2'],related_requirement_fields:[]},
+    ],
+    executive_summary:['C1','C2'],
+    customer_context:{confirmed_claim_ids:['C1'],unresolved_claim_ids:['C3'],requirement_fields:[]},
+    proposed_solution:{overview_claim_ids:['C2'],capability_groups:[]},
+    architecture:{overview_claim_ids:['C2'],components:[]},
+    deployment_and_integration:[],
+    implementation_plan:{phases:[]},
+    risks:[{risk_id:'R1',condition_claim_id:'C3',impact_claim_ids:[],mitigation_claim_ids:['C4'],trigger_claim_ids:[]}],
+    acceptance_criteria:[{criterion_id:'A1',claim_id:'C4',classification:'proposed'}],
+    milestones:[],
+    assumptions:[],
+    open_questions:[{question_id:'Q1',requirement_field:'timeline',requirement_status:'unknown',unresolved_claim_id:'C3'}],
+    out_of_scope:[],
+  }
+  draft.source_registry = [
+    {source_id:'S1',document_id:5,document_title:'产品能力说明',source_excerpt:'支持知识服务组件。'},
+    {source_id:'S2',document_id:6,document_title:'验收说明',source_excerpt:'验收目标需要协商。'},
+  ]
+  draft.claim_sources = {C2:['S1'],C4:['S2']}
+}
+
 it('starts a workflow with the explicit analysis and a retry-safe idempotency key', async () => {
   const router = createRouter({history:createMemoryHistory(),routes:[
     {path:'/solutions/:id',component:{template:'<div />'}},
@@ -145,6 +175,49 @@ it('restores the Sales confirmation state from status after loading the DRAFT', 
   for (const technical of ['LangGraph','checkpoint','interrupt','thread_id']) {
     expect(wrapper.text()).not.toContain(technical)
   }
+  wrapper.unmount()
+})
+
+it('summarizes the V2 review state and attention counts above the long document', async () => {
+  useV2Draft()
+  const wrapper = await mountDetail()
+
+  const summary=wrapper.get('[data-test="solution-summary"]')
+  expect(summary.text()).toContain('V1')
+  expect(summary.text()).toContain('当前有效')
+  expect(summary.text()).toContain('草稿')
+  expect(summary.text()).toContain('1 项风险')
+  expect(summary.text()).toContain('1 项待确认')
+  expect(summary.text()).toContain('2 个来源')
+  wrapper.unmount()
+})
+
+it('keeps review actions discoverable in a sticky review rail for the assigned reviewer', async () => {
+  workflow.status = 'WAITING_FOR_PRESALES_REVIEW'; workflow.allowed_actions = ['APPROVE','REQUEST_REVISION']; workflow.solution_review_id = 31; workflow.reviewer_id = 2
+  draft.review_status = 'pending_review'
+  review = {id:31,solution_draft:21,submitted_by:1,reviewer:2,status:'pending',return_reason:'',comment:'',submitted_at:snapshot.created_at,decided_at:null}
+  const auth = useAuthStore(); auth.user!.id = 2; auth.user!.role = 'presales'
+  const wrapper = await mountDetail()
+
+  const actions=wrapper.get('[data-test="review-actions"]')
+  expect(actions.classes()).toContain('review-action-rail')
+  expect(actions.classes()).toContain('solution-review-panel')
+  expect(actions.get('[data-test="approve"]').text()).toContain('通过技术审核')
+  expect(actions.get('[data-test="return"]').text()).toContain('退回')
+  expect(actions.get('[data-test="reason"]').isVisible()).toBe(true)
+  expect(actions.get('textarea').isVisible()).toBe(true)
+  wrapper.unmount()
+})
+
+it('keeps stale and historical V1 states explicit without invoking the V2 renderer', async () => {
+  draft.is_stale = true
+  draft.stale_reasons = ['newer_requirement_analysis']
+  draft.draft_payload.executive_summary = [{statement_type:'customer_fact',text:'历史方案摘要',citations:[]}]
+  const wrapper = await mountDetail()
+
+  expect(wrapper.get('[data-test="solution-summary"]').text()).toContain('已过期')
+  expect(wrapper.text()).toContain('历史方案摘要')
+  expect(wrapper.find('[data-test="review-focus"]').exists()).toBe(false)
   wrapper.unmount()
 })
 

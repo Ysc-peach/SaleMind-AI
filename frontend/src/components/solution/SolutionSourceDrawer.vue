@@ -1,17 +1,21 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { SafeSolutionSource } from '../../types/workflow'
-defineProps<{open:boolean;sources:SafeSolutionSource[]}>()
+const props=defineProps<{open:boolean;claimText:string;sources:SafeSolutionSource[]}>()
 const emit=defineEmits<{close:[]}>()
+const uniqueSources=computed(()=>[...new Map(props.sources.map(source=>[source.source_id,source])).values()])
 </script>
 
 <template>
-  <aside v-if="open" class="source-drawer" aria-label="声明来源">
+  <aside v-if="open" class="source-drawer" data-test="source-drawer" aria-label="声明来源">
     <div class="page-heading"><h3>来源依据</h3><el-button @click="emit('close')">关闭</el-button></div>
-    <p v-if="!sources.length" class="muted">该声明没有企业文档来源。</p>
-    <article v-for="source in sources" :key="source.source_id" class="source-card"><strong>{{source.source_id}} · {{source.document_title}}</strong><blockquote class="preserve">{{source.source_excerpt}}</blockquote></article>
+    <p class="muted">当前内容</p>
+    <blockquote class="claim-context">{{claimText}}</blockquote>
+    <p v-if="!uniqueSources.length" class="muted">该内容没有企业文档来源。</p>
+    <article v-for="source in uniqueSources" :key="source.source_id" class="source-card" data-test="source-card"><strong>{{source.document_title}}</strong><blockquote class="preserve">{{source.source_excerpt}}</blockquote></article>
   </aside>
 </template>
 
 <style scoped>
-.source-drawer{position:fixed;inset:0 0 0 auto;z-index:20;width:min(440px,92vw);overflow:auto;background:#fff;border-left:1px solid #dfe5ee;box-shadow:-12px 0 32px rgba(31,45,71,.14);padding:24px}.source-card{margin-top:16px;padding-top:16px;border-top:1px solid #e8ecf2}.source-card blockquote{margin:10px 0 0}
+.source-drawer{position:fixed;inset:0 0 0 auto;z-index:20;width:min(440px,92vw);overflow:auto;background:#fff;border-left:1px solid #dfe5ee;box-shadow:-12px 0 32px rgba(31,45,71,.14);padding:24px}.claim-context{border-left:3px solid #7ca0d6;background:#f3f7fc;color:#314a6c}.source-card{margin-top:16px;padding-top:16px;border-top:1px solid #e8ecf2}.source-card blockquote{margin:10px 0 0}
 </style>
