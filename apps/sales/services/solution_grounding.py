@@ -17,8 +17,12 @@ from apps.sales.services.requirement_analysis import (
     RequirementConflict,
     RequirementDimension,
     RequirementFieldAnalysis,
+    RequirementStatus,
 )
 from apps.sales.services.solution_grounding_prompt import build_solution_grounding_messages
+from apps.sales.services.solution_proposal_admissibility_prompt import (
+    build_proposal_admissibility_messages,
+)
 from apps.sales.services.solution_retrieval import SolutionSource
 from apps.sales.services.solution_schema import (
     AtomicSolutionClaimSet,
@@ -39,6 +43,11 @@ class GroundingAtomicity(StrEnum):
     COMPOUND = "COMPOUND"
 
 
+class ProposalAdmissibilityDecision(StrEnum):
+    ADMISSIBLE = "ADMISSIBLE"
+    INADMISSIBLE = "INADMISSIBLE"
+
+
 class GroundingViolationCode(StrEnum):
     CUSTOMER_FACT_NOT_SUPPORTED = "CUSTOMER_FACT_NOT_SUPPORTED"
     ENTERPRISE_FACT_NOT_SUPPORTED = "ENTERPRISE_FACT_NOT_SUPPORTED"
@@ -46,6 +55,7 @@ class GroundingViolationCode(StrEnum):
     UNCONFIRMED_AS_NEGATIVE = "UNCONFIRMED_AS_NEGATIVE"
     REQUIREMENT_PROMOTED_TO_CAPABILITY = "REQUIREMENT_PROMOTED_TO_CAPABILITY"
     PROPOSAL_NOT_SUPPORTED = "PROPOSAL_NOT_SUPPORTED"
+    PROPOSAL_NOT_ADMISSIBLE = "PROPOSAL_NOT_ADMISSIBLE"
     ENVIRONMENT_INFERENCE = "ENVIRONMENT_INFERENCE"
     MIXED_GROUNDING_STATUS = "MIXED_GROUNDING_STATUS"
     CITATION_SEMANTIC_MISMATCH = "CITATION_SEMANTIC_MISMATCH"
@@ -84,6 +94,22 @@ class GroundingCustomerContext:
 class GroundingClaimResult:
     location: str
     relation: GroundingRelation
+    atomicity: GroundingAtomicity
+
+
+@dataclass(frozen=True, slots=True)
+class ProposalAdmissibilityPacket:
+    location: str
+    text: str
+    related_requirement_fields: tuple[RequirementDimension, ...]
+    capability_basis: tuple[SolutionSource, ...]
+    customer_context: "GroundingCustomerContext"
+
+
+@dataclass(frozen=True, slots=True)
+class ProposalAdmissibilityResult:
+    location: str
+    decision: ProposalAdmissibilityDecision
     atomicity: GroundingAtomicity
 
 
@@ -197,48 +223,237 @@ def verify_atomic_solution_v2_proposals(
     analysis: OpportunityRequirementAnalysis,
     proposals,
     sources: tuple[SolutionSource, ...],
+    allowed_source_labels: tuple[str, ...],
     llm_provider: LLMProvider | None = None,
 ):
-    """Reuse the proposal-only verifier while retaining the closed V2 placement IR."""
+    """Admit V2 engineering proposals without applying fact-entailment semantics."""
 
     from apps.sales.services.solution_prompt_v2 import (
         AtomicSolutionProposalSetV2,
-        SolutionV2Section,
-    )
-    from apps.sales.services.solution_schema import (
-        AtomicSolutionClaim,
-        AtomicSolutionClaimSet,
-        SolutionSectionKey,
     )
 
-    if not isinstance(proposals, AtomicSolutionProposalSetV2) or not proposals.proposals:
+    if (
+        not isinstance(analysis, OpportunityRequirementAnalysis)
+        or not isinstance(proposals, AtomicSolutionProposalSetV2)
+        or not proposals.proposals
+        or not isinstance(allowed_source_labels, tuple)
+        or len(set(allowed_source_labels)) != len(allowed_source_labels)
+        or any(not isinstance(label, str) for label in allowed_source_labels)
+    ):
         raise SolutionDraftGroundingError(SolutionGroundingErrorCode.INVALID_INPUT)
-    section_map = {
-        SolutionV2Section.PROPOSED_SOLUTION: SolutionSectionKey.OVERALL_APPROACH,
-        SolutionV2Section.ARCHITECTURE: SolutionSectionKey.OVERALL_APPROACH,
-        SolutionV2Section.DEPLOYMENT_AND_INTEGRATION: SolutionSectionKey.DEPLOYMENT,
-        SolutionV2Section.IMPLEMENTATION_PLAN: SolutionSectionKey.IMPLEMENTATION,
-        SolutionV2Section.RISKS: SolutionSectionKey.IMPLEMENTATION,
-        SolutionV2Section.ACCEPTANCE_CRITERIA: SolutionSectionKey.IMPLEMENTATION,
-        SolutionV2Section.MILESTONES: SolutionSectionKey.IMPLEMENTATION,
-        SolutionV2Section.OUT_OF_SCOPE: SolutionSectionKey.OVERALL_APPROACH,
-    }
-    adapted = AtomicSolutionClaimSet(tuple(
-        AtomicSolutionClaim(
-            section=section_map[proposal.placement.section],
-            statement_type=SolutionStatementType.PROPOSAL,
+    _validate_sources(sources)
+    source_by_label = {source.label: source for source in sources}
+    allowed_labels = frozenset(allowed_source_labels)
+    if not allowed_labels <= source_by_label.keys():
+        raise SolutionDraftGroundingError(SolutionGroundingErrorCode.INVALID_INPUT)
+
+    packets = []
+    for index, proposal in enumerate(proposals.proposals):
+        related_fields = proposal.related_requirement_fields
+        if (
+            not isinstance(proposal.citations, tuple)
+            or not proposal.citations
+            or len(set(proposal.citations)) != len(proposal.citations)
+            or any(label not in allowed_labels for label in proposal.citations)
+            or not isinstance(related_fields, tuple)
+            or len(set(related_fields)) != len(related_fields)
+            or any(not isinstance(field, RequirementDimension) for field in related_fields)
+            or any(not _requirement_has_context(analysis, field) for field in related_fields)
+        ):
+            raise SolutionDraftGroundingError(SolutionGroundingErrorCode.INVALID_INPUT)
+        if _asserts_unresolved_as_confirmed(analysis, related_fields, proposal.text):
+            _proposal_not_admissible(f"proposals[{index}]")
+        basis = tuple(source_by_label[label] for label in proposal.citations)
+        if _has_unsupported_precision(
+            proposal.text,
+            analysis,
+            related_fields,
+            basis,
+        ):
+            _proposal_not_admissible(f"proposals[{index}]")
+        packets.append(ProposalAdmissibilityPacket(
+            location=f"proposals[{index}]",
             text=proposal.text,
-            citations=proposal.citations,
+            related_requirement_fields=related_fields,
+            capability_basis=basis,
+            customer_context=_complete_customer_context(analysis),
+        ))
+
+    max_concurrency = settings.VERIFIER_MAX_CONCURRENCY
+    if (
+        not isinstance(max_concurrency, int)
+        or isinstance(max_concurrency, bool)
+        or max_concurrency <= 0
+    ):
+        raise SolutionDraftGroundingError(SolutionGroundingErrorCode.INVALID_INPUT)
+    provider = llm_provider if llm_provider is not None else get_llm_provider()
+    with ThreadPoolExecutor(
+        max_workers=min(max_concurrency, len(packets)),
+        thread_name_prefix="solution-proposal-admissibility",
+    ) as executor:
+        futures = tuple(
+            executor.submit(_verify_proposal_admissibility_packet, packet, provider)
+            for packet in packets
         )
-        for proposal in proposals.proposals
-    ))
-    verify_atomic_solution_proposals(
-        analysis=analysis,
-        proposals=adapted,
-        sources=sources,
-        llm_provider=llm_provider,
-    )
+        try:
+            tuple(future.result() for future in futures)
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            raise
     return proposals
+
+
+_CONDITIONAL_BOUNDARY_MARKERS = (
+    "如果",
+    "若",
+    "前提",
+    "待确认",
+    "确认后",
+    "取决于",
+    "根据确认结果",
+)
+_PRECISION_PATTERN = re.compile(
+    r"(?:"
+    r"\d+(?:\.\d+)?\s*(?:%|％|QPS|TPS|毫秒|ms|秒|分钟|小时|天|周|月|人天|人日|节点|台|核|GB|TB)"
+    r"|\d+\s*(?:个|台)?\s*(?:应用|数据库|服务|计算|存储)?\s*节点"
+    r"|\d{4}[-/]\d{1,2}[-/]\d{1,2}"
+    r"|\d{4}年\d{1,2}月\d{1,2}日"
+    r"|\bv\d+(?:\.\d+)+\b"
+    r"|\b(?:OAuth|OIDC|SAML|TLS|HTTPS?)\s*v?\d+(?:\.\d+)+\b"
+    r")",
+    flags=re.IGNORECASE,
+)
+
+
+def _requirement_has_context(
+    analysis: OpportunityRequirementAnalysis,
+    field: RequirementDimension,
+) -> bool:
+    value = getattr(analysis.requirements, field.value)
+    if value.status is RequirementStatus.KNOWN:
+        return bool(value.value and value.evidence)
+    return bool(
+        value.evidence
+        or any(field in conflict.fields for conflict in analysis.conflicts)
+        or any(question.field is field for question in analysis.clarifying_questions)
+    )
+
+
+def _asserts_unresolved_as_confirmed(
+    analysis: OpportunityRequirementAnalysis,
+    related_fields: tuple[RequirementDimension, ...],
+    text: str,
+) -> bool:
+    has_unresolved_dependency = any(
+        getattr(analysis.requirements, field.value).status is not RequirementStatus.KNOWN
+        for field in related_fields
+    )
+    return has_unresolved_dependency and not any(
+        marker in text for marker in _CONDITIONAL_BOUNDARY_MARKERS
+    )
+
+
+def _has_unsupported_precision(
+    text: str,
+    analysis: OpportunityRequirementAnalysis,
+    related_fields: tuple[RequirementDimension, ...],
+    basis: tuple[SolutionSource, ...],
+) -> bool:
+    matches = tuple(match.group(0) for match in _PRECISION_PATTERN.finditer(text))
+    if not matches:
+        return False
+    supported_text = " ".join(
+        tuple(
+            value
+            for field in related_fields
+            for value in (
+                getattr(analysis.requirements, field.value).value,
+                getattr(analysis.requirements, field.value).evidence,
+            )
+            if isinstance(value, str)
+        )
+        + tuple(source.content for source in basis)
+    )
+    normalized_basis = "".join(supported_text.lower().split())
+    return any(
+        "".join(match.lower().split()) not in normalized_basis for match in matches
+    )
+
+
+def _proposal_not_admissible(location: str) -> NoReturn:
+    raise SolutionDraftGroundingError(
+        SolutionGroundingErrorCode.NOT_GROUNDED,
+        violations=(SolutionGroundingViolation(
+            GroundingViolationCode.PROPOSAL_NOT_ADMISSIBLE,
+            location,
+        ),),
+    )
+
+
+def _verify_proposal_admissibility_packet(
+    packet: ProposalAdmissibilityPacket,
+    provider: LLMProvider,
+) -> ProposalAdmissibilityResult:
+    generation = provider.generate(build_proposal_admissibility_messages((packet,)))
+    result = _parse_proposal_admissibility_results(
+        generation.content,
+        packets=(packet,),
+    )[0]
+    if (
+        result.decision is not ProposalAdmissibilityDecision.ADMISSIBLE
+        or result.atomicity is not GroundingAtomicity.ATOMIC
+    ):
+        _proposal_not_admissible(packet.location)
+    return result
+
+
+def _parse_proposal_admissibility_results(
+    content: str,
+    *,
+    packets: tuple[ProposalAdmissibilityPacket, ...],
+) -> tuple[ProposalAdmissibilityResult, ...]:
+    text = _text(content)
+    fence = re.fullmatch(r"```json[ \t]*\r?\n(.*)\r?\n```", text, flags=re.DOTALL)
+    if fence is not None:
+        text = fence.group(1)
+    try:
+        payload = json.loads(
+            text,
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_constant,
+        )
+    except (ValueError, RecursionError):
+        _invalid_response()
+    _object(payload, {"results"})
+    items = payload["results"]
+    if not isinstance(items, list) or len(items) != len(packets):
+        _invalid_response()
+    allowed_locations = frozenset(packet.location for packet in packets)
+    by_location = {}
+    for item in items:
+        _object(item, {"location", "decision", "atomicity"})
+        location = item["location"]
+        decision = item["decision"]
+        atomicity = item["atomicity"]
+        if (
+            not isinstance(location, str)
+            or location not in allowed_locations
+            or location in by_location
+            or not isinstance(decision, str)
+            or decision not in ProposalAdmissibilityDecision._value2member_map_
+            or not isinstance(atomicity, str)
+            or atomicity not in GroundingAtomicity._value2member_map_
+        ):
+            _invalid_response()
+        by_location[location] = ProposalAdmissibilityResult(
+            location,
+            ProposalAdmissibilityDecision(decision),
+            GroundingAtomicity(atomicity),
+        )
+    if set(by_location) != allowed_locations:
+        _invalid_response()
+    return tuple(by_location[packet.location] for packet in packets)
 
 
 def _verify_packets(

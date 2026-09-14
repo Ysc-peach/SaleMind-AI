@@ -456,21 +456,45 @@ def assemble_solution_draft_v2(
         SolutionV2ContainerKind,
         SolutionV2PlacementField,
         SolutionV2Section,
+        SolutionV2StructureRelationType,
+        validate_solution_v2_structure_relations,
     )
 
     if not isinstance(deterministic, V2DeterministicContent) or not isinstance(
         proposals, AtomicSolutionProposalSetV2
     ):
         _invalid()
+    validate_solution_v2_structure_relations(proposals)
+
+    section_priority = {value: index for index, value in enumerate(SolutionV2Section)}
+    kind_priority = {
+        value: index for index, value in enumerate(SolutionV2ContainerKind)
+    }
+    field_priority = {
+        value: index for index, value in enumerate(SolutionV2PlacementField)
+    }
+    ordered_proposals = tuple(sorted(
+        proposals.proposals,
+        key=lambda proposal: (
+            section_priority[proposal.placement.section],
+            kind_priority[proposal.placement.container_kind],
+            proposal.placement.container_key or "",
+            field_priority[proposal.placement.field],
+            tuple(field.value for field in proposal.related_requirement_fields),
+            proposal.text,
+            proposal.citations,
+        ),
+    ))
 
     claims = list(deterministic.claims)
     proposal_claims: list[tuple[SolutionAtomicClaimV2, object]] = []
-    for index, proposal in enumerate(proposals.proposals, start=len(claims) + 1):
+    for index, proposal in enumerate(ordered_proposals, start=len(claims) + 1):
         claim = SolutionAtomicClaimV2(
             claim_id=f"C{index:04d}",
             statement_type=SolutionClaimTypeV2.PROPOSAL,
             text=proposal.text,
             citations=proposal.citations,
+            related_requirement_fields=proposal.related_requirement_fields,
         )
         claims.append(claim)
         proposal_claims.append((claim, proposal.placement))
@@ -489,12 +513,7 @@ def assemble_solution_draft_v2(
                 for fact_id in fact_ids
             )
 
-    proposed_overview = list(deterministic.enterprise_claim_ids)
-    proposed_overview.extend(
-        claim_id
-        for claim_id in deterministic.unresolved_claim_ids
-        if claim_id not in deterministic.customer_context.unresolved_claim_ids
-    )
+    proposed_overview: list[str] = []
     groups: dict[str, list[str]] = {}
     architecture_overview: list[str] = []
     components: dict[str, dict[str, list[str]]] = {}
@@ -550,6 +569,32 @@ def assemble_solution_draft_v2(
         else:
             _invalid()
 
+    component_dependencies: dict[str, set[str]] = {
+        key: set() for key in components
+    }
+    phase_dependencies: dict[str, set[str]] = {key: set() for key in phases}
+    phase_acceptance: dict[str, set[str]] = {key: set() for key in phases}
+    milestone_phases: dict[str, set[str]] = {key: set() for key in milestones}
+    for relation in proposals.structure_relations:
+        if relation.relation_type is SolutionV2StructureRelationType.COMPONENT_DEPENDENCY:
+            component_dependencies[relation.source_container_key].add(
+                relation.target_container_key
+            )
+        elif relation.relation_type is SolutionV2StructureRelationType.PHASE_DEPENDENCY:
+            phase_dependencies[relation.source_container_key].add(
+                relation.target_container_key
+            )
+        elif relation.relation_type is SolutionV2StructureRelationType.PHASE_ACCEPTANCE:
+            phase_acceptance[relation.source_container_key].add(
+                relation.target_container_key
+            )
+        elif relation.relation_type is SolutionV2StructureRelationType.MILESTONE_PHASE:
+            milestone_phases[relation.source_container_key].add(
+                relation.target_container_key
+            )
+        else:
+            _invalid()
+
     if any(len(value["timing"]) > 1 for value in phases.values()) or any(
         len(value["timing"]) > 1 for value in milestones.values()
     ):
@@ -559,8 +604,14 @@ def assemble_solution_draft_v2(
 
     criterion_items = tuple(
         AcceptanceCriterionV2(key, claim_id, AcceptanceClassification.PROPOSED)
-        for key, claim_id in criteria.items()
+        for key, claim_id in sorted(criteria.items())
     )
+    component_order = _stable_topological_order(
+        components.keys(), component_dependencies
+    )
+    phase_order = _stable_topological_order(phases.keys(), phase_dependencies)
+    component_position = {key: index for index, key in enumerate(component_order)}
+    phase_position = {key: index for index, key in enumerate(phase_order)}
     phase_items = tuple(
         ImplementationPhaseV2(
             phase_id=key,
@@ -569,45 +620,103 @@ def assemble_solution_draft_v2(
             task_claim_ids=tuple(value["tasks"]),
             owner_roles=(OwnerRoleV2.TBD,),
             deliverable_claim_ids=tuple(value["deliverables"]),
-            dependency_phase_ids=(),
-            acceptance_criterion_ids=(),
+            dependency_phase_ids=tuple(sorted(
+                phase_dependencies[key], key=phase_position.__getitem__
+            )),
+            acceptance_criterion_ids=tuple(sorted(phase_acceptance[key])),
             timing_claim_id=value["timing"][0] if value["timing"] else None,
             timing_classification=(
                 TimingClassification.PROPOSED if value["timing"] else None
             ),
         )
-        for phase_index, (key, value) in enumerate(phases.items(), start=1)
+        for phase_index, key in enumerate(phase_order, start=1)
+        for value in (phases[key],)
     )
     milestone_items = tuple(
         MilestoneV2(
             milestone_id=key,
             name=f"里程碑 {milestone_index}",
-            related_phase_ids=(),
+            related_phase_ids=tuple(sorted(
+                milestone_phases[key], key=phase_position.__getitem__
+            )),
             outcome_claim_ids=tuple(value["outcome"]),
             timing_claim_id=value["timing"][0] if value["timing"] else None,
             timing_classification=(
                 TimingClassification.PROPOSED if value["timing"] else None
             ),
         )
-        for milestone_index, (key, value) in enumerate(milestones.items(), start=1)
+        for milestone_index, (key, value) in enumerate(
+            sorted(milestones.items()), start=1
+        )
+    )
+    capability_groups = []
+    reserved_group_ids = {
+        "enterprise_capability_basis",
+        "enterprise_capability_gaps",
+    }
+    if reserved_group_ids & groups.keys():
+        _invalid()
+    if deterministic.enterprise_claim_ids:
+        capability_groups.append(
+            CapabilityGroupV2(
+                "enterprise_capability_basis",
+                "企业能力依据",
+                deterministic.enterprise_claim_ids,
+            )
+        )
+    enterprise_unresolved_ids = tuple(
+        claim_id
+        for claim_id in deterministic.unresolved_claim_ids
+        if claim_id not in deterministic.customer_context.unresolved_claim_ids
+    )
+    if enterprise_unresolved_ids:
+        capability_groups.append(
+            CapabilityGroupV2(
+                "enterprise_capability_gaps",
+                "企业能力待确认",
+                enterprise_unresolved_ids,
+            )
+        )
+    capability_groups.extend(
+        CapabilityGroupV2(key, f"方案分组 {index}", tuple(claim_ids))
+        for index, (key, claim_ids) in enumerate(sorted(groups.items()), start=1)
+    )
+    summary_section_priority = {
+        section: priority
+        for priority, section in enumerate(
+            (
+                SolutionV2Section.PROPOSED_SOLUTION,
+                SolutionV2Section.ARCHITECTURE,
+                SolutionV2Section.DEPLOYMENT_AND_INTEGRATION,
+                SolutionV2Section.IMPLEMENTATION_PLAN,
+                SolutionV2Section.ACCEPTANCE_CRITERIA,
+                SolutionV2Section.RISKS,
+                SolutionV2Section.MILESTONES,
+                SolutionV2Section.OUT_OF_SCOPE,
+            )
+        )
+    }
+    summary_proposal_ids = tuple(
+        claim.claim_id
+        for claim, _placement in sorted(
+            proposal_claims,
+            key=lambda item: summary_section_priority[item[1].section],
+        )[:4]
     )
     draft = SolutionDraftV2(
         title="商机需求可执行技术方案",
         claims=tuple(claims),
         executive_summary_claim_ids=tuple(
             dict.fromkeys(
-                deterministic.customer_context.confirmed_claim_ids[:3]
-                + tuple(proposed_overview[:3])
-                + deterministic.customer_context.unresolved_claim_ids[:2]
+                deterministic.customer_context.confirmed_claim_ids[:1]
+                + summary_proposal_ids
+                + deterministic.customer_context.unresolved_claim_ids[:1]
             )
         )[:8],
         customer_context=deterministic.customer_context,
         proposed_solution=ProposedSolutionV2(
             overview_claim_ids=tuple(proposed_overview),
-            capability_groups=tuple(
-                CapabilityGroupV2(key, f"方案分组 {index}", tuple(claim_ids))
-                for index, (key, claim_ids) in enumerate(groups.items(), start=1)
-            ),
+            capability_groups=tuple(capability_groups),
         ),
         architecture=ArchitectureV2(
             overview_claim_ids=tuple(architecture_overview),
@@ -617,10 +726,13 @@ def assemble_solution_draft_v2(
                     name=f"架构组件 {index}",
                     responsibility_claim_ids=tuple(value["responsibilities"]),
                     rationale_claim_ids=tuple(value["rationale"]),
-                    dependency_component_ids=(),
+                    dependency_component_ids=tuple(sorted(
+                        component_dependencies[key], key=component_position.__getitem__
+                    )),
                     interface_claim_ids=tuple(value["interfaces"]),
                 )
-                for index, (key, value) in enumerate(components.items(), start=1)
+                for index, key in enumerate(component_order, start=1)
+                for value in (components[key],)
             ),
         ),
         deployment_and_integration=tuple(
@@ -630,7 +742,7 @@ def assemble_solution_draft_v2(
                 title=_topic_label(_topic_from_key(key)),
                 claim_ids=tuple(claim_ids),
             )
-            for key, claim_ids in topic_blocks.items()
+            for key, claim_ids in sorted(topic_blocks.items())
         ),
         implementation_plan=ImplementationPlanV2(phase_items),
         risks=tuple(
@@ -641,7 +753,7 @@ def assemble_solution_draft_v2(
                 mitigation_claim_ids=tuple(value["mitigation"]),
                 trigger_claim_ids=tuple(value["trigger"]),
             )
-            for key, value in risks.items()
+            for key, value in sorted(risks.items())
         ),
         acceptance_criteria=criterion_items,
         milestones=milestone_items,
@@ -649,11 +761,34 @@ def assemble_solution_draft_v2(
         open_questions=deterministic.open_questions,
         out_of_scope=tuple(
             ScopeItemV2(key, claim_id, AcceptanceClassification.PROPOSED)
-            for key, claim_id in scopes.items()
+            for key, claim_id in sorted(scopes.items())
         ),
     )
     validate_solution_draft_v2(draft)
     return V2AssemblyResult(draft, tuple(bindings))
+
+
+def _stable_topological_order(
+    nodes: Iterable[str],
+    dependencies: dict[str, set[str]],
+) -> tuple[str, ...]:
+    """Order dependency targets before sources with a stable key tie-break."""
+
+    remaining = set(nodes)
+    resolved: set[str] = set()
+    ordered: list[str] = []
+    while remaining:
+        ready = sorted(
+            node
+            for node in remaining
+            if dependencies.get(node, set()) <= resolved
+        )
+        if not ready:
+            _invalid()
+        ordered.extend(ready)
+        resolved.update(ready)
+        remaining.difference_update(ready)
+    return tuple(ordered)
 
 
 def _topic_label(topic: SolutionTopicV2) -> str:
@@ -870,6 +1005,13 @@ def _validate_architecture(
             or not set(component.dependency_component_ids) <= component_ids
         ):
             _invalid()
+    _stable_topological_order(
+        component_ids,
+        {
+            component.component_id: set(component.dependency_component_ids)
+            for component in value.components
+        },
+    )
 
 
 def _validate_topic_blocks(

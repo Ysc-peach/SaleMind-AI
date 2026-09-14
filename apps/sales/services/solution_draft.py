@@ -149,6 +149,7 @@ def generate_grounded_solution_draft(
                 analysis=typed,
                 proposals=proposals,
                 sources=sources,
+                allowed_source_labels=admission.allowed_proposal_source_labels,
                 llm_provider=active_verifier,
             )
     # External model calls must stay outside database transactions. Rebuild the

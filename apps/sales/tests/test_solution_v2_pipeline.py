@@ -204,13 +204,17 @@ class _GenerationProvider(LLMProvider):
     provider_name = "v2-generation-fake"
     model_name = "v2-generation-fake"
 
-    def __init__(self, proposals):
+    def __init__(self, proposals, *, structure_relations=()):
         self.proposals = proposals
+        self.structure_relations = structure_relations
         self.calls = []
 
     def generate(self, messages, *, max_output_tokens=None):
         self.calls.append(messages)
-        return LLMGeneration(content=json.dumps({"proposals": self.proposals}, ensure_ascii=False))
+        return LLMGeneration(content=json.dumps({
+            "proposals": self.proposals,
+            "structure_relations": self.structure_relations,
+        }, ensure_ascii=False))
 
 
 class _VerifierProvider(LLMProvider):
@@ -227,17 +231,19 @@ class _VerifierProvider(LLMProvider):
         import re
 
         match = re.search(
-            r"<grounding_claim_packets>(.*?)</grounding_claim_packets>",
+            r"<proposal_admissibility_packets>(.*?)</proposal_admissibility_packets>",
             messages[-1]["content"],
             flags=re.DOTALL,
         )
-        packet = json.loads(html.unescape(match.group(1)))["claims"]
+        packet = json.loads(html.unescape(match.group(1)))["proposals"]
         self.calls.append(packet)
         if self.callback:
             self.callback()
         return LLMGeneration(content=json.dumps({"results": [{
             "location": packet[0]["location"],
-            "relation": self.relation,
+            "decision": (
+                "ADMISSIBLE" if self.relation == "SUPPORTED" else "INADMISSIBLE"
+            ),
             "atomicity": "ATOMIC",
         }]}))
 
@@ -255,13 +261,22 @@ def _proposal(text, *, section="architecture", kind="architecture_component", ke
     }
 
 
-def _generate_v2(monkeypatch, proposals, *, verifier=None, admissions=None):
+def _generate_v2(
+    monkeypatch,
+    proposals,
+    *,
+    verifier=None,
+    admissions=None,
+    structure_relations=(),
+):
     from apps.sales.services import solution_draft as service
 
     monkeypatch.setattr(service, "search_knowledge", lambda **kwargs: [search_result()])
     sequence = iter(admissions or (admission_fixture(), admission_fixture()))
     monkeypatch.setattr(service, "build_solution_admission", lambda *args: next(sequence))
-    generation = _GenerationProvider(proposals)
+    generation = _GenerationProvider(
+        proposals, structure_relations=structure_relations
+    )
     return service.generate_grounded_solution_draft(
         analysis_record(),
         llm_provider=generation,
@@ -309,6 +324,91 @@ def test_each_v2_proposal_is_verified_independently_and_placement_order_survives
     by_id = {claim.claim_id: claim for claim in result.draft.claims}
     assert by_id[component.responsibility_claim_ids[0]].text == proposals[0]["text"]
     assert by_id[result.draft.proposed_solution.overview_claim_ids[-1]].text == proposals[1]["text"]
+
+
+def test_generation_pipeline_preserves_validated_structure_relations(monkeypatch):
+    proposals = (
+        _proposal("身份边界负责统一访问校验。", key="identity_boundary"),
+        _proposal("应用服务负责查询编排。", key="application_service"),
+        _proposal(
+            "确认需求与接口边界。",
+            section="implementation_plan",
+            kind="implementation_phase",
+            key="discovery",
+            field="objective",
+        ),
+        _proposal(
+            "实现核心查询链路。",
+            section="implementation_plan",
+            kind="implementation_phase",
+            key="build",
+            field="objective",
+        ),
+        _proposal(
+            "未授权用户无法查询受限知识。",
+            section="acceptance_criteria",
+            kind="acceptance_criterion",
+            key="access_control",
+            field="criterion",
+        ),
+        _proposal(
+            "核心查询链路完成验证。",
+            section="milestones",
+            kind="milestone",
+            key="core_ready",
+            field="outcome",
+        ),
+    )
+    relations = (
+        {
+            "relation_type": "component_dependency",
+            "source_container_kind": "architecture_component",
+            "source_container_key": "application_service",
+            "target_container_kind": "architecture_component",
+            "target_container_key": "identity_boundary",
+        },
+        {
+            "relation_type": "phase_dependency",
+            "source_container_kind": "implementation_phase",
+            "source_container_key": "build",
+            "target_container_kind": "implementation_phase",
+            "target_container_key": "discovery",
+        },
+        {
+            "relation_type": "phase_acceptance",
+            "source_container_kind": "implementation_phase",
+            "source_container_key": "build",
+            "target_container_kind": "acceptance_criterion",
+            "target_container_key": "access_control",
+        },
+        {
+            "relation_type": "milestone_phase",
+            "source_container_kind": "milestone",
+            "source_container_key": "core_ready",
+            "target_container_kind": "implementation_phase",
+            "target_container_key": "build",
+        },
+    )
+
+    result, _ = _generate_v2(
+        monkeypatch,
+        proposals,
+        verifier=_VerifierProvider(),
+        structure_relations=relations,
+    )
+
+    components = {
+        item.component_id: item for item in result.draft.architecture.components
+    }
+    phases = {
+        item.phase_id: item for item in result.draft.implementation_plan.phases
+    }
+    assert components["application_service"].dependency_component_ids == (
+        "identity_boundary",
+    )
+    assert phases["build"].dependency_phase_ids == ("discovery",)
+    assert phases["build"].acceptance_criterion_ids == ("access_control",)
+    assert result.draft.milestones[0].related_phase_ids == ("build",)
 
 
 def test_model_container_key_never_becomes_a_visible_semantic_label(monkeypatch):

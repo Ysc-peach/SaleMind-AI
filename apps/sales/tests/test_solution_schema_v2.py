@@ -294,6 +294,31 @@ def test_component_dependency_must_exist_and_cannot_reference_self():
             )
 
 
+def test_component_dependency_graph_must_be_acyclic():
+    draft = valid_draft()
+    first = replace(
+        draft.architecture.components[0],
+        dependency_component_ids=("retrieval_service",),
+    )
+    second = replace(
+        first,
+        component_id="retrieval_service",
+        name="检索服务层",
+        dependency_component_ids=(first.component_id,),
+    )
+
+    with pytest.raises(SolutionDraftError):
+        validate_solution_draft_v2(
+            replace(
+                draft,
+                architecture=replace(
+                    draft.architecture,
+                    components=(first, second),
+                ),
+            )
+        )
+
+
 def test_phase_dependencies_must_reference_an_earlier_phase():
     draft = valid_draft()
     first = draft.implementation_plan.phases[0]
