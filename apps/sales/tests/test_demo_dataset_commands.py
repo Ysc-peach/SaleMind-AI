@@ -461,13 +461,31 @@ def test_v2_claims_provenance_and_api_source_projection_are_consistent(
     assert domain.proposed_solution.overview_claim_ids
     assert domain.architecture.components
     assert domain.deployment_and_integration
-    assert len(domain.implementation_plan.phases) == 2
-    assert len(domain.risks) == 2
+    assert len(domain.implementation_plan.phases) >= 3
+    assert domain.risks
     assert len(domain.acceptance_criteria) == 2
-    assert len(domain.milestones) == 2
+    assert domain.milestones
     assert domain.assumption_claim_ids
     assert len(domain.open_questions) == 2
-    assert len(domain.out_of_scope) == 2
+    assert domain.out_of_scope
+    assert any(
+        component.dependency_component_ids
+        for component in domain.architecture.components
+    )
+    assert any(
+        phase.dependency_phase_ids for phase in domain.implementation_plan.phases
+    )
+    assert any(
+        phase.acceptance_criterion_ids
+        for phase in domain.implementation_plan.phases
+    )
+    assert all(milestone.related_phase_ids for milestone in domain.milestones)
+    assert all(
+        claim.related_requirement_fields
+        for claim in domain.claims
+        if claim.statement_type.value == "proposal"
+        and claim.claim_id not in domain.proposed_solution.overview_claim_ids
+    )
     assert provenance
     assert all(entry.claim_id in claim_ids for entry in provenance)
 

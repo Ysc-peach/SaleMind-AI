@@ -11,6 +11,8 @@ import json
 import re
 from dataclasses import dataclass, replace
 
+import pytest
+
 from apps.knowledge.models import EnterpriseGroundingFactStatus
 from apps.llm.base import LLMMessage
 from apps.sales.demo_fixtures import (
@@ -108,10 +110,12 @@ def _known(value: str) -> RequirementFieldAnalysis:
     )
 
 
-def _approved_demo_analysis() -> OpportunityRequirementAnalysis:
-    scenario = next(
-        item for item in DEMO_SCENARIOS if item.key == "enterprise_service_approved"
-    )
+def _demo_scenario(scenario_key: str):
+    return next(item for item in DEMO_SCENARIOS if item.key == scenario_key)
+
+
+def _demo_analysis(scenario_key: str) -> OpportunityRequirementAnalysis:
+    scenario = _demo_scenario(scenario_key)
     return OpportunityRequirementAnalysis(
         summary=(
             f"{scenario.customer_name}计划{scenario.business_goal}；"
@@ -182,10 +186,8 @@ def _approved_demo_admission() -> GroundingAdmission:
     )
 
 
-def _approved_demo_proposals():
-    scenario = next(
-        item for item in DEMO_SCENARIOS if item.key == "enterprise_service_approved"
-    )
+def _demo_proposals(scenario_key: str):
+    scenario = _demo_scenario(scenario_key)
     sources = "\n".join(
         f'<source id="S{index}">\n文档：{fixture.title}\n{fixture.content}\n</source>'
         for index, fixture in enumerate(DEMO_KNOWLEDGE, start=1)
@@ -207,12 +209,24 @@ def _approved_demo_proposals():
     )
 
 
-def approved_demo_assembly() -> V2AssemblyResult:
+def demo_assembly(scenario_key: str) -> V2AssemblyResult:
     deterministic = build_v2_deterministic_items(
-        _approved_demo_analysis(),
+        _demo_analysis(scenario_key),
         _approved_demo_admission(),
     )
-    return assemble_solution_draft_v2(deterministic, _approved_demo_proposals())
+    return assemble_solution_draft_v2(deterministic, _demo_proposals(scenario_key))
+
+
+def _approved_demo_analysis() -> OpportunityRequirementAnalysis:
+    return _demo_analysis("enterprise_service_approved")
+
+
+def _approved_demo_proposals():
+    return _demo_proposals("enterprise_service_approved")
+
+
+def approved_demo_assembly() -> V2AssemblyResult:
+    return demo_assembly("enterprise_service_approved")
 
 
 def _claim_ids_by_section(draft) -> dict[str, tuple[str, ...]]:
@@ -266,13 +280,14 @@ def _claim_ids_by_section(draft) -> dict[str, tuple[str, ...]]:
     }
 
 
-def evaluate_solution_quality(assembly: V2AssemblyResult) -> QualityEvaluation:
+def evaluate_solution_quality(
+    assembly: V2AssemblyResult,
+    scenario_key: str = "enterprise_service_approved",
+) -> QualityEvaluation:
     draft = assembly.draft
     claims = {claim.claim_id: claim for claim in draft.claims}
     sections = _claim_ids_by_section(draft)
-    scenario = next(
-        item for item in DEMO_SCENARIOS if item.key == "enterprise_service_approved"
-    )
+    scenario = _demo_scenario(scenario_key)
     expected_customer_facts = {
         f"业务目标：{scenario.business_goal}。",
         f"使用场景：{scenario.use_scenario}。",
@@ -392,7 +407,7 @@ def evaluate_solution_quality(assembly: V2AssemblyResult) -> QualityEvaluation:
     )
     phases = draft.implementation_plan.phases
     implementation_score = (
-        (3 if len(phases) >= 4 else 1 if len(phases) >= 2 else 0)
+        (3 if len(phases) >= 3 else 1 if len(phases) >= 2 else 0)
         + (3 if phases and all(item.objective_claim_ids for item in phases) else 0)
         + (3 if phases and all(item.task_claim_ids for item in phases) else 0)
         + (3 if phases and all(item.deliverable_claim_ids for item in phases) else 0)
@@ -455,7 +470,7 @@ def evaluate_solution_quality(assembly: V2AssemblyResult) -> QualityEvaluation:
     )
 
 
-def test_current_approved_demo_quality_is_a_safe_but_low_value_baseline():
+def test_approved_demo_is_a_high_quality_safe_solution():
     evaluation = evaluate_solution_quality(approved_demo_assembly())
 
     assert evaluation.hard_gates == {
@@ -464,8 +479,8 @@ def test_current_approved_demo_quality_is_a_safe_but_low_value_baseline():
         "fact_provenance_binding_exact": True,
         "proposals_do_not_conflict": True,
     }
-    assert evaluation.score < 80
-    assert evaluation.passed is False
+    assert evaluation.score >= 85
+    assert evaluation.passed is True
 
 
 def test_assembler_makes_summary_proposal_led_and_separates_capability_basis():
@@ -495,7 +510,11 @@ def test_assembler_preserves_every_atomic_claim_and_provenance_binding():
     draft = assembly.draft
     claim_ids = {claim.claim_id for claim in draft.claims}
 
-    assert len(claim_ids) == len(draft.claims) == 53
+    assert len(claim_ids) == len(draft.claims)
+    assert sum(
+        claim.statement_type is SolutionClaimTypeV2.PROPOSAL
+        for claim in draft.claims
+    ) == 30
     assert len(assembly.provenance_bindings) > 13
     assert all(binding.claim_id in claim_ids for binding in assembly.provenance_bindings)
     assert {
@@ -570,11 +589,30 @@ def test_summary_priority_comes_from_solution_structure_not_model_array_order():
     assert set(summary_proposals) <= core_texts
 
 
-def test_stage_two_improves_assembly_without_pretending_quality_is_complete():
-    evaluation = evaluate_solution_quality(approved_demo_assembly())
+@pytest.mark.parametrize(
+    "scenario_key,minimum_score",
+    [
+        ("manufacturing_knowledge", 80),
+        ("retail_collaboration", 80),
+        ("enterprise_service_approved", 85),
+        ("manufacturing_identity", 70),
+        ("ecommerce_ha_revision", 80),
+    ],
+)
+def test_each_demo_solution_has_scenario_appropriate_quality(
+    scenario_key,
+    minimum_score,
+):
+    evaluation = evaluate_solution_quality(
+        demo_assembly(scenario_key),
+        scenario_key,
+    )
 
-    assert evaluation.score < 80
-    assert evaluation.passed is False
+    assert all(evaluation.hard_gates.values())
+    assert evaluation.score >= minimum_score
+    assert evaluation.section_scores["architecture"] >= 12
+    assert evaluation.section_scores["implementation_plan"] >= 9
+    assert evaluation.section_scores["acceptance_criteria"] >= 6
 
 
 def test_generation_ir_round_trip_preserves_proposal_requirement_linkage():

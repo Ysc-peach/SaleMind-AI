@@ -17,6 +17,7 @@ from uuid import UUID, uuid5
 
 from apps.knowledge.embeddings.base import EmbeddingProvider
 from apps.llm.base import LLMGeneration, LLMMessage, LLMProvider
+from apps.sales.services.requirement_analysis import RequirementDimension
 
 
 DEMO_NAMESPACE = UUID("23dc62a1-8f7c-4eca-8d6c-6ed354b7942a")
@@ -409,6 +410,287 @@ class DemoGroundingExtractionProvider(LLMProvider):
         return LLMGeneration(json.dumps({"facts": facts}, ensure_ascii=False))
 
 
+def _demo_solution_payload(
+    scenario_key: str,
+    sources: dict[str, str],
+) -> dict[str, list[dict]]:
+    """Return one scenario-owned proposal graph in the production provider shape."""
+
+    def p(section, kind, key, field, text, source, *requirements):
+        return {
+            "placement": {
+                "section": section,
+                "container_kind": kind,
+                "container_key": key,
+                "field": field,
+            },
+            "text": text,
+            "citations": [sources[source]],
+            "related_requirement_fields": [item.value for item in requirements],
+        }
+
+    def relation(relation_type, source_kind, source_key, target_kind, target_key):
+        return {
+            "relation_type": relation_type,
+            "source_container_kind": source_kind,
+            "source_container_key": source_key,
+            "target_container_kind": target_kind,
+            "target_container_key": target_key,
+        }
+
+    def relations(component_edges, phase_keys, criteria, milestone):
+        result = [
+            relation(
+                "component_dependency",
+                "architecture_component",
+                source,
+                "architecture_component",
+                target,
+            )
+            for source, target in component_edges
+        ]
+        result.extend(
+            relation(
+                "phase_dependency",
+                "implementation_phase",
+                phase_keys[index],
+                "implementation_phase",
+                phase_keys[index - 1],
+            )
+            for index in range(1, len(phase_keys))
+        )
+        result.extend(
+            relation(
+                "phase_acceptance",
+                "implementation_phase",
+                phase_keys[-1],
+                "acceptance_criterion",
+                criterion,
+            )
+            for criterion in criteria
+        )
+        result.append(relation(
+            "milestone_phase",
+            "milestone",
+            milestone,
+            "implementation_phase",
+            phase_keys[-1],
+        ))
+        return result
+
+    bg = RequirementDimension.BUSINESS_GOAL
+    use = RequirementDimension.USE_SCENARIO
+    scale = RequirementDimension.USER_SCALE
+    deploy = RequirementDimension.DEPLOYMENT_REQUIREMENT
+    security = RequirementDimension.DATA_SECURITY_REQUIREMENT
+    environment = RequirementDimension.EXISTING_ENVIRONMENT
+    integration = RequirementDimension.INTEGRATION_REQUIREMENT
+    constraints = RequirementDimension.TECHNICAL_CONSTRAINTS
+
+    if scenario_key == "manufacturing_knowledge":
+        proposals = [
+            p("proposed_solution", "root", None, "overview", "建议建设受权限约束且可追溯来源的制造知识查询链路。", "knowledge", bg, use, security),
+            p("proposed_solution", "capability_group", "retrieval_tradeoff", "items", "当检索规模显著变化时，应重新评估独立向量检索能力。", "deployment", environment, constraints),
+            p("architecture", "root", None, "overview", "建议以企业入口、访问策略、资料摄取和检索存储四个边界组织查询流。", "knowledge", bg, security),
+            p("architecture", "architecture_component", "factory_entry", "responsibilities", "企业入口负责接收研发与售后人员的知识查询。", "integration", use, integration),
+            p("architecture", "architecture_component", "access_policy", "responsibilities", "访问策略组件负责在检索前应用文档级权限。", "integration", security, constraints),
+            p("architecture", "architecture_component", "knowledge_ingestion", "responsibilities", "资料摄取组件负责将设备手册和工艺资料转换为可检索内容。", "knowledge", use, constraints),
+            p("architecture", "architecture_component", "retrieval_store", "responsibilities", "检索存储组件负责保存知识索引并返回带来源的候选内容。", "knowledge", bg, environment),
+            p("architecture", "architecture_component", "access_policy", "rationale", "检索前执行权限过滤可避免受限资料进入回答上下文。", "integration", security),
+            p("architecture", "architecture_component", "knowledge_ingestion", "rationale", "独立摄取边界便于控制资料更新与重新索引。", "knowledge", use, constraints),
+            p("architecture", "architecture_component", "access_policy", "interfaces", "访问策略组件接收入口身份并向检索存储传递允许的资料范围。", "integration", integration, security),
+            p("architecture", "architecture_component", "knowledge_ingestion", "interfaces", "资料摄取组件向检索存储提交文档内容和来源标识。", "knowledge", use, environment),
+            p("deployment_and_integration", "topic_block", "deployment", "items", "建议将应用服务与数据存储分区部署在客户内网。", "deployment", deploy, security, environment),
+            p("deployment_and_integration", "topic_block", "integration", "items", "如果 OA 接口允许传递受控身份，则由企业入口复用该身份上下文。", "integration", integration, security),
+            p("implementation_plan", "implementation_phase", "permission_discovery", "objective", "先确认资料分级和 OA 身份边界。", "integration", integration, security),
+            p("implementation_plan", "implementation_phase", "permission_discovery", "tasks", "梳理文档类别、访问角色和入口身份字段。", "knowledge", use, security),
+            p("implementation_plan", "implementation_phase", "permission_discovery", "deliverables", "交付经确认的资料权限与接口清单。", "integration", integration, security),
+            p("implementation_plan", "implementation_phase", "knowledge_preparation", "objective", "建立可持续更新的制造资料索引。", "knowledge", bg, use),
+            p("implementation_plan", "implementation_phase", "knowledge_preparation", "tasks", "导入代表性设备资料并验证权限标签和来源标识。", "knowledge", use, security),
+            p("implementation_plan", "implementation_phase", "knowledge_preparation", "deliverables", "交付可重复执行的资料摄取与索引结果。", "knowledge", environment, constraints),
+            p("implementation_plan", "implementation_phase", "controlled_validation", "objective", "验证授权查询、来源追溯和知识更新闭环。", "knowledge", bg, security),
+            p("implementation_plan", "implementation_phase", "controlled_validation", "tasks", "使用不同访问角色执行查询与重新索引场景。", "knowledge", use, security),
+            p("implementation_plan", "implementation_phase", "controlled_validation", "deliverables", "交付权限、引用和更新场景的验收记录。", "knowledge", bg, security),
+            p("risks", "risk", "permission_mapping", "condition", "若文档权限标签与人员角色映射不一致，受限资料可能进入错误的检索范围。", "integration", security),
+            p("risks", "risk", "permission_mapping", "impact", "错误检索范围可能造成内部技术资料越权暴露。", "knowledge", security),
+            p("risks", "risk", "permission_mapping", "mitigation", "建议在摄取阶段校验资料标签并在查询阶段再次执行权限过滤。", "knowledge", security, constraints),
+            p("risks", "risk", "permission_mapping", "trigger", "权限抽样测试发现同一资料对错误角色可见时触发整改。", "integration", security),
+            p("acceptance_criteria", "acceptance_criterion", "authorized_retrieval", "criterion", "授权用户能够检索允许范围内的资料并查看来源。", "knowledge", use, security),
+            p("acceptance_criteria", "acceptance_criterion", "restricted_retrieval", "criterion", "未授权用户无法检索受限制造资料。", "integration", security),
+            p("milestones", "milestone", "knowledge_validation_ready", "outcome", "权限受控的知识查询链路完成验证。", "knowledge", bg, security),
+            p("out_of_scope", "scope", "oa_replacement", "scope", "本期不替换客户现有 OA 门户。", "integration", integration),
+        ]
+        structure_relations = relations(
+            (("factory_entry", "access_policy"), ("access_policy", "retrieval_store"), ("knowledge_ingestion", "retrieval_store")),
+            ("permission_discovery", "knowledge_preparation", "controlled_validation"),
+            ("authorized_retrieval", "restricted_retrieval"),
+            "knowledge_validation_ready",
+        )
+    elif scenario_key == "retail_collaboration":
+        proposals = [
+            p("proposed_solution", "root", None, "overview", "建议以统一业务入口和适配层组织门店、库存与商品资料协同。", "integration", bg, use, integration),
+            p("proposed_solution", "capability_group", "sync_tradeoff", "items", "统一适配的取舍是增加跨系统字段治理工作。", "integration", integration, constraints),
+            p("architecture", "root", None, "overview", "建议由企业入口、身份边界、协同编排和业务适配四个组件形成查询路径。", "integration", bg, integration),
+            p("architecture", "architecture_component", "retail_portal", "responsibilities", "企业入口负责承接门店与运营人员的业务查询。", "integration", use, integration),
+            p("architecture", "architecture_component", "retail_identity", "responsibilities", "身份边界负责将统一身份映射为可访问的业务范围。", "integration", security, integration),
+            p("architecture", "architecture_component", "collaboration_orchestrator", "responsibilities", "协同编排组件负责路由商品、库存和流程查询。", "integration", bg, use),
+            p("architecture", "architecture_component", "business_adapters", "responsibilities", "业务适配组件负责隔离不同系统的字段与接口差异。", "integration", integration, constraints),
+            p("architecture", "architecture_component", "retail_identity", "rationale", "集中身份映射可避免各业务适配器分别解释权限。", "integration", security),
+            p("architecture", "architecture_component", "business_adapters", "rationale", "独立适配边界可限制单个系统接口变化的影响范围。", "integration", integration, constraints),
+            p("architecture", "architecture_component", "retail_identity", "interfaces", "身份边界向协同编排组件提供用户与门店访问范围。", "integration", security, integration),
+            p("architecture", "architecture_component", "business_adapters", "interfaces", "业务适配组件通过受控接口返回标准化业务数据投影。", "integration", integration, use),
+            p("deployment_and_integration", "topic_block", "deployment", "items", "建议将应用服务与业务数据投影分区部署在企业受控网络内。", "deployment", deploy, security),
+            p("deployment_and_integration", "topic_block", "integration", "items", "如果目标系统缺少稳定接口，则以受控批量交换作为条件性接入路径。", "integration", integration, constraints),
+            p("implementation_plan", "implementation_phase", "interface_inventory", "objective", "先确认各业务系统的数据责任与接口边界。", "integration", integration, constraints),
+            p("implementation_plan", "implementation_phase", "interface_inventory", "tasks", "核对商品、库存和门店字段以及权限来源。", "integration", use, security),
+            p("implementation_plan", "implementation_phase", "interface_inventory", "deliverables", "交付业务字段映射与接口责任清单。", "integration", integration, constraints),
+            p("implementation_plan", "implementation_phase", "adapter_delivery", "objective", "建立隔离系统差异的业务适配链路。", "integration", bg, integration),
+            p("implementation_plan", "implementation_phase", "adapter_delivery", "tasks", "实现身份映射、数据转换和异常隔离。", "integration", integration, security),
+            p("implementation_plan", "implementation_phase", "adapter_delivery", "deliverables", "交付可验证的标准业务数据投影。", "integration", use, integration),
+            p("implementation_plan", "implementation_phase", "business_validation", "objective", "验证跨系统查询与数据同步边界。", "integration", bg, use),
+            p("implementation_plan", "implementation_phase", "business_validation", "tasks", "执行字段一致性、权限和接口异常场景。", "integration", integration, security),
+            p("implementation_plan", "implementation_phase", "business_validation", "deliverables", "交付跨系统协同验收记录。", "integration", bg, integration),
+            p("risks", "risk", "field_inconsistency", "condition", "若业务系统对同一商品或门店字段定义不一致，统一查询可能产生歧义。", "integration", integration, constraints),
+            p("risks", "risk", "field_inconsistency", "impact", "字段歧义可能导致运营人员看到不一致的业务数据。", "integration", use, integration),
+            p("risks", "risk", "field_inconsistency", "mitigation", "建议建立字段映射规则并保留来源系统标识。", "integration", integration, constraints),
+            p("risks", "risk", "field_inconsistency", "trigger", "跨系统对账发现同一业务对象结果不一致时触发治理。", "integration", integration),
+            p("acceptance_criteria", "acceptance_criterion", "cross_system_query", "criterion", "运营用户能够从统一入口查询商品与库存数据并识别来源系统。", "integration", use, integration),
+            p("acceptance_criteria", "acceptance_criterion", "permission_projection", "criterion", "验证不同门店角色只能查看其被授权的业务范围。", "integration", security),
+            p("milestones", "milestone", "collaboration_validated", "outcome", "跨系统业务协同链路完成验证。", "integration", bg, integration),
+            p("out_of_scope", "scope", "source_system_replacement", "scope", "本期不替换门店、库存或商品源系统。", "integration", integration),
+        ]
+        structure_relations = relations(
+            (("retail_portal", "retail_identity"), ("retail_identity", "collaboration_orchestrator"), ("collaboration_orchestrator", "business_adapters")),
+            ("interface_inventory", "adapter_delivery", "business_validation"),
+            ("cross_system_query", "permission_projection"),
+            "collaboration_validated",
+        )
+    elif scenario_key == "enterprise_service_approved":
+        proposals = [
+            p("proposed_solution", "root", None, "overview", "建议建设受身份权限约束的知识与合同草案辅助链路。", "knowledge", bg, use, security),
+            p("proposed_solution", "capability_group", "template_tradeoff", "items", "采用已审核模板的取舍是限制自由生成范围。", "knowledge", use, constraints),
+            p("architecture", "root", None, "overview", "建议由企业入口、身份权限、知识与草案应用、检索存储四个边界组成请求流。", "knowledge", bg, integration),
+            p("architecture", "architecture_component", "consultant_entry", "responsibilities", "企业入口负责接收顾问的案例查询与合同草案请求。", "integration", use, integration),
+            p("architecture", "architecture_component", "identity_access", "responsibilities", "身份权限组件负责在检索前限定顾问可访问的项目资料。", "integration", security, integration),
+            p("architecture", "architecture_component", "knowledge_contract_app", "responsibilities", "知识与草案应用负责基于已审核模板形成待人工复核的合同草案。", "knowledge", bg, use),
+            p("architecture", "architecture_component", "retrieval_storage", "responsibilities", "检索存储组件负责保存知识索引并返回可引用的项目资料。", "knowledge", environment, constraints),
+            p("architecture", "architecture_component", "identity_access", "rationale", "检索前过滤可防止跨项目资料进入生成上下文。", "integration", security),
+            p("architecture", "architecture_component", "knowledge_contract_app", "rationale", "已审核模板能够约束草案结构并保留人工审核责任。", "knowledge", use, constraints),
+            p("architecture", "architecture_component", "identity_access", "interfaces", "身份权限组件接收 SSO 身份并向应用传递项目访问范围。", "integration", integration, security),
+            p("architecture", "architecture_component", "knowledge_contract_app", "interfaces", "应用通过检索接口取得带来源内容，并通过 OA 交付待审核草案。", "integration", integration, use),
+            p("deployment_and_integration", "topic_block", "deployment", "items", "建议将应用服务与 PostgreSQL 数据存储分区部署在客户受控网络内。", "deployment", deploy, security, environment),
+            p("deployment_and_integration", "topic_block", "integration", "items", "如果模型能力需要访问外部服务，则必须在数据不出公网约束下先确认可用边界。", "deployment", security, integration),
+            p("implementation_plan", "implementation_phase", "boundary_confirmation", "objective", "先确认 SSO、OA、项目权限和审核模板边界。", "integration", integration, security),
+            p("implementation_plan", "implementation_phase", "boundary_confirmation", "tasks", "梳理身份字段、项目权限、模板版本和草案审核责任。", "knowledge", use, integration),
+            p("implementation_plan", "implementation_phase", "boundary_confirmation", "deliverables", "交付经确认的接口、权限与模板清单。", "integration", integration, security),
+            p("implementation_plan", "implementation_phase", "knowledge_delivery", "objective", "建立项目知识检索与受控草案生成链路。", "knowledge", bg, use),
+            p("implementation_plan", "implementation_phase", "knowledge_delivery", "tasks", "导入审核资料并实现权限过滤、来源引用和模板约束。", "knowledge", use, security),
+            p("implementation_plan", "implementation_phase", "knowledge_delivery", "deliverables", "交付可供顾问验证的知识与草案应用。", "knowledge", bg, use),
+            p("implementation_plan", "implementation_phase", "controlled_uat", "objective", "验证检索权限、引用来源和人工审核闭环。", "knowledge", bg, security),
+            p("implementation_plan", "implementation_phase", "controlled_uat", "tasks", "执行跨项目权限、引用定位和草案审批场景。", "integration", use, security),
+            p("implementation_plan", "implementation_phase", "controlled_uat", "deliverables", "交付受控用户验收记录和上线准备结论。", "deployment", deploy, integration),
+            p("risks", "risk", "template_boundary", "condition", "若模板版本和适用范围未受控，草案可能使用错误的合同结构。", "knowledge", use, constraints),
+            p("risks", "risk", "template_boundary", "impact", "错误模板可能增加顾问复核工作并影响交付一致性。", "knowledge", bg, use),
+            p("risks", "risk", "template_boundary", "mitigation", "建议仅允许已审核模板进入草案生成，并保留模板版本来源。", "knowledge", use, constraints),
+            p("risks", "risk", "template_boundary", "trigger", "发现草案引用未审核或不适用模板时停止交付。", "knowledge", use, constraints),
+            p("acceptance_criteria", "acceptance_criterion", "project_isolation", "criterion", "无项目权限的顾问无法检索受限项目资料。", "integration", security),
+            p("acceptance_criteria", "acceptance_criterion", "cited_draft", "criterion", "顾问能够查看草案依据的审核模板和知识来源。", "knowledge", use, constraints),
+            p("milestones", "milestone", "controlled_uat_passed", "outcome", "知识检索与合同草案人工审核链路完成用户验收。", "knowledge", bg, use),
+            p("out_of_scope", "scope", "final_contract_approval", "scope", "本期不由 AI 自动批准或签署最终合同。", "knowledge", use, constraints),
+        ]
+        structure_relations = relations(
+            (("consultant_entry", "identity_access"), ("knowledge_contract_app", "identity_access"), ("knowledge_contract_app", "retrieval_storage")),
+            ("boundary_confirmation", "knowledge_delivery", "controlled_uat"),
+            ("project_isolation", "cited_draft"),
+            "controlled_uat_passed",
+        )
+    elif scenario_key == "manufacturing_identity":
+        proposals = [
+            p("proposed_solution", "root", None, "overview", "建议先形成不依赖具体身份协议的统一知识入口边界。", "integration", bg, use, integration),
+            p("proposed_solution", "capability_group", "identity_tradeoff", "items", "在协议确认前推迟身份适配实现的取舍是保留后续接口调整空间。", "integration", integration, constraints),
+            p("architecture", "root", None, "overview", "建议由 OA 入口、条件身份适配、知识应用和内网存储四个边界组成。", "integration", bg, integration),
+            p("architecture", "architecture_component", "oa_entry", "responsibilities", "OA 入口负责承接多工厂员工的统一访问请求。", "integration", use, integration),
+            p("architecture", "architecture_component", "conditional_identity", "responsibilities", "条件身份适配组件负责在协议确认后转换身份和角色信息。", "integration", integration, security),
+            p("architecture", "architecture_component", "factory_knowledge_app", "responsibilities", "知识应用负责在授权范围内响应员工查询。", "knowledge", bg, use, security),
+            p("architecture", "architecture_component", "identity_store", "responsibilities", "内网存储负责保存知识索引和访问映射。", "deployment", security, environment),
+            p("architecture", "architecture_component", "conditional_identity", "rationale", "隔离身份适配可避免未确认协议影响知识应用核心逻辑。", "integration", integration, constraints),
+            p("architecture", "architecture_component", "factory_knowledge_app", "rationale", "统一应用边界可在协议确认前先验证知识查询能力。", "knowledge", bg, use),
+            p("architecture", "architecture_component", "conditional_identity", "interfaces", "如果客户 IdP 支持 OIDC，则优先通过标准 OIDC 登录链路接入。", "integration", integration, security),
+            p("architecture", "architecture_component", "factory_knowledge_app", "interfaces", "知识应用接收经适配的身份范围并调用内网知识存储。", "knowledge", use, security),
+            p("deployment_and_integration", "topic_block", "deployment", "items", "建议将应用服务与身份映射数据分区部署在客户内网。", "deployment", deploy, security),
+            p("deployment_and_integration", "topic_block", "integration", "items", "如果客户身份平台仅支持其他标准协议，则在接口确认后选择对应适配器。", "integration", integration, constraints),
+            p("implementation_plan", "implementation_phase", "protocol_discovery", "objective", "先确认身份协议、字段和角色映射。", "integration", integration, security),
+            p("implementation_plan", "implementation_phase", "protocol_discovery", "tasks", "获取身份接口资料并执行兼容性验证。", "integration", integration, constraints),
+            p("implementation_plan", "implementation_phase", "protocol_discovery", "deliverables", "交付已确认的身份协议与字段映射清单。", "integration", integration, security),
+            p("implementation_plan", "implementation_phase", "knowledge_skeleton", "objective", "建立与具体身份协议解耦的知识入口骨架。", "knowledge", bg, use),
+            p("implementation_plan", "implementation_phase", "knowledge_skeleton", "tasks", "实现授权上下文接口和内网知识查询链路。", "knowledge", use, security),
+            p("implementation_plan", "implementation_phase", "knowledge_skeleton", "deliverables", "交付可注入模拟身份范围的知识入口。", "knowledge", bg, integration),
+            p("implementation_plan", "implementation_phase", "identity_validation", "objective", "在协议确认后验证端到端统一登录。", "integration", integration, security),
+            p("implementation_plan", "implementation_phase", "identity_validation", "tasks", "执行登录、角色映射和越权访问场景。", "integration", use, security),
+            p("implementation_plan", "implementation_phase", "identity_validation", "deliverables", "交付身份集成与权限验证记录。", "integration", integration, security),
+            p("risks", "risk", "protocol_mismatch", "condition", "若客户身份协议与现有统一身份能力不兼容，适配路径需要调整。", "integration", integration, constraints),
+            p("risks", "risk", "protocol_mismatch", "impact", "身份适配调整可能改变后续联调顺序。", "integration", integration),
+            p("risks", "risk", "protocol_mismatch", "mitigation", "建议在核心集成前完成协议与字段兼容性验证。", "integration", integration, security),
+            p("risks", "risk", "protocol_mismatch", "trigger", "接口确认阶段发现协议或必要字段不兼容时触发调整。", "integration", integration, constraints),
+            p("acceptance_criteria", "acceptance_criterion", "identity_login", "criterion", "协议确认后，目标身份系统能够完成端到端登录验证。", "integration", integration),
+            p("acceptance_criteria", "acceptance_criterion", "role_access", "criterion", "不同角色登录后只能访问其授权知识范围。", "integration", security),
+            p("milestones", "milestone", "identity_boundary_validated", "outcome", "身份协议确认并完成权限链路验证。", "integration", integration, security),
+            p("out_of_scope", "scope", "identity_provider_replacement", "scope", "本期不替换客户现有统一身份平台。", "integration", integration),
+        ]
+        structure_relations = relations(
+            (("oa_entry", "conditional_identity"), ("factory_knowledge_app", "conditional_identity"), ("factory_knowledge_app", "identity_store")),
+            ("protocol_discovery", "knowledge_skeleton", "identity_validation"),
+            ("identity_login", "role_access"),
+            "identity_boundary_validated",
+        )
+    elif scenario_key == "ecommerce_ha_revision":
+        proposals = [
+            p("proposed_solution", "root", None, "overview", "建议以无状态服务、依赖隔离和数据一致性边界改造高峰期知识查询链路。", "deployment", bg, use, constraints),
+            p("proposed_solution", "capability_group", "availability_tradeoff", "items", "增强故障隔离的取舍是增加运行观测和恢复演练复杂度。", "deployment", deploy, constraints),
+            p("architecture", "root", None, "overview", "建议由请求入口、无状态服务、依赖隔离和数据一致性四个组件形成可恢复请求流。", "deployment", bg, constraints),
+            p("architecture", "architecture_component", "commerce_entry", "responsibilities", "请求入口负责认证并路由客服与运营查询。", "integration", use, integration),
+            p("architecture", "architecture_component", "stateless_service", "responsibilities", "无状态应用服务负责处理可水平扩展的知识查询。", "deployment", scale, constraints),
+            p("architecture", "architecture_component", "dependency_guard", "responsibilities", "依赖隔离组件负责限制外部系统异常在查询链路中的传播。", "integration", integration, constraints),
+            p("architecture", "architecture_component", "consistency_store", "responsibilities", "数据一致性组件负责在 PostgreSQL 中维护可恢复的业务与索引状态。", "deployment", environment, constraints),
+            p("architecture", "architecture_component", "stateless_service", "rationale", "无状态处理可让应用实例扩展不依赖本地会话。", "deployment", scale, constraints),
+            p("architecture", "architecture_component", "dependency_guard", "rationale", "隔离外部依赖可避免单个接口异常直接扩散到全部查询。", "integration", integration, constraints),
+            p("architecture", "architecture_component", "stateless_service", "interfaces", "应用服务通过受控接口读取一致性存储并返回来源信息。", "knowledge", use, environment),
+            p("architecture", "architecture_component", "dependency_guard", "interfaces", "依赖隔离组件包装 OA 与外部业务接口并返回可处理的失败结果。", "integration", integration, constraints),
+            p("deployment_and_integration", "topic_block", "deployment", "items", "建议将应用服务与 PostgreSQL 数据存储分区部署在企业受控网络内。", "deployment", deploy, security, environment),
+            p("deployment_and_integration", "topic_block", "integration", "items", "如果外部业务接口在高峰期异常，则由依赖隔离边界返回可处理的失败结果。", "integration", integration, constraints),
+            p("implementation_plan", "implementation_phase", "failure_inventory", "objective", "先确认关键依赖与故障传播边界。", "integration", integration, constraints),
+            p("implementation_plan", "implementation_phase", "failure_inventory", "tasks", "梳理入口、业务接口和数据库异常场景。", "integration", integration, environment),
+            p("implementation_plan", "implementation_phase", "failure_inventory", "deliverables", "交付故障场景与恢复责任清单。", "deployment", constraints, integration),
+            p("implementation_plan", "implementation_phase", "availability_delivery", "objective", "实现无状态服务、依赖隔离和一致性处理。", "deployment", bg, constraints),
+            p("implementation_plan", "implementation_phase", "availability_delivery", "tasks", "实现可重试边界、失败降级和状态恢复路径。", "deployment", integration, constraints),
+            p("implementation_plan", "implementation_phase", "availability_delivery", "deliverables", "交付可执行故障测试的高可用候选方案。", "deployment", bg, deploy),
+            p("implementation_plan", "implementation_phase", "resilience_validation", "objective", "通过预设故障与恢复场景验证方案。", "deployment", bg, constraints),
+            p("implementation_plan", "implementation_phase", "resilience_validation", "tasks", "执行依赖异常、应用恢复和数据一致性测试。", "deployment", integration, environment),
+            p("implementation_plan", "implementation_phase", "resilience_validation", "deliverables", "交付故障演练与数据一致性验收记录。", "deployment", constraints, environment),
+            p("risks", "risk", "dependency_cascade", "condition", "若外部业务接口异常未被隔离，失败可能沿查询链路传播。", "integration", integration, constraints),
+            p("risks", "risk", "dependency_cascade", "impact", "故障传播可能导致客服与运营查询不可用。", "integration", use, bg),
+            p("risks", "risk", "dependency_cascade", "mitigation", "建议为外部依赖设置可观测的失败边界和受控恢复路径。", "deployment", integration, constraints),
+            p("risks", "risk", "dependency_cascade", "trigger", "故障演练发现单个依赖异常造成未处理错误传播时触发整改。", "deployment", integration, constraints),
+            p("acceptance_criteria", "acceptance_criterion", "failure_isolation", "criterion", "验证单个外部依赖异常不会造成未处理错误传播到全部查询。", "integration", integration, constraints),
+            p("acceptance_criteria", "acceptance_criterion", "recovery_consistency", "criterion", "预设恢复场景完成后能够验证业务与索引状态一致。", "deployment", environment, constraints),
+            p("milestones", "milestone", "resilience_validated", "outcome", "故障隔离、恢复和一致性场景完成验证。", "deployment", bg, constraints),
+            p("out_of_scope", "scope", "unsupported_sla", "scope", "本期不承诺未经客户确认的可用性数字。", "deployment", constraints),
+        ]
+        structure_relations = relations(
+            (("commerce_entry", "stateless_service"), ("stateless_service", "dependency_guard"), ("stateless_service", "consistency_store")),
+            ("failure_inventory", "availability_delivery", "resilience_validation"),
+            ("failure_isolation", "recovery_consistency"),
+            "resilience_validated",
+        )
+    else:
+        raise ValueError("Unknown SalesMind demo scenario.")
+
+    return {
+        "proposals": proposals,
+        "structure_relations": structure_relations,
+    }
+
+
 class DemoSolutionProposalProvider(LLMProvider):
     def __init__(self, scenario: DemoScenario):
         self.scenario = scenario
@@ -429,54 +711,8 @@ class DemoSolutionProposalProvider(LLMProvider):
     ) -> LLMGeneration:
         del max_output_tokens
         source_labels = _source_labels(messages)
-        knowledge = source_labels["knowledge"]
-        integration = source_labels["integration"]
-        deployment = source_labels["deployment"]
-
-        def proposal(section, kind, key, field, text, source):
-            return {
-                "placement": {
-                    "section": section,
-                    "container_kind": kind,
-                    "container_key": key,
-                    "field": field,
-                },
-                "text": text,
-                "citations": [source],
-            }
-
-        focus = self.scenario.solution_focus
-        proposals = [
-            proposal("proposed_solution", "root", None, "overview", f"建议以{focus}作为本期总体交付方向。", knowledge),
-            proposal("proposed_solution", "capability_group", "capability_1", "items", "建议统一提供经过权限控制的知识查询入口。", knowledge),
-            proposal("architecture", "root", None, "overview", "建议采用应用服务、知识检索服务和数据服务分层组织。", deployment),
-            proposal("architecture", "architecture_component", "component_1", "responsibilities", "建议知识检索组件负责返回带来源的内部知识结果。", knowledge),
-            proposal("architecture", "architecture_component", "component_1", "rationale", "建议通过来源引用支持业务人员复核查询结论。", knowledge),
-            proposal("architecture", "architecture_component", "component_1", "interfaces", "建议知识检索组件通过受控接口与企业入口集成。", integration),
-            proposal("deployment_and_integration", "topic_block", "deployment", "items", "建议应用与数据服务部署在客户受控网络中。", deployment),
-            proposal("deployment_and_integration", "topic_block", "integration", "items", "建议通过标准接口连接现有 OA 与统一身份入口。", integration),
-            proposal("implementation_plan", "implementation_phase", "phase_1", "objective", "建议第一阶段完成资料范围与接入边界确认。", integration),
-            proposal("implementation_plan", "implementation_phase", "phase_1", "tasks", "建议梳理知识来源、用户范围和现有系统接口。", knowledge),
-            proposal("implementation_plan", "implementation_phase", "phase_1", "deliverables", "建议交付经双方确认的资料与接口清单。", integration),
-            proposal("implementation_plan", "implementation_phase", "phase_2", "objective", "建议第二阶段完成受控环境中的方案验证。", deployment),
-            proposal("implementation_plan", "implementation_phase", "phase_2", "tasks", "建议验证知识查询、身份接入和来源追溯链路。", integration),
-            proposal("implementation_plan", "implementation_phase", "phase_2", "deliverables", "建议交付可供业务验收的验证结果记录。", knowledge),
-            proposal("risks", "risk", "risk_1", "condition", "若企业身份协议与字段映射未确认，统一登录接入存在返工风险。", integration),
-            proposal("risks", "risk", "risk_1", "impact", "身份接入返工可能影响联调顺序。", integration),
-            proposal("risks", "risk", "risk_1", "mitigation", "建议在接口实现前确认身份协议和字段映射。", integration),
-            proposal("risks", "risk", "risk_1", "trigger", "当客户身份接口资料仍未交付时触发该风险。", integration),
-            proposal("risks", "risk", "risk_2", "condition", "若知识资料未完成权限分级，查询结果存在越权暴露风险。", knowledge),
-            proposal("risks", "risk", "risk_2", "impact", "越权查询可能造成内部资料访问范围扩大。", knowledge),
-            proposal("risks", "risk", "risk_2", "mitigation", "建议在导入前完成资料分类和访问角色映射。", knowledge),
-            proposal("risks", "risk", "risk_2", "trigger", "当资料缺少可执行的访问范围标记时触发该风险。", knowledge),
-            proposal("acceptance_criteria", "acceptance_criterion", "criterion_1", "criterion", "建议验收时确认授权用户能够查询知识并查看对应来源。", knowledge),
-            proposal("acceptance_criteria", "acceptance_criterion", "criterion_2", "criterion", "建议验收时确认未授权用户无法访问受限资料。", integration),
-            proposal("milestones", "milestone", "milestone_1", "outcome", "建议以完成资料和接口清单确认为首个里程碑结果。", integration),
-            proposal("milestones", "milestone", "milestone_2", "outcome", "建议以完成受控环境验证记录为第二个里程碑结果。", deployment),
-            proposal("out_of_scope", "scope", "scope_1", "scope", "建议本期范围不包含替换客户现有 OA 系统。", integration),
-            proposal("out_of_scope", "scope", "scope_2", "scope", "建议本期范围不包含未经确认的公网数据传输。", deployment),
-        ]
-        return LLMGeneration(json.dumps({"proposals": proposals}, ensure_ascii=False))
+        payload = _demo_solution_payload(self.scenario.key, source_labels)
+        return LLMGeneration(json.dumps(payload, ensure_ascii=False))
 
 
 class DemoVerifierProvider(LLMProvider):
@@ -495,6 +731,17 @@ class DemoVerifierProvider(LLMProvider):
         max_output_tokens: int | None = None,
     ) -> LLMGeneration:
         del max_output_tokens
+        if any("<proposal_admissibility_packets>" in item["content"] for item in messages):
+            payload = _tagged_json(messages, "proposal_admissibility_packets")
+            results = [
+                {
+                    "location": item["location"],
+                    "decision": "ADMISSIBLE",
+                    "atomicity": "ATOMIC",
+                }
+                for item in payload["proposals"]
+            ]
+            return LLMGeneration(json.dumps({"results": results}, ensure_ascii=False))
         payload = _tagged_json(messages, "grounding_claim_packets")
         results = [
             {
