@@ -514,7 +514,7 @@ def test_assembler_preserves_every_atomic_claim_and_provenance_binding():
     assert sum(
         claim.statement_type is SolutionClaimTypeV2.PROPOSAL
         for claim in draft.claims
-    ) == 30
+    ) == 38
     assert len(assembly.provenance_bindings) > 13
     assert all(binding.claim_id in claim_ids for binding in assembly.provenance_bindings)
     assert {
@@ -563,7 +563,10 @@ def test_assembler_keeps_unconfirmed_enterprise_capability_out_of_proposal_body(
 
 def test_summary_priority_comes_from_solution_structure_not_model_array_order():
     proposals = _approved_demo_proposals()
-    reordered = AtomicSolutionProposalSetV2(tuple(reversed(proposals.proposals)))
+    reordered = AtomicSolutionProposalSetV2(
+        tuple(reversed(proposals.proposals)),
+        tuple(reversed(proposals.structure_relations)),
+    )
 
     draft = assemble_solution_draft_v2(
         build_v2_deterministic_items(
@@ -623,6 +626,20 @@ def test_generation_ir_round_trip_preserves_proposal_requirement_linkage():
                     "section": "architecture",
                     "container_kind": "architecture_component",
                     "container_key": "identity_boundary",
+                    "field": "identity",
+                },
+                "text": "统一身份校验边界",
+                "citations": ["S1"],
+                "related_requirement_fields": [
+                    "integration_requirement",
+                    "data_security_requirement",
+                ],
+            },
+            {
+                "placement": {
+                    "section": "architecture",
+                    "container_kind": "architecture_component",
+                    "container_key": "identity_boundary",
                     "field": "rationale",
                 },
                 "text": "建议将身份校验集中在受控入口边界。",
@@ -631,7 +648,35 @@ def test_generation_ir_round_trip_preserves_proposal_requirement_linkage():
                     "integration_requirement",
                     "data_security_requirement",
                 ],
-            }
+            },
+            {
+                "placement": {
+                    "section": "architecture",
+                    "container_kind": "architecture_component",
+                    "container_key": "identity_boundary",
+                    "field": "responsibilities",
+                },
+                "text": "身份边界负责统一校验访问身份。",
+                "citations": ["S1"],
+                "related_requirement_fields": [
+                    "integration_requirement",
+                    "data_security_requirement",
+                ],
+            },
+            {
+                "placement": {
+                    "section": "architecture",
+                    "container_kind": "architecture_component",
+                    "container_key": "identity_boundary",
+                    "field": "interfaces",
+                },
+                "text": "身份边界向应用服务传递访问范围。",
+                "citations": ["S1"],
+                "related_requirement_fields": [
+                    "integration_requirement",
+                    "data_security_requirement",
+                ],
+            },
         ]
     }
     proposals = parse_atomic_solution_v2_proposals(

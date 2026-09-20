@@ -261,6 +261,15 @@ def _proposal(text, *, section="architecture", kind="architecture_component", ke
     }
 
 
+def _complete_component(*, key, identity, responsibility):
+    return (
+        _proposal(identity, key=key, field="identity"),
+        _proposal(responsibility, key=key),
+        _proposal(f"{identity}用于形成清晰的方案职责边界。", key=key, field="rationale"),
+        _proposal(f"{identity}通过受控接口与相邻组件交互。", key=key, field="interfaces"),
+    )
+
+
 def _generate_v2(
     monkeypatch,
     proposals,
@@ -303,8 +312,11 @@ def test_explicit_v2_selection_builds_structured_draft_and_skips_verifier_for_de
 
 
 def test_each_v2_proposal_is_verified_independently_and_placement_order_survives(monkeypatch):
-    proposals = (
-        _proposal("建议知识服务承担统一检索职责。"),
+    proposals = (*_complete_component(
+        key="knowledge_service",
+        identity="企业知识服务",
+        responsibility="建议知识服务承担统一检索职责。",
+    ),
         _proposal(
             "建议将私有化部署纳入总体方案。",
             section="proposed_solution",
@@ -317,19 +329,26 @@ def test_each_v2_proposal_is_verified_independently_and_placement_order_survives
 
     (result, _) = _generate_v2(monkeypatch, proposals, verifier=verifier)
 
-    assert len(verifier.calls) == 2
+    assert len(verifier.calls) == 5
     assert all(len(call) == 1 for call in verifier.calls)
     assert [call[0]["text"] for call in verifier.calls] == [item["text"] for item in proposals]
     component = result.draft.architecture.components[0]
     by_id = {claim.claim_id: claim for claim in result.draft.claims}
-    assert by_id[component.responsibility_claim_ids[0]].text == proposals[0]["text"]
-    assert by_id[result.draft.proposed_solution.overview_claim_ids[-1]].text == proposals[1]["text"]
+    assert by_id[component.identity_claim_id].text == proposals[0]["text"]
+    assert by_id[component.responsibility_claim_ids[0]].text == proposals[1]["text"]
+    assert by_id[result.draft.proposed_solution.overview_claim_ids[-1]].text == proposals[-1]["text"]
 
 
 def test_generation_pipeline_preserves_validated_structure_relations(monkeypatch):
-    proposals = (
-        _proposal("身份边界负责统一访问校验。", key="identity_boundary"),
-        _proposal("应用服务负责查询编排。", key="application_service"),
+    proposals = (*_complete_component(
+        key="identity_boundary",
+        identity="统一身份与权限服务",
+        responsibility="身份边界负责统一访问校验。",
+    ), *_complete_component(
+        key="application_service",
+        identity="企业应用服务",
+        responsibility="应用服务负责查询编排。",
+    ),
         _proposal(
             "确认需求与接口边界。",
             section="implementation_plan",
@@ -366,6 +385,13 @@ def test_generation_pipeline_preserves_validated_structure_relations(monkeypatch
             "source_container_key": "application_service",
             "target_container_kind": "architecture_component",
             "target_container_key": "identity_boundary",
+        },
+        {
+            "relation_type": "component_request_flow",
+            "source_container_kind": "architecture_component",
+            "source_container_key": "identity_boundary",
+            "target_container_kind": "architecture_component",
+            "target_container_key": "application_service",
         },
         {
             "relation_type": "phase_dependency",
@@ -415,7 +441,13 @@ def test_model_container_key_never_becomes_a_visible_semantic_label(monkeypatch)
     verifier = _VerifierProvider()
     (result, _) = _generate_v2(
         monkeypatch,
-        [_proposal("建议设置兼容性评估组件。", key="supports_oracle")],
+        [
+            *_complete_component(
+                key="supports_oracle",
+                identity="兼容性评估组件",
+                responsibility="建议设置兼容性评估组件。",
+            ),
+        ],
         verifier=verifier,
     )
 
@@ -430,9 +462,18 @@ def test_v2_proposal_verifier_rejection_aborts_whole_draft_without_partial_leak(
 
     verifier = _VerifierProvider(relation="INSUFFICIENT")
     with pytest.raises(SolutionDraftGroundingError):
-        _generate_v2(monkeypatch, [_proposal("证据不足的方案建议。")], verifier=verifier)
+        _generate_v2(
+            monkeypatch,
+            _complete_component(
+                key="knowledge_service",
+                identity="证据不足的方案组件",
+                responsibility="该组件承担知识查询职责。",
+            ),
+            verifier=verifier,
+        )
 
-    assert len(verifier.calls) == 1
+    assert 1 <= len(verifier.calls) <= 4
+    assert all(len(call) == 1 for call in verifier.calls)
 
 
 def test_v2_return_time_admission_drift_fails_before_assembly(monkeypatch):
@@ -445,7 +486,11 @@ def test_v2_return_time_admission_drift_fails_before_assembly(monkeypatch):
     with pytest.raises(SolutionDraftError) as exc:
         _generate_v2(
             monkeypatch,
-            [_proposal("建议知识服务承担统一检索职责。")],
+            _complete_component(
+                key="knowledge_service",
+                identity="企业知识服务",
+                responsibility="该服务承担知识查询职责。",
+            ),
             verifier=_VerifierProvider(),
             admissions=(original, changed),
         )

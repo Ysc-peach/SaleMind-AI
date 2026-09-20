@@ -107,7 +107,7 @@ watch(()=>route.params.id,()=>{reason.value='';comment.value='';reviewerId.value
     </div>
     <WorkflowProgress v-if="workflow" :workflow="workflow" />
 
-    <div class="solution-detail-layout">
+    <div class="solution-detail-layout responsive-solution-layout">
       <main class="solution-document">
         <SolutionV1Renderer v-if="draft.schema_version===1" :solution="draft as SolutionV1" />
         <SolutionV2Renderer v-else-if="draft.schema_version===2" :payload="(draft as SolutionV2).draft_payload" :source-registry="(draft as SolutionV2).source_registry" :claim-sources="(draft as SolutionV2).claim_sources" />
@@ -126,7 +126,7 @@ watch(()=>route.params.id,()=>{reason.value='';comment.value='';reviewerId.value
         </section>
       </main>
 
-      <aside id="review" class="solution-review-panel review-action-rail" data-test="review-actions" aria-label="技术审核操作">
+      <aside id="review" class="solution-review-panel review-action-rail responsive-review-rail" data-test="review-actions" aria-label="技术审核操作">
         <section class="panel review-action-card">
           <p class="eyebrow">REVIEW</p>
           <div class="review-action-heading"><h2>技术审核</h2><el-tag>{{label(draft.review_status)}}</el-tag></div>
@@ -163,5 +163,5 @@ watch(()=>route.params.id,()=>{reason.value='';comment.value='';reviewerId.value
 </template>
 
 <style scoped>
-.solution-summary{display:grid;grid-template-columns:repeat(6,minmax(110px,1fr));gap:1px;margin:16px 0 20px;overflow:hidden;border:1px solid #dfe6ef;border-radius:12px;background:#dfe6ef}.solution-summary>div{display:grid;gap:7px;padding:16px;background:#fff}.summary-label{font-size:12px;color:#64748b}.summary-success{color:#247044}.summary-danger{color:#9a6500}.solution-detail-layout{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:24px;align-items:start}.solution-document{min-width:0}.review-action-rail{position:sticky;top:20px;scroll-margin-top:20px}.review-action-card{margin-top:20px}.review-action-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.review-action-heading h2{margin-bottom:8px}.review-action-card .review-form{max-width:none}.review-action-card .el-button{width:100%}.review-history{scroll-margin-top:72px}@media(max-width:1100px){.solution-summary{grid-template-columns:repeat(3,1fr)}.solution-detail-layout{display:flex;flex-direction:column}.review-action-rail{position:static;order:-1;width:100%}.review-action-card{margin-bottom:0}}@media(max-width:600px){.solution-summary{grid-template-columns:repeat(2,1fr)}}
+.solution-summary{display:grid;grid-template-columns:repeat(6,minmax(110px,1fr));gap:1px;margin:16px 0 20px;overflow:hidden;border:1px solid #dfe6ef;border-radius:12px;background:#dfe6ef}.solution-summary>div{display:grid;gap:7px;padding:16px;background:#fff}.summary-label{font-size:12px;color:#64748b}.summary-success{color:#247044}.summary-danger{color:#9a6500}.solution-detail-layout{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:24px;align-items:start;min-width:0;max-width:100%}.solution-document{min-width:0;max-width:100%}.review-action-rail{position:sticky;top:20px;scroll-margin-top:20px;min-width:0;max-width:100%}.review-action-card{margin-top:20px}.review-action-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.review-action-heading h2{margin-bottom:8px}.review-action-card .review-form{max-width:none}.review-action-card .el-button{width:100%}.review-history{scroll-margin-top:72px}@media(max-width:1100px){.solution-summary{grid-template-columns:repeat(3,minmax(0,1fr))}.solution-detail-layout{display:flex;flex-direction:column}.review-action-rail{position:static;order:-1;width:100%}.review-action-card{margin-bottom:0}}@media(max-width:600px){.solution-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>

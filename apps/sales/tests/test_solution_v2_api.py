@@ -218,6 +218,24 @@ def test_v2_detail_with_incomplete_claim_provenance_still_fails_closed(
     assert response.json() == ["V2 claim provenance is incomplete."]
 
 
+def test_v2_detail_with_dangling_component_identity_fails_closed(
+    api_context, v2_api_record
+):
+    payload = v2_api_record.draft_payload
+    payload["architecture"]["components"][0]["identity_claim_id"] = "C9999"
+    SolutionDraftRecord.objects.filter(pk=v2_api_record.pk).update(
+        draft_payload=payload
+    )
+    v2_api_record.refresh_from_db()
+
+    response = client_for(api_context["owner"]).get(
+        reverse("solution-draft-detail", kwargs={"solution_id": v2_api_record.pk})
+    )
+
+    assert response.status_code == 400
+    assert response.json() == ["The Solution Draft payload is invalid."]
+
+
 def test_v2_business_detail_omits_internal_provenance_and_provider_data(
     api_context, v2_api_record
 ):

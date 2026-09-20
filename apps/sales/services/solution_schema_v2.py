@@ -61,6 +61,11 @@ class TimingClassification(StrEnum):
     UNRESOLVED = "unresolved"
 
 
+class ArchitectureFlowTypeV2(StrEnum):
+    REQUEST = "request"
+    DATA = "data"
+
+
 @dataclass(frozen=True, slots=True)
 class SolutionAtomicClaimV2:
     claim_id: str
@@ -105,12 +110,21 @@ class ArchitectureComponentV2:
     rationale_claim_ids: tuple[str, ...]
     dependency_component_ids: tuple[str, ...]
     interface_claim_ids: tuple[str, ...]
+    identity_claim_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ArchitectureFlowV2:
+    flow_type: ArchitectureFlowTypeV2
+    source_component_id: str
+    target_component_id: str
 
 
 @dataclass(frozen=True, slots=True)
 class ArchitectureV2:
     overview_claim_ids: tuple[str, ...]
     components: tuple[ArchitectureComponentV2, ...]
+    flows: tuple[ArchitectureFlowV2, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -540,7 +554,10 @@ def assemble_solution_draft_v2(
                 architecture_overview.append(claim_id)
             else:
                 bucket = components.setdefault(key, {
-                    "responsibilities": [], "rationale": [], "interfaces": [],
+                    "identity": [],
+                    "responsibilities": [],
+                    "rationale": [],
+                    "interfaces": [],
                 })
                 bucket[field.value].append(claim_id)
         elif section is SolutionV2Section.DEPLOYMENT_AND_INTEGRATION:
@@ -575,11 +592,27 @@ def assemble_solution_draft_v2(
     phase_dependencies: dict[str, set[str]] = {key: set() for key in phases}
     phase_acceptance: dict[str, set[str]] = {key: set() for key in phases}
     milestone_phases: dict[str, set[str]] = {key: set() for key in milestones}
+    architecture_flows: set[tuple[ArchitectureFlowTypeV2, str, str]] = set()
     for relation in proposals.structure_relations:
         if relation.relation_type is SolutionV2StructureRelationType.COMPONENT_DEPENDENCY:
             component_dependencies[relation.source_container_key].add(
                 relation.target_container_key
             )
+        elif relation.relation_type in {
+            SolutionV2StructureRelationType.COMPONENT_REQUEST_FLOW,
+            SolutionV2StructureRelationType.COMPONENT_DATA_FLOW,
+        }:
+            flow_type = (
+                ArchitectureFlowTypeV2.REQUEST
+                if relation.relation_type
+                is SolutionV2StructureRelationType.COMPONENT_REQUEST_FLOW
+                else ArchitectureFlowTypeV2.DATA
+            )
+            architecture_flows.add((
+                flow_type,
+                relation.source_container_key,
+                relation.target_container_key,
+            ))
         elif relation.relation_type is SolutionV2StructureRelationType.PHASE_DEPENDENCY:
             phase_dependencies[relation.source_container_key].add(
                 relation.target_container_key
@@ -598,6 +631,8 @@ def assemble_solution_draft_v2(
     if any(len(value["timing"]) > 1 for value in phases.values()) or any(
         len(value["timing"]) > 1 for value in milestones.values()
     ):
+        _invalid()
+    if any(len(value["identity"]) != 1 for value in components.values()):
         _invalid()
     if any(len(value["condition"]) != 1 for value in risks.values()):
         _invalid()
@@ -730,9 +765,21 @@ def assemble_solution_draft_v2(
                         component_dependencies[key], key=component_position.__getitem__
                     )),
                     interface_claim_ids=tuple(value["interfaces"]),
+                    identity_claim_id=value["identity"][0],
                 )
                 for index, key in enumerate(component_order, start=1)
                 for value in (components[key],)
+            ),
+            flows=tuple(
+                ArchitectureFlowV2(flow_type, source, target)
+                for flow_type, source, target in sorted(
+                    architecture_flows,
+                    key=lambda item: (
+                        0 if item[0] is ArchitectureFlowTypeV2.REQUEST else 1,
+                        item[1],
+                        item[2],
+                    ),
+                )
             ),
         ),
         deployment_and_integration=tuple(
@@ -994,6 +1041,12 @@ def _validate_architecture(
             _invalid()
         component_ids.add(component.component_id)
     for component in value.components:
+        if component.identity_claim_id is not None:
+            _claim_refs((component.identity_claim_id,), claims, used)
+            identity_claim = claims[component.identity_claim_id]
+            if identity_claim.statement_type is not SolutionClaimTypeV2.PROPOSAL:
+                _invalid()
+            _label(identity_claim.text)
         _claim_refs(component.responsibility_claim_ids, claims, used)
         _claim_refs(component.rationale_claim_ids, claims, used)
         _claim_refs(component.interface_claim_ids, claims, used)
@@ -1005,6 +1058,13 @@ def _validate_architecture(
             or not set(component.dependency_component_ids) <= component_ids
         ):
             _invalid()
+    semantic_names = [
+        claims[component.identity_claim_id].text.strip()
+        for component in value.components
+        if component.identity_claim_id is not None
+    ]
+    if len(semantic_names) != len(set(semantic_names)):
+        _invalid()
     _stable_topological_order(
         component_ids,
         {
@@ -1012,6 +1072,27 @@ def _validate_architecture(
             for component in value.components
         },
     )
+    _tuple(value.flows)
+    flow_signatures: set[tuple[ArchitectureFlowTypeV2, str, str]] = set()
+    for flow in value.flows:
+        if not isinstance(flow, ArchitectureFlowV2):
+            _invalid()
+        if not isinstance(flow.flow_type, ArchitectureFlowTypeV2):
+            _invalid()
+        if (
+            flow.source_component_id not in component_ids
+            or flow.target_component_id not in component_ids
+            or flow.source_component_id == flow.target_component_id
+        ):
+            _invalid()
+        signature = (
+            flow.flow_type,
+            flow.source_component_id,
+            flow.target_component_id,
+        )
+        if signature in flow_signatures:
+            _invalid()
+        flow_signatures.add(signature)
 
 
 def _validate_topic_blocks(

@@ -20,6 +20,8 @@ from apps.sales.services.solution_schema_v2 import (
     AcceptanceClassification,
     AcceptanceCriterionV2,
     ArchitectureComponentV2,
+    ArchitectureFlowTypeV2,
+    ArchitectureFlowV2,
     ArchitectureV2,
     CapabilityGroupV2,
     CustomerContextV2,
@@ -207,6 +209,7 @@ def solution_draft_v2_to_payload(draft: SolutionDraftV2) -> dict:
                 {
                     "component_id": component.component_id,
                     "name": component.name,
+                    "identity_claim_id": component.identity_claim_id,
                     "responsibility_claim_ids": list(
                         component.responsibility_claim_ids
                     ),
@@ -217,6 +220,14 @@ def solution_draft_v2_to_payload(draft: SolutionDraftV2) -> dict:
                     "interface_claim_ids": list(component.interface_claim_ids),
                 }
                 for component in draft.architecture.components
+            ],
+            "flows": [
+                {
+                    "flow_type": flow.flow_type.value,
+                    "source_component_id": flow.source_component_id,
+                    "target_component_id": flow.target_component_id,
+                }
+                for flow in draft.architecture.flows
             ],
         },
         "deployment_and_integration": [
@@ -351,12 +362,20 @@ def solution_draft_v2_from_payload(payload: object) -> SolutionDraftV2:
     )
 
     architecture_payload = payload["architecture"]
-    _object(architecture_payload, {"overview_claim_ids", "components"})
+    if not isinstance(architecture_payload, dict) or set(architecture_payload) not in {
+        frozenset({"overview_claim_ids", "components"}),
+        frozenset({"overview_claim_ids", "components", "flows"}),
+    }:
+        _invalid()
     architecture = ArchitectureV2(
         overview_claim_ids=_string_tuple(architecture_payload["overview_claim_ids"]),
         components=tuple(
             _component_from_payload(value)
             for value in _list(architecture_payload["components"])
+        ),
+        flows=tuple(
+            _architecture_flow_from_payload(value)
+            for value in _list(architecture_payload.get("flows", []))
         ),
     )
 
@@ -445,17 +464,19 @@ def _capability_group_from_payload(value: object) -> CapabilityGroupV2:
 
 
 def _component_from_payload(value: object) -> ArchitectureComponentV2:
-    _object(
-        value,
-        {
-            "component_id",
-            "name",
-            "responsibility_claim_ids",
-            "rationale_claim_ids",
-            "dependency_component_ids",
-            "interface_claim_ids",
-        },
-    )
+    historical_keys = {
+        "component_id",
+        "name",
+        "responsibility_claim_ids",
+        "rationale_claim_ids",
+        "dependency_component_ids",
+        "interface_claim_ids",
+    }
+    if not isinstance(value, dict) or set(value) not in {
+        frozenset(historical_keys),
+        frozenset(historical_keys | {"identity_claim_id"}),
+    }:
+        _invalid()
     return ArchitectureComponentV2(
         component_id=_text(value["component_id"]),
         name=_text(value["name"]),
@@ -463,6 +484,19 @@ def _component_from_payload(value: object) -> ArchitectureComponentV2:
         rationale_claim_ids=_string_tuple(value["rationale_claim_ids"]),
         dependency_component_ids=_string_tuple(value["dependency_component_ids"]),
         interface_claim_ids=_string_tuple(value["interface_claim_ids"]),
+        identity_claim_id=_optional_text(value.get("identity_claim_id")),
+    )
+
+
+def _architecture_flow_from_payload(value: object) -> ArchitectureFlowV2:
+    _object(
+        value,
+        {"flow_type", "source_component_id", "target_component_id"},
+    )
+    return ArchitectureFlowV2(
+        flow_type=_enum(ArchitectureFlowTypeV2, value["flow_type"]),
+        source_component_id=_text(value["source_component_id"]),
+        target_component_id=_text(value["target_component_id"]),
     )
 
 

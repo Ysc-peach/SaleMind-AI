@@ -8,6 +8,10 @@ from apps.sales.models import (
     SolutionReturnReason,
     SolutionReview,
 )
+from apps.sales.services.solution_payloads import (
+    SolutionPayloadError,
+    deserialize_solution_payload,
+)
 
 
 class SolutionDraftCreateSerializer(serializers.Serializer):
@@ -112,6 +116,10 @@ class SolutionDraftDetailSerializer(SolutionDraftListSerializer):
             ).data
         if instance.schema_version != 2:
             raise serializers.ValidationError("Unsupported Solution Draft schema version.")
+        try:
+            deserialize_solution_payload(instance.schema_version, instance.draft_payload)
+        except SolutionPayloadError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
         data = super().to_representation(instance)
         data.pop("provenance", None)
         return data

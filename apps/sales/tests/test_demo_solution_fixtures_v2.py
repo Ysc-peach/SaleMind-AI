@@ -17,6 +17,58 @@ SCENARIO_KEYS = tuple(item.key for item in DEMO_SCENARIOS)
 
 
 @pytest.mark.parametrize("scenario_key", SCENARIO_KEYS)
+def test_demo_architecture_components_have_scenario_specific_semantic_identities(
+    scenario_key,
+):
+    proposal_set = _demo_proposals(scenario_key)
+    component_keys = {
+        item.placement.container_key
+        for item in proposal_set.proposals
+        if item.placement.container_kind.value == "architecture_component"
+    }
+    identities = [
+        item
+        for item in proposal_set.proposals
+        if item.placement.container_kind.value == "architecture_component"
+        and item.placement.field.value == "identity"
+    ]
+
+    assert {item.placement.container_key for item in identities} == component_keys
+    assert len(identities) == len(component_keys)
+    assert len({item.text for item in identities}) == len(identities)
+    assert all(not item.text.startswith("架构组件") for item in identities)
+
+    fields_by_component = {
+        key: {
+            item.placement.field.value
+            for item in proposal_set.proposals
+            if item.placement.container_key == key
+            and item.placement.container_kind.value == "architecture_component"
+        }
+        for key in component_keys
+    }
+    assert len(component_keys) == 4
+    assert all(
+        fields == {"identity", "responsibilities", "rationale", "interfaces"}
+        for fields in fields_by_component.values()
+    )
+
+
+def test_demo_architecture_identity_sets_are_not_template_copies():
+    identity_sets = {
+        scenario_key: frozenset(
+            item.text
+            for item in _demo_proposals(scenario_key).proposals
+            if item.placement.field.value == "identity"
+        )
+        for scenario_key in SCENARIO_KEYS
+    }
+
+    assert all(identity_sets.values())
+    assert len(set(identity_sets.values())) == len(SCENARIO_KEYS)
+
+
+@pytest.mark.parametrize("scenario_key", SCENARIO_KEYS)
 def test_demo_proposals_use_requirement_linkage_across_solution_sections(scenario_key):
     proposal_set = _demo_proposals(scenario_key)
     structured_sections = {
@@ -49,6 +101,8 @@ def test_demo_solutions_persist_meaningful_structure_relations(scenario_key):
 
     assert relation_types == set(SolutionV2StructureRelationType)
     assert any(item.dependency_component_ids for item in draft.architecture.components)
+    assert any(item.flow_type.value == "request" for item in draft.architecture.flows)
+    assert any(item.flow_type.value == "data" for item in draft.architecture.flows)
     assert any(item.dependency_phase_ids for item in draft.implementation_plan.phases)
     assert any(item.acceptance_criterion_ids for item in draft.implementation_plan.phases)
     assert all(item.related_phase_ids for item in draft.milestones)

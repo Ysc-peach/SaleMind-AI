@@ -200,7 +200,9 @@ it('keeps review actions discoverable in a sticky review rail for the assigned r
   const wrapper = await mountDetail()
 
   const actions=wrapper.get('[data-test="review-actions"]')
+  expect(wrapper.get('.solution-detail-layout').classes()).toContain('responsive-solution-layout')
   expect(actions.classes()).toContain('review-action-rail')
+  expect(actions.classes()).toContain('responsive-review-rail')
   expect(actions.classes()).toContain('solution-review-panel')
   expect(actions.get('[data-test="approve"]').text()).toContain('通过技术审核')
   expect(actions.get('[data-test="return"]').text()).toContain('退回')

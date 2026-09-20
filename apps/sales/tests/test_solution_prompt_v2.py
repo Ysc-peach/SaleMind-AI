@@ -24,7 +24,37 @@ def valid_payload():
                 },
                 "text": "建议将企业知识能力封装为独立知识服务。",
                 "citations": ["S1"],
-            }
+            },
+            {
+                "placement": {
+                    "section": "architecture",
+                    "container_kind": "architecture_component",
+                    "container_key": "knowledge_service",
+                    "field": "identity",
+                },
+                "text": "企业知识服务",
+                "citations": ["S1"],
+            },
+            {
+                "placement": {
+                    "section": "architecture",
+                    "container_kind": "architecture_component",
+                    "container_key": "knowledge_service",
+                    "field": "rationale",
+                },
+                "text": "独立知识边界便于统一访问策略。",
+                "citations": ["S1"],
+            },
+            {
+                "placement": {
+                    "section": "architecture",
+                    "container_kind": "architecture_component",
+                    "container_key": "knowledge_service",
+                    "field": "interfaces",
+                },
+                "text": "知识服务通过受控接口接收检索请求。",
+                "citations": ["S1"],
+            },
         ]
     }
 
@@ -243,6 +273,16 @@ def test_prompt_contract_demands_executable_structure_without_semantic_leakage()
     )
     assert "missing information != technical risk" in prompt
     assert "observable" in prompt and "testable" in prompt
+    assert "field=identity" in prompt
+    assert "恰好生成一条" in prompt
+    assert "最多 4 个" in prompt
+    assert "每个组件" in prompt
+    assert "responsibility" in prompt
+    assert "rationale" in prompt
+    assert "interface" in prompt
+    assert "架构分组" in prompt
+    assert "不必要的组件扩张" in prompt
+    assert "0 至 38" in prompt
 
 
 def test_prompt_contract_preserves_atomicity_and_forbids_invented_commitments():
@@ -287,6 +327,8 @@ def test_prompt_contract_requires_only_the_supported_transient_structure_relatio
         relation_type in prompt
         for relation_type in (
             "component_dependency",
+            "component_request_flow",
+            "component_data_flow",
             "phase_dependency",
             "phase_acceptance",
             "milestone_phase",

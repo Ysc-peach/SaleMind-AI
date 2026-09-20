@@ -20,7 +20,9 @@ from apps.sales.services.solution_review import (
     approve_solution_draft,
     submit_solution_draft_for_review,
 )
+from apps.sales.services.solution_payloads import serialize_solution_domain
 from apps.sales.tests.solution_fakes import analysis_payload
+from apps.sales.tests.test_solution_schema_v2 import valid_draft
 
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -71,6 +73,7 @@ def workflow_api_context(make_user, monkeypatch):
     analysis = create_analysis(opportunity, sales)
     other_analysis = create_analysis(other_opportunity, other_sales)
     generation_calls = []
+    serialized_solution = serialize_solution_domain(valid_draft())
 
     def generate(
         actual_opportunity,
@@ -97,9 +100,9 @@ def workflow_api_context(make_user, monkeypatch):
             opportunity=actual_opportunity,
             requirement_analysis=actual_analysis,
             version=actual_opportunity.solution_drafts.count() + 1,
-            schema_version=2,
-            title="Workflow API solution",
-            draft_payload={"title": "Workflow API solution", "claims": []},
+            schema_version=serialized_solution.schema_version,
+            title=serialized_solution.payload["title"],
+            draft_payload=serialized_solution.payload,
             generation_metadata={"generation_status": "generated"},
             generation_idempotency_key=idempotency_key,
             created_by=created_by,

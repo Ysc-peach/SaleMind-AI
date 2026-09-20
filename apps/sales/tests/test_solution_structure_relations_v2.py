@@ -48,9 +48,40 @@ def _payload():
             "architecture",
             "architecture_component",
             "identity_boundary",
+            "identity",
+            "统一身份与权限服务",
+            related=(RequirementDimension.DATA_SECURITY_REQUIREMENT.value,),
+        ),
+        _proposal(
+            "architecture",
+            "architecture_component",
+            "application_service",
+            "identity",
+            "企业知识应用服务",
+        ),
+        _proposal(
+            "architecture",
+            "architecture_component",
+            "identity_boundary",
             "responsibilities",
             "建议身份边界统一校验访问身份。",
             related=(RequirementDimension.DATA_SECURITY_REQUIREMENT.value,),
+        ),
+        _proposal(
+            "architecture",
+            "architecture_component",
+            "identity_boundary",
+            "rationale",
+            "集中身份校验可避免各业务入口重复实现访问规则。",
+            related=(RequirementDimension.DATA_SECURITY_REQUIREMENT.value,),
+        ),
+        _proposal(
+            "architecture",
+            "architecture_component",
+            "identity_boundary",
+            "interfaces",
+            "身份边界接收登录上下文并向应用服务传递访问范围。",
+            related=(RequirementDimension.INTEGRATION_REQUIREMENT.value,),
         ),
         _proposal(
             "architecture",
@@ -172,6 +203,20 @@ def _payload():
             "identity_boundary",
         ),
         _relation(
+            "component_request_flow",
+            "architecture_component",
+            "identity_boundary",
+            "architecture_component",
+            "application_service",
+        ),
+        _relation(
+            "component_data_flow",
+            "architecture_component",
+            "application_service",
+            "architecture_component",
+            "identity_boundary",
+        ),
+        _relation(
             "phase_dependency",
             "implementation_phase",
             "build",
@@ -232,6 +277,33 @@ def test_transient_relations_populate_existing_v2_relation_fields():
     assert milestones["core_ready"].related_phase_ids == ("build",)
 
 
+def test_request_and_data_flows_survive_transient_ir_and_assembly():
+    draft = _assemble(_payload())
+
+    assert [
+        (item.flow_type.value, item.source_component_id, item.target_component_id)
+        for item in draft.architecture.flows
+    ] == [
+        ("request", "identity_boundary", "application_service"),
+        ("data", "application_service", "identity_boundary"),
+    ]
+
+
+def test_architecture_flows_round_trip_while_historical_v2_may_omit_them():
+    from apps.sales.services.solution_payloads import (
+        solution_draft_v2_from_payload,
+        solution_draft_v2_to_payload,
+    )
+
+    draft = _assemble(_payload())
+    payload = solution_draft_v2_to_payload(draft)
+
+    assert solution_draft_v2_from_payload(payload) == draft
+    payload["architecture"].pop("flows")
+    historical = solution_draft_v2_from_payload(payload)
+    assert historical.architecture.flows == ()
+
+
 def test_structure_relations_and_assembly_are_independent_of_provider_array_order():
     first_payload = _payload()
     reversed_payload = {
@@ -249,15 +321,20 @@ def test_assembly_groups_complete_risk_without_changing_atomic_claim_text():
     risk = draft.risks[0]
 
     assert [item.risk_id for item in draft.risks] == ["identity_mismatch"]
-    assert claim_by_id[risk.condition_claim_id].text == payload["proposals"][12]["text"]
+    risk_proposals = {
+        item["placement"]["field"]: item["text"]
+        for item in payload["proposals"]
+        if item["placement"]["container_kind"] == "risk"
+    }
+    assert claim_by_id[risk.condition_claim_id].text == risk_proposals["condition"]
     assert [claim_by_id[item].text for item in risk.impact_claim_ids] == [
-        payload["proposals"][13]["text"]
+        risk_proposals["impact"]
     ]
     assert [claim_by_id[item].text for item in risk.mitigation_claim_ids] == [
-        payload["proposals"][14]["text"]
+        risk_proposals["mitigation"]
     ]
     assert [claim_by_id[item].text for item in risk.trigger_claim_ids] == [
-        payload["proposals"][15]["text"]
+        risk_proposals["trigger"]
     ]
     proposal_texts = {
         claim.text for claim in draft.claims if claim.statement_type.value == "proposal"
@@ -362,8 +439,75 @@ def test_dependency_cycles_are_rejected(relation_type, kind, key):
         _parse(payload)
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda relation: relation.update(target_container_key="missing_component"),
+        lambda relation: relation.update(target_container_key="identity_boundary"),
+        lambda relation: relation.update(source_container_kind="implementation_phase"),
+        lambda relation: relation.update(target_container_kind="implementation_phase"),
+    ],
+)
+def test_component_flow_parser_rejects_dangling_self_or_cross_kind_edges(mutation):
+    payload = _payload()
+    relation = next(
+        item
+        for item in payload["structure_relations"]
+        if item["relation_type"] == "component_request_flow"
+    )
+    mutation(relation)
+
+    with pytest.raises(SolutionDraftError):
+        _parse(payload)
+
+
+def test_component_flow_rejects_exact_duplicate_but_allows_reverse_edge():
+    duplicate = _payload()
+    request = next(
+        item
+        for item in duplicate["structure_relations"]
+        if item["relation_type"] == "component_request_flow"
+    )
+    duplicate["structure_relations"].append(deepcopy(request))
+    with pytest.raises(SolutionDraftError):
+        _parse(duplicate)
+
+    reverse = _payload()
+    reverse["structure_relations"].append(
+        _relation(
+            "component_request_flow",
+            "architecture_component",
+            "application_service",
+            "architecture_component",
+            "identity_boundary",
+        )
+    )
+    parsed = _parse(reverse)
+    assert sum(
+        item.relation_type.value == "component_request_flow"
+        for item in parsed.structure_relations
+    ) == 2
+
+
+def test_multi_component_generation_requires_an_explicit_request_flow():
+    payload = _payload()
+    payload["structure_relations"] = [
+        item
+        for item in payload["structure_relations"]
+        if item["relation_type"] != "component_request_flow"
+    ]
+
+    with pytest.raises(SolutionDraftError):
+        _parse(payload)
+
+
 def test_old_provider_payload_without_structure_relations_remains_compatible():
     payload = _payload()
+    payload["proposals"] = [
+        item
+        for item in payload["proposals"]
+        if item["placement"]["container_key"] != "application_service"
+    ]
     payload.pop("structure_relations")
 
     parsed = _parse(payload)

@@ -19,6 +19,10 @@ from apps.sales.services.solution_readiness import SolutionReadiness
 from apps.sales.services.solution_retrieval import SolutionSource
 
 
+MAX_ARCHITECTURE_COMPONENTS = 4
+MAX_SOLUTION_V2_PROPOSALS = 38
+
+
 class SolutionV2Section(StrEnum):
     PROPOSED_SOLUTION = "proposed_solution"
     ARCHITECTURE = "architecture"
@@ -45,6 +49,7 @@ class SolutionV2ContainerKind(StrEnum):
 class SolutionV2PlacementField(StrEnum):
     OVERVIEW = "overview"
     ITEMS = "items"
+    IDENTITY = "identity"
     RESPONSIBILITIES = "responsibilities"
     RATIONALE = "rationale"
     INTERFACES = "interfaces"
@@ -63,6 +68,8 @@ class SolutionV2PlacementField(StrEnum):
 
 class SolutionV2StructureRelationType(StrEnum):
     COMPONENT_DEPENDENCY = "component_dependency"
+    COMPONENT_REQUEST_FLOW = "component_request_flow"
+    COMPONENT_DATA_FLOW = "component_data_flow"
     PHASE_DEPENDENCY = "phase_dependency"
     PHASE_ACCEPTANCE = "phase_acceptance"
     MILESTONE_PHASE = "milestone_phase"
@@ -110,6 +117,7 @@ _ALLOWED_PLACEMENTS = {
         SolutionV2PlacementField.OVERVIEW,
     },
     (SolutionV2Section.ARCHITECTURE, SolutionV2ContainerKind.ARCHITECTURE_COMPONENT): {
+        SolutionV2PlacementField.IDENTITY,
         SolutionV2PlacementField.RESPONSIBILITIES,
         SolutionV2PlacementField.RATIONALE,
         SolutionV2PlacementField.INTERFACES,
@@ -146,6 +154,14 @@ _RELATION_KINDS = {
         SolutionV2ContainerKind.ARCHITECTURE_COMPONENT,
         SolutionV2ContainerKind.ARCHITECTURE_COMPONENT,
     ),
+    SolutionV2StructureRelationType.COMPONENT_REQUEST_FLOW: (
+        SolutionV2ContainerKind.ARCHITECTURE_COMPONENT,
+        SolutionV2ContainerKind.ARCHITECTURE_COMPONENT,
+    ),
+    SolutionV2StructureRelationType.COMPONENT_DATA_FLOW: (
+        SolutionV2ContainerKind.ARCHITECTURE_COMPONENT,
+        SolutionV2ContainerKind.ARCHITECTURE_COMPONENT,
+    ),
     SolutionV2StructureRelationType.PHASE_DEPENDENCY: (
         SolutionV2ContainerKind.IMPLEMENTATION_PHASE,
         SolutionV2ContainerKind.IMPLEMENTATION_PHASE,
@@ -172,7 +188,7 @@ _SYSTEM_PROMPT = """你是企业售前解决方案助手。你只能生成待验
 
 完整方案应以 recommendation 为主，并为重要 recommendation 生成独立的 rationale proposal；关键技术选择在有意义时生成独立的 tradeoff proposal，条件性边界生成独立的 conditional proposal。recommendation、rationale、tradeoff 和 conditional 不得合并成巨型句子，必须分别形成独立 atomic proposal，再由 placement 和 related_requirement_fields 组织。
 
-架构 proposal 应根据商机需要表达 multiple component、component responsibility、interface、dependency、request/data flow、security boundary、persistence boundary 和 integration boundary，而不只是列出层级名称。部署与集成 proposal 应考虑 application placement、data placement、network boundary、external dependency、identity/auth integration、integration point 和 data-source interaction；不能确定时生成条件性 proposal 或保留为 UNRESOLVED，不得伪装成事实。
+架构 proposal 应根据商机需要表达 multiple component、component responsibility、interface、dependency、request/data flow、security boundary、persistence boundary 和 integration boundary，而不只是列出层级名称。每个组件（architecture_component）必须恰好生成一条 field=identity，并至少生成一条 responsibility、一条 rationale 和一条 interface proposal；四类语义必须保持为相互独立的 atomic proposal。identity 是简洁、面向业务和技术人员的组件语义名称，不得使用“架构组件 1”之类任意编号、内部 container_key 或无依据的厂商产品。最多使用 4 个 architecture component，优先通过架构分组表达边界，避免不必要的组件扩张；外部系统存在本身不构成独立组件的理由，可通过 deployment_and_integration 或 interface proposal 表达。拥有两个或以上组件时必须声明至少一条 component_request_flow，形成用户可理解的主要请求路径；有实际数据读取、写入或传递时声明 component_data_flow。部署与集成 proposal 应考虑 application placement、data placement、network boundary、external dependency、identity/auth integration、integration point 和 data-source interaction；不能确定时生成条件性 proposal 或保留为 UNRESOLVED，不得伪装成事实。
 
 实施 proposal 应覆盖 objective、tasks、deliverables、dependencies 和 exit criteria，并以顺序和依赖表达计划，不得为填满结构编造时间。风险必须遵循 missing information != technical risk：信息缺失属于 UNRESOLVED；技术风险应分别表达 condition、impact、mitigation、trigger / detection signal。验收 proposal 必须 observable、testable 并关联需求，禁止使用“满足客户需求”“系统稳定运行”等不可验证表述。
 
@@ -182,7 +198,7 @@ placement 只用于把 proposal 放入程序控制的结构，不得在 containe
 - proposed_solution/root/overview
 - proposed_solution/capability_group/items
 - architecture/root/overview
-- architecture/architecture_component/responsibilities|rationale|interfaces
+- architecture/architecture_component/identity|responsibilities|rationale|interfaces
 - deployment_and_integration/topic_block/items
 - implementation_plan/implementation_phase/objective|tasks|deliverables|timing
 - risks/risk/condition|impact|mitigation|trigger
@@ -193,11 +209,11 @@ root 的 container_key 必须为 null；其他 container_key 只能是简短的�
 
 每条 proposal 必须输出 related_requirement_fields，表示该 proposal 直接回应的客户需求或约束维度。只能使用程序提供的 RequirementDimension 合法值：__REQUIREMENT_DIMENSIONS__。不得为了凑关联而乱填；若没有直接对应的已知 requirement，必须输出空数组 []。
 
-structure_relations 只声明结构容器之间的关系，不承载新的业务文本。仅允许 component_dependency、phase_dependency、phase_acceptance、milestone_phase。每条关系必须包含 relation_type、source_container_kind、source_container_key、target_container_kind、target_container_key，并且只能引用 proposals 中已声明的 container_key。component_dependency 和 phase_dependency 表示 source 依赖 target；依赖不得重复、自引用或形成环。interface proposal 表达交互，dependency relation 表达架构依赖，两者不得混淆。
+structure_relations 只声明结构容器之间的关系，不承载新的业务文本。仅允许 component_dependency、component_request_flow、component_data_flow、phase_dependency、phase_acceptance、milestone_phase。每条关系必须包含 relation_type、source_container_kind、source_container_key、target_container_kind、target_container_key，并且只能引用 proposals 中已声明的 container_key。component_dependency 和 phase_dependency 表示 source 依赖 target；依赖不得重复、自引用或形成环。component_request_flow 表示请求从 source 进入 target，component_data_flow 表示数据从 source 传递、读取或写入 target；flow 不得重复或自引用，但允许相反方向的边和合法循环。interface proposal 表达交互语义，dependency、request flow、data flow 三者不得混淆。
 
 只返回一个 JSON 对象，不含 Markdown 或解释：
-{"proposals":[{"placement":{"section":"architecture","container_kind":"architecture_component","container_key":"knowledge_service","field":"responsibilities"},"text":"知识服务承担统一检索职责。","citations":["S1"],"related_requirement_fields":["business_goal"]},{"placement":{"section":"architecture","container_kind":"architecture_component","container_key":"application_service","field":"interfaces"},"text":"应用服务通过受控接口调用知识服务。","citations":["S1"],"related_requirement_fields":["business_goal"]}],"structure_relations":[{"relation_type":"component_dependency","source_container_kind":"architecture_component","source_container_key":"application_service","target_container_kind":"architecture_component","target_container_key":"knowledge_service"}]}
-顶层恰好只有 proposals、structure_relations；proposals 数量为 0 至 30。每项 proposal 恰好只有 placement、text、citations、related_requirement_fields。引用只放 citations，至少一项、不得重复，只能使用本次允许的 S1...Sn；text 内不得出现引用标记。禁止返回 statement_type、事实状态、approval、provenance、source snapshot、完整 section payload、confidence、score、price 或 hidden reasoning。
+{"proposals":[{"placement":{"section":"architecture","container_kind":"architecture_component","container_key":"application_service","field":"identity"},"text":"企业应用服务","citations":["S1"],"related_requirement_fields":["business_goal"]},{"placement":{"section":"architecture","container_kind":"architecture_component","container_key":"application_service","field":"responsibilities"},"text":"应用服务负责组织业务请求。","citations":["S1"],"related_requirement_fields":["business_goal"]},{"placement":{"section":"architecture","container_kind":"architecture_component","container_key":"application_service","field":"rationale"},"text":"独立应用边界便于隔离业务入口。","citations":["S1"],"related_requirement_fields":["business_goal"]},{"placement":{"section":"architecture","container_kind":"architecture_component","container_key":"application_service","field":"interfaces"},"text":"应用服务通过受控接口调用知识服务。","citations":["S1"],"related_requirement_fields":["business_goal"]},{"placement":{"section":"architecture","container_kind":"architecture_component","container_key":"knowledge_service","field":"identity"},"text":"企业知识检索服务","citations":["S1"],"related_requirement_fields":["business_goal"]},{"placement":{"section":"architecture","container_kind":"architecture_component","container_key":"knowledge_service","field":"responsibilities"},"text":"知识服务承担统一检索职责。","citations":["S1"],"related_requirement_fields":["business_goal"]},{"placement":{"section":"architecture","container_kind":"architecture_component","container_key":"knowledge_service","field":"rationale"},"text":"统一检索边界便于实施一致的知识访问策略。","citations":["S1"],"related_requirement_fields":["business_goal"]},{"placement":{"section":"architecture","container_kind":"architecture_component","container_key":"knowledge_service","field":"interfaces"},"text":"知识服务接收应用服务发起的检索请求。","citations":["S1"],"related_requirement_fields":["business_goal"]}],"structure_relations":[{"relation_type":"component_dependency","source_container_kind":"architecture_component","source_container_key":"application_service","target_container_kind":"architecture_component","target_container_key":"knowledge_service"},{"relation_type":"component_request_flow","source_container_kind":"architecture_component","source_container_key":"application_service","target_container_kind":"architecture_component","target_container_key":"knowledge_service"}]}
+顶层恰好只有 proposals、structure_relations；proposals 数量为 0 至 38，这是最大上限而不是目标数量；只生成完成当前方案真正需要的 proposal。architecture_component 容器最多 4 个。每项 proposal 恰好只有 placement、text、citations、related_requirement_fields。引用只放 citations，至少一项、不得重复，只能使用本次允许的 S1...Sn；text 内不得出现引用标记。禁止返回 statement_type、事实状态、approval、provenance、source snapshot、完整 section payload、confidence、score、price 或 hidden reasoning。
 """
 
 
@@ -265,7 +281,7 @@ def parse_atomic_solution_v2_proposals(
     }:
         _invalid()
     items = payload["proposals"]
-    if not isinstance(items, list) or len(items) > 30:
+    if not isinstance(items, list) or len(items) > MAX_SOLUTION_V2_PROPOSALS:
         _invalid()
     if (
         not isinstance(allowed_source_labels, tuple)
@@ -382,16 +398,53 @@ def validate_solution_v2_structure_relations(
 
     if not isinstance(value, AtomicSolutionProposalSetV2):
         _invalid(SolutionDraftErrorCode.INVALID_INPUT)
+    if (
+        not isinstance(value.proposals, tuple)
+        or len(value.proposals) > MAX_SOLUTION_V2_PROPOSALS
+        or not isinstance(value.structure_relations, tuple)
+    ):
+        _invalid()
     containers = {
         (proposal.placement.container_kind, proposal.placement.container_key)
         for proposal in value.proposals
         if proposal.placement.container_key is not None
     }
+    architecture_components = {
+        proposal.placement.container_key
+        for proposal in value.proposals
+        if proposal.placement.container_kind
+        is SolutionV2ContainerKind.ARCHITECTURE_COMPONENT
+    }
+    if len(architecture_components) > MAX_ARCHITECTURE_COMPONENTS:
+        _invalid()
+    component_field_counts = {
+        key: {
+            SolutionV2PlacementField.IDENTITY: 0,
+            SolutionV2PlacementField.RESPONSIBILITIES: 0,
+            SolutionV2PlacementField.RATIONALE: 0,
+            SolutionV2PlacementField.INTERFACES: 0,
+        }
+        for key in architecture_components
+    }
+    for proposal in value.proposals:
+        if proposal.placement.container_kind is SolutionV2ContainerKind.ARCHITECTURE_COMPONENT:
+            component_field_counts[proposal.placement.container_key][
+                proposal.placement.field
+            ] += 1
+    if any(
+        counts[SolutionV2PlacementField.IDENTITY] != 1
+        or counts[SolutionV2PlacementField.RESPONSIBILITIES] < 1
+        or counts[SolutionV2PlacementField.RATIONALE] < 1
+        or counts[SolutionV2PlacementField.INTERFACES] < 1
+        for counts in component_field_counts.values()
+    ):
+        _invalid()
     seen = set()
     dependency_edges = {
         SolutionV2StructureRelationType.COMPONENT_DEPENDENCY: [],
         SolutionV2StructureRelationType.PHASE_DEPENDENCY: [],
     }
+    request_flow_count = 0
     for relation in value.structure_relations:
         if not isinstance(relation, SolutionV2StructureRelation):
             _invalid()
@@ -424,6 +477,16 @@ def validate_solution_v2_structure_relations(
             dependency_edges[relation.relation_type].append(
                 (relation.source_container_key, relation.target_container_key)
             )
+        elif relation.relation_type in {
+            SolutionV2StructureRelationType.COMPONENT_REQUEST_FLOW,
+            SolutionV2StructureRelationType.COMPONENT_DATA_FLOW,
+        }:
+            if relation.source_container_key == relation.target_container_key:
+                _invalid()
+            if relation.relation_type is SolutionV2StructureRelationType.COMPONENT_REQUEST_FLOW:
+                request_flow_count += 1
+    if len(architecture_components) >= 2 and request_flow_count == 0:
+        _invalid()
     for edges in dependency_edges.values():
         _reject_dependency_cycle(edges)
 

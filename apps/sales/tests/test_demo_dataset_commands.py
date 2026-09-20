@@ -472,6 +472,16 @@ def test_v2_claims_provenance_and_api_source_projection_are_consistent(
         component.dependency_component_ids
         for component in domain.architecture.components
     )
+    identity_claim_ids = {
+        component.identity_claim_id for component in domain.architecture.components
+    }
+    assert None not in identity_claim_ids
+    assert all(
+        next(claim for claim in domain.claims if claim.claim_id == claim_id)
+        .statement_type.value
+        == "proposal"
+        for claim_id in identity_claim_ids
+    )
     assert any(
         phase.dependency_phase_ids for phase in domain.implementation_plan.phases
     )
@@ -493,9 +503,14 @@ def test_v2_claims_provenance_and_api_source_projection_are_consistent(
     client.force_authenticate(solution.opportunity.sales_owner)
     response = client.get(f"/api/solution-drafts/{solution.pk}/")
     assert response.status_code == 200
+    assert {
+        component["identity_claim_id"]
+        for component in response.data["draft_payload"]["architecture"]["components"]
+    } == identity_claim_ids
     source_ids = {item["source_id"] for item in response.data["source_registry"]}
     assert source_ids
     assert set(response.data["claim_sources"]).issubset(claim_ids)
+    assert identity_claim_ids <= set(response.data["claim_sources"])
     assert {
         source_id
         for labels in response.data["claim_sources"].values()

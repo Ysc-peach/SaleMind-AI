@@ -438,7 +438,14 @@ def _demo_solution_payload(
             "target_container_key": target_key,
         }
 
-    def relations(component_edges, phase_keys, criteria, milestone):
+    def relations(
+        component_edges,
+        request_edges,
+        data_edges,
+        phase_keys,
+        criteria,
+        milestone,
+    ):
         result = [
             relation(
                 "component_dependency",
@@ -449,6 +456,26 @@ def _demo_solution_payload(
             )
             for source, target in component_edges
         ]
+        result.extend(
+            relation(
+                "component_request_flow",
+                "architecture_component",
+                source,
+                "architecture_component",
+                target,
+            )
+            for source, target in request_edges
+        )
+        result.extend(
+            relation(
+                "component_data_flow",
+                "architecture_component",
+                source,
+                "architecture_component",
+                target,
+            )
+            for source, target in data_edges
+        )
         result.extend(
             relation(
                 "phase_dependency",
@@ -492,14 +519,22 @@ def _demo_solution_payload(
             p("proposed_solution", "root", None, "overview", "建议建设受权限约束且可追溯来源的制造知识查询链路。", "knowledge", bg, use, security),
             p("proposed_solution", "capability_group", "retrieval_tradeoff", "items", "当检索规模显著变化时，应重新评估独立向量检索能力。", "deployment", environment, constraints),
             p("architecture", "root", None, "overview", "建议以企业入口、访问策略、资料摄取和检索存储四个边界组织查询流。", "knowledge", bg, security),
+            p("architecture", "architecture_component", "factory_entry", "identity", "制造知识查询入口", "integration", use, integration),
+            p("architecture", "architecture_component", "access_policy", "identity", "制造资料访问策略服务", "integration", security, constraints),
+            p("architecture", "architecture_component", "knowledge_ingestion", "identity", "制造资料摄取服务", "knowledge", use, constraints),
+            p("architecture", "architecture_component", "retrieval_store", "identity", "制造知识检索存储", "knowledge", bg, environment),
             p("architecture", "architecture_component", "factory_entry", "responsibilities", "企业入口负责接收研发与售后人员的知识查询。", "integration", use, integration),
             p("architecture", "architecture_component", "access_policy", "responsibilities", "访问策略组件负责在检索前应用文档级权限。", "integration", security, constraints),
             p("architecture", "architecture_component", "knowledge_ingestion", "responsibilities", "资料摄取组件负责将设备手册和工艺资料转换为可检索内容。", "knowledge", use, constraints),
             p("architecture", "architecture_component", "retrieval_store", "responsibilities", "检索存储组件负责保存知识索引并返回带来源的候选内容。", "knowledge", bg, environment),
             p("architecture", "architecture_component", "access_policy", "rationale", "检索前执行权限过滤可避免受限资料进入回答上下文。", "integration", security),
             p("architecture", "architecture_component", "knowledge_ingestion", "rationale", "独立摄取边界便于控制资料更新与重新索引。", "knowledge", use, constraints),
+            p("architecture", "architecture_component", "factory_entry", "rationale", "统一知识入口可让不同岗位沿用一致的身份和查询边界。", "integration", use, security),
+            p("architecture", "architecture_component", "retrieval_store", "rationale", "集中保存索引与来源标识便于查询结果保持可追溯。", "knowledge", bg, environment),
             p("architecture", "architecture_component", "access_policy", "interfaces", "访问策略组件接收入口身份并向检索存储传递允许的资料范围。", "integration", integration, security),
             p("architecture", "architecture_component", "knowledge_ingestion", "interfaces", "资料摄取组件向检索存储提交文档内容和来源标识。", "knowledge", use, environment),
+            p("architecture", "architecture_component", "factory_entry", "interfaces", "知识入口将身份上下文和查询请求传递给访问策略服务。", "integration", use, integration),
+            p("architecture", "architecture_component", "retrieval_store", "interfaces", "检索存储接收受限范围查询并返回候选内容与来源标识。", "knowledge", use, security),
             p("deployment_and_integration", "topic_block", "deployment", "items", "建议将应用服务与数据存储分区部署在客户内网。", "deployment", deploy, security, environment),
             p("deployment_and_integration", "topic_block", "integration", "items", "如果 OA 接口允许传递受控身份，则由企业入口复用该身份上下文。", "integration", integration, security),
             p("implementation_plan", "implementation_phase", "permission_discovery", "objective", "先确认资料分级和 OA 身份边界。", "integration", integration, security),
@@ -522,6 +557,8 @@ def _demo_solution_payload(
         ]
         structure_relations = relations(
             (("factory_entry", "access_policy"), ("access_policy", "retrieval_store"), ("knowledge_ingestion", "retrieval_store")),
+            (("factory_entry", "access_policy"), ("access_policy", "retrieval_store")),
+            (("knowledge_ingestion", "retrieval_store"), ("retrieval_store", "access_policy")),
             ("permission_discovery", "knowledge_preparation", "controlled_validation"),
             ("authorized_retrieval", "restricted_retrieval"),
             "knowledge_validation_ready",
@@ -531,14 +568,22 @@ def _demo_solution_payload(
             p("proposed_solution", "root", None, "overview", "建议以统一业务入口和适配层组织门店、库存与商品资料协同。", "integration", bg, use, integration),
             p("proposed_solution", "capability_group", "sync_tradeoff", "items", "统一适配的取舍是增加跨系统字段治理工作。", "integration", integration, constraints),
             p("architecture", "root", None, "overview", "建议由企业入口、身份边界、协同编排和业务适配四个组件形成查询路径。", "integration", bg, integration),
+            p("architecture", "architecture_component", "retail_portal", "identity", "门店与运营协同入口", "integration", use, integration),
+            p("architecture", "architecture_component", "retail_identity", "identity", "零售身份与权限映射服务", "integration", security, integration),
+            p("architecture", "architecture_component", "collaboration_orchestrator", "identity", "零售业务协同编排服务", "integration", bg, use),
+            p("architecture", "architecture_component", "business_adapters", "identity", "多系统业务适配服务", "integration", integration, constraints),
             p("architecture", "architecture_component", "retail_portal", "responsibilities", "企业入口负责承接门店与运营人员的业务查询。", "integration", use, integration),
             p("architecture", "architecture_component", "retail_identity", "responsibilities", "身份边界负责将统一身份映射为可访问的业务范围。", "integration", security, integration),
             p("architecture", "architecture_component", "collaboration_orchestrator", "responsibilities", "协同编排组件负责路由商品、库存和流程查询。", "integration", bg, use),
             p("architecture", "architecture_component", "business_adapters", "responsibilities", "业务适配组件负责隔离不同系统的字段与接口差异。", "integration", integration, constraints),
             p("architecture", "architecture_component", "retail_identity", "rationale", "集中身份映射可避免各业务适配器分别解释权限。", "integration", security),
             p("architecture", "architecture_component", "business_adapters", "rationale", "独立适配边界可限制单个系统接口变化的影响范围。", "integration", integration, constraints),
+            p("architecture", "architecture_component", "retail_portal", "rationale", "统一协同入口可减少门店与运营人员在多个源系统之间切换。", "integration", use, bg),
+            p("architecture", "architecture_component", "collaboration_orchestrator", "rationale", "集中编排业务查询可使业务流程不直接依赖各源系统接口。", "integration", bg, constraints),
             p("architecture", "architecture_component", "retail_identity", "interfaces", "身份边界向协同编排组件提供用户与门店访问范围。", "integration", security, integration),
             p("architecture", "architecture_component", "business_adapters", "interfaces", "业务适配组件通过受控接口返回标准化业务数据投影。", "integration", integration, use),
+            p("architecture", "architecture_component", "retail_portal", "interfaces", "协同入口将用户身份和业务查询提交给身份权限映射服务。", "integration", use, security),
+            p("architecture", "architecture_component", "collaboration_orchestrator", "interfaces", "协同编排服务接收授权范围并调用业务适配服务取得标准化数据。", "integration", integration, use),
             p("deployment_and_integration", "topic_block", "deployment", "items", "建议将应用服务与业务数据投影分区部署在企业受控网络内。", "deployment", deploy, security),
             p("deployment_and_integration", "topic_block", "integration", "items", "如果目标系统缺少稳定接口，则以受控批量交换作为条件性接入路径。", "integration", integration, constraints),
             p("implementation_plan", "implementation_phase", "interface_inventory", "objective", "先确认各业务系统的数据责任与接口边界。", "integration", integration, constraints),
@@ -561,6 +606,8 @@ def _demo_solution_payload(
         ]
         structure_relations = relations(
             (("retail_portal", "retail_identity"), ("retail_identity", "collaboration_orchestrator"), ("collaboration_orchestrator", "business_adapters")),
+            (("retail_portal", "retail_identity"), ("retail_identity", "collaboration_orchestrator"), ("collaboration_orchestrator", "business_adapters")),
+            (("business_adapters", "collaboration_orchestrator"),),
             ("interface_inventory", "adapter_delivery", "business_validation"),
             ("cross_system_query", "permission_projection"),
             "collaboration_validated",
@@ -570,14 +617,22 @@ def _demo_solution_payload(
             p("proposed_solution", "root", None, "overview", "建议建设受身份权限约束的知识与合同草案辅助链路。", "knowledge", bg, use, security),
             p("proposed_solution", "capability_group", "template_tradeoff", "items", "采用已审核模板的取舍是限制自由生成范围。", "knowledge", use, constraints),
             p("architecture", "root", None, "overview", "建议由企业入口、身份权限、知识与草案应用、检索存储四个边界组成请求流。", "knowledge", bg, integration),
+            p("architecture", "architecture_component", "consultant_entry", "identity", "企业顾问知识入口", "integration", use, integration),
+            p("architecture", "architecture_component", "identity_access", "identity", "项目身份与权限服务", "integration", security, integration),
+            p("architecture", "architecture_component", "knowledge_contract_app", "identity", "知识与合同草案协作服务", "knowledge", bg, use),
+            p("architecture", "architecture_component", "retrieval_storage", "identity", "PostgreSQL/pgvector 知识存储", "knowledge", environment, constraints),
             p("architecture", "architecture_component", "consultant_entry", "responsibilities", "企业入口负责接收顾问的案例查询与合同草案请求。", "integration", use, integration),
             p("architecture", "architecture_component", "identity_access", "responsibilities", "身份权限组件负责在检索前限定顾问可访问的项目资料。", "integration", security, integration),
             p("architecture", "architecture_component", "knowledge_contract_app", "responsibilities", "知识与草案应用负责基于已审核模板形成待人工复核的合同草案。", "knowledge", bg, use),
             p("architecture", "architecture_component", "retrieval_storage", "responsibilities", "检索存储组件负责保存知识索引并返回可引用的项目资料。", "knowledge", environment, constraints),
             p("architecture", "architecture_component", "identity_access", "rationale", "检索前过滤可防止跨项目资料进入生成上下文。", "integration", security),
             p("architecture", "architecture_component", "knowledge_contract_app", "rationale", "已审核模板能够约束草案结构并保留人工审核责任。", "knowledge", use, constraints),
+            p("architecture", "architecture_component", "consultant_entry", "rationale", "统一顾问入口可在同一访问边界内承接案例查询与草案协作。", "integration", use, security),
+            p("architecture", "architecture_component", "retrieval_storage", "rationale", "复用 PostgreSQL 与 pgvector 可减少新增数据基础设施并保持知识来源集中管理。", "knowledge", environment, constraints),
             p("architecture", "architecture_component", "identity_access", "interfaces", "身份权限组件接收 SSO 身份并向应用传递项目访问范围。", "integration", integration, security),
             p("architecture", "architecture_component", "knowledge_contract_app", "interfaces", "应用通过检索接口取得带来源内容，并通过 OA 交付待审核草案。", "integration", integration, use),
+            p("architecture", "architecture_component", "consultant_entry", "interfaces", "顾问入口将 SSO 上下文和知识或草案请求提交给身份权限服务。", "integration", use, integration),
+            p("architecture", "architecture_component", "retrieval_storage", "interfaces", "检索存储接收受权限约束的检索请求并返回带来源的项目资料。", "knowledge", use, security),
             p("deployment_and_integration", "topic_block", "deployment", "items", "建议将应用服务与 PostgreSQL 数据存储分区部署在客户受控网络内。", "deployment", deploy, security, environment),
             p("deployment_and_integration", "topic_block", "integration", "items", "如果模型能力需要访问外部服务，则必须在数据不出公网约束下先确认可用边界。", "deployment", security, integration),
             p("implementation_plan", "implementation_phase", "boundary_confirmation", "objective", "先确认 SSO、OA、项目权限和审核模板边界。", "integration", integration, security),
@@ -600,6 +655,8 @@ def _demo_solution_payload(
         ]
         structure_relations = relations(
             (("consultant_entry", "identity_access"), ("knowledge_contract_app", "identity_access"), ("knowledge_contract_app", "retrieval_storage")),
+            (("consultant_entry", "identity_access"), ("identity_access", "knowledge_contract_app"), ("knowledge_contract_app", "retrieval_storage")),
+            (("retrieval_storage", "knowledge_contract_app"),),
             ("boundary_confirmation", "knowledge_delivery", "controlled_uat"),
             ("project_isolation", "cited_draft"),
             "controlled_uat_passed",
@@ -609,14 +666,22 @@ def _demo_solution_payload(
             p("proposed_solution", "root", None, "overview", "建议先形成不依赖具体身份协议的统一知识入口边界。", "integration", bg, use, integration),
             p("proposed_solution", "capability_group", "identity_tradeoff", "items", "在协议确认前推迟身份适配实现的取舍是保留后续接口调整空间。", "integration", integration, constraints),
             p("architecture", "root", None, "overview", "建议由 OA 入口、条件身份适配、知识应用和内网存储四个边界组成。", "integration", bg, integration),
+            p("architecture", "architecture_component", "oa_entry", "identity", "多工厂 OA 知识入口", "integration", use, integration),
+            p("architecture", "architecture_component", "conditional_identity", "identity", "条件式身份适配服务", "integration", integration, security),
+            p("architecture", "architecture_component", "factory_knowledge_app", "identity", "多工厂知识应用服务", "knowledge", bg, use),
+            p("architecture", "architecture_component", "identity_store", "identity", "内网知识与权限存储", "deployment", security, environment),
             p("architecture", "architecture_component", "oa_entry", "responsibilities", "OA 入口负责承接多工厂员工的统一访问请求。", "integration", use, integration),
             p("architecture", "architecture_component", "conditional_identity", "responsibilities", "条件身份适配组件负责在协议确认后转换身份和角色信息。", "integration", integration, security),
             p("architecture", "architecture_component", "factory_knowledge_app", "responsibilities", "知识应用负责在授权范围内响应员工查询。", "knowledge", bg, use, security),
             p("architecture", "architecture_component", "identity_store", "responsibilities", "内网存储负责保存知识索引和访问映射。", "deployment", security, environment),
             p("architecture", "architecture_component", "conditional_identity", "rationale", "隔离身份适配可避免未确认协议影响知识应用核心逻辑。", "integration", integration, constraints),
             p("architecture", "architecture_component", "factory_knowledge_app", "rationale", "统一应用边界可在协议确认前先验证知识查询能力。", "knowledge", bg, use),
+            p("architecture", "architecture_component", "oa_entry", "rationale", "保留 OA 入口可在身份协议确认前维持用户访问路径稳定。", "integration", use, constraints),
+            p("architecture", "architecture_component", "identity_store", "rationale", "知识索引与权限映射保留在内网可避免未确认身份信息越过数据边界。", "deployment", security, constraints),
             p("architecture", "architecture_component", "conditional_identity", "interfaces", "如果客户 IdP 支持 OIDC，则优先通过标准 OIDC 登录链路接入。", "integration", integration, security),
             p("architecture", "architecture_component", "factory_knowledge_app", "interfaces", "知识应用接收经适配的身份范围并调用内网知识存储。", "knowledge", use, security),
+            p("architecture", "architecture_component", "oa_entry", "interfaces", "OA 入口将当前登录上下文传递给条件式身份适配服务。", "integration", use, integration),
+            p("architecture", "architecture_component", "identity_store", "interfaces", "内网存储向知识应用返回授权范围内的知识内容与权限映射。", "deployment", security, environment),
             p("deployment_and_integration", "topic_block", "deployment", "items", "建议将应用服务与身份映射数据分区部署在客户内网。", "deployment", deploy, security),
             p("deployment_and_integration", "topic_block", "integration", "items", "如果客户身份平台仅支持其他标准协议，则在接口确认后选择对应适配器。", "integration", integration, constraints),
             p("implementation_plan", "implementation_phase", "protocol_discovery", "objective", "先确认身份协议、字段和角色映射。", "integration", integration, security),
@@ -639,6 +704,8 @@ def _demo_solution_payload(
         ]
         structure_relations = relations(
             (("oa_entry", "conditional_identity"), ("factory_knowledge_app", "conditional_identity"), ("factory_knowledge_app", "identity_store")),
+            (("oa_entry", "conditional_identity"), ("conditional_identity", "factory_knowledge_app"), ("factory_knowledge_app", "identity_store")),
+            (("identity_store", "factory_knowledge_app"),),
             ("protocol_discovery", "knowledge_skeleton", "identity_validation"),
             ("identity_login", "role_access"),
             "identity_boundary_validated",
@@ -648,14 +715,22 @@ def _demo_solution_payload(
             p("proposed_solution", "root", None, "overview", "建议以无状态服务、依赖隔离和数据一致性边界改造高峰期知识查询链路。", "deployment", bg, use, constraints),
             p("proposed_solution", "capability_group", "availability_tradeoff", "items", "增强故障隔离的取舍是增加运行观测和恢复演练复杂度。", "deployment", deploy, constraints),
             p("architecture", "root", None, "overview", "建议由请求入口、无状态服务、依赖隔离和数据一致性四个组件形成可恢复请求流。", "deployment", bg, constraints),
+            p("architecture", "architecture_component", "commerce_entry", "identity", "电商客服与运营入口", "integration", use, integration),
+            p("architecture", "architecture_component", "stateless_service", "identity", "无状态知识查询服务", "deployment", scale, constraints),
+            p("architecture", "architecture_component", "dependency_guard", "identity", "外部依赖隔离服务", "integration", integration, constraints),
+            p("architecture", "architecture_component", "consistency_store", "identity", "PostgreSQL 业务与索引存储", "deployment", environment, constraints),
             p("architecture", "architecture_component", "commerce_entry", "responsibilities", "请求入口负责认证并路由客服与运营查询。", "integration", use, integration),
             p("architecture", "architecture_component", "stateless_service", "responsibilities", "无状态应用服务负责处理可水平扩展的知识查询。", "deployment", scale, constraints),
             p("architecture", "architecture_component", "dependency_guard", "responsibilities", "依赖隔离组件负责限制外部系统异常在查询链路中的传播。", "integration", integration, constraints),
             p("architecture", "architecture_component", "consistency_store", "responsibilities", "数据一致性组件负责在 PostgreSQL 中维护可恢复的业务与索引状态。", "deployment", environment, constraints),
             p("architecture", "architecture_component", "stateless_service", "rationale", "无状态处理可让应用实例扩展不依赖本地会话。", "deployment", scale, constraints),
             p("architecture", "architecture_component", "dependency_guard", "rationale", "隔离外部依赖可避免单个接口异常直接扩散到全部查询。", "integration", integration, constraints),
+            p("architecture", "architecture_component", "commerce_entry", "rationale", "统一入口可向下游服务提供稳定的认证和查询请求边界。", "integration", use, security),
+            p("architecture", "architecture_component", "consistency_store", "rationale", "共享持久化状态可支持应用实例替换后的业务与索引恢复。", "deployment", environment, constraints),
             p("architecture", "architecture_component", "stateless_service", "interfaces", "应用服务通过受控接口读取一致性存储并返回来源信息。", "knowledge", use, environment),
             p("architecture", "architecture_component", "dependency_guard", "interfaces", "依赖隔离组件包装 OA 与外部业务接口并返回可处理的失败结果。", "integration", integration, constraints),
+            p("architecture", "architecture_component", "commerce_entry", "interfaces", "请求入口将认证上下文和查询请求转交给无状态知识查询服务。", "integration", use, security),
+            p("architecture", "architecture_component", "consistency_store", "interfaces", "PostgreSQL 存储向无状态服务提供可恢复的业务与索引状态。", "deployment", environment, constraints),
             p("deployment_and_integration", "topic_block", "deployment", "items", "建议将应用服务与 PostgreSQL 数据存储分区部署在企业受控网络内。", "deployment", deploy, security, environment),
             p("deployment_and_integration", "topic_block", "integration", "items", "如果外部业务接口在高峰期异常，则由依赖隔离边界返回可处理的失败结果。", "integration", integration, constraints),
             p("implementation_plan", "implementation_phase", "failure_inventory", "objective", "先确认关键依赖与故障传播边界。", "integration", integration, constraints),
@@ -678,6 +753,8 @@ def _demo_solution_payload(
         ]
         structure_relations = relations(
             (("commerce_entry", "stateless_service"), ("stateless_service", "dependency_guard"), ("stateless_service", "consistency_store")),
+            (("commerce_entry", "stateless_service"), ("stateless_service", "dependency_guard")),
+            (("consistency_store", "stateless_service"),),
             ("failure_inventory", "availability_delivery", "resilience_validation"),
             ("failure_isolation", "recovery_consistency"),
             "resilience_validated",

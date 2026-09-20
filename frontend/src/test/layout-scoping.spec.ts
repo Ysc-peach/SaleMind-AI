@@ -25,7 +25,13 @@ it('assigns distinct ownership classes to the application sidebar and content re
   const wrapper=mount(RouterView,{global:{plugins:[pinia,router,ElementPlus]}})
 
   const sidebar=wrapper.get('.app-sidebar')
+  const shell=wrapper.get('.app-shell')
+  const body=wrapper.get('.app-body')
+  const content=wrapper.get('main.content')
   const reviewPanel=wrapper.get('.solution-review-panel')
+  expect(shell.classes()).toContain('responsive-app-shell')
+  expect(body.classes()).toContain('shrinkable-app-body')
+  expect(content.classes()).toContain('shrinkable-main-content')
   expect(sidebar.element.tagName).toBe('ASIDE')
   expect(reviewPanel.element.tagName).toBe('ASIDE')
   expect(wrapper.find('.app-sidebar .solution-review-panel').exists()).toBe(false)

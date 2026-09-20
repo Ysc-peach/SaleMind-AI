@@ -25,7 +25,7 @@ export interface V2Payload {
   executive_summary:string[]
   customer_context:{confirmed_claim_ids:string[];unresolved_claim_ids:string[];requirement_fields:{field:string;status:string;claim_ids:string[]}[]}
   proposed_solution:{overview_claim_ids:string[];capability_groups:{group_id:string;title:string;claim_ids:string[]}[]}
-  architecture:{overview_claim_ids:string[];components:{component_id:string;name:string;responsibility_claim_ids:string[];rationale_claim_ids:string[];dependency_component_ids:string[];interface_claim_ids:string[]}[]}
+  architecture:{overview_claim_ids:string[];components:{component_id:string;name:string;identity_claim_id?:string|null;responsibility_claim_ids:string[];rationale_claim_ids:string[];dependency_component_ids:string[];interface_claim_ids:string[]}[];flows?:{flow_type:'request'|'data';source_component_id:string;target_component_id:string}[]}
   deployment_and_integration:{block_id:string;topic:string;title:string;claim_ids:string[]}[]
   implementation_plan:{phases:{phase_id:string;name:string;objective_claim_ids:string[];task_claim_ids:string[];owner_roles:string[];deliverable_claim_ids:string[];dependency_phase_ids:string[];acceptance_criterion_ids:string[];timing_claim_id:string|null;timing_classification:string|null}[]}
   risks:{risk_id:string;condition_claim_id:string;impact_claim_ids:string[];mitigation_claim_ids:string[];trigger_claim_ids:string[]}[]
