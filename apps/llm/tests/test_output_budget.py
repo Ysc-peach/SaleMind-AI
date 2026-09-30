@@ -62,7 +62,7 @@ def test_solution_default_output_budget_reaches_sdk_without_global_inflation(mon
     result = solution_draft.generate_grounded_solution_draft(analysis_record(), llm_provider=provider)
     assert result.generation_status == "generated"
     assert len(endpoint.calls) == 2
-    assert endpoint.calls[0]["max_tokens"] == 4000
+    assert endpoint.calls[0]["max_tokens"] == 6000
     assert endpoint.calls[1]["max_tokens"] == 321
     assert settings.LLM_MAX_OUTPUT_TOKENS == 321
 
@@ -127,4 +127,4 @@ def test_truncated_solution_is_rejected_without_second_generation(monkeypatch):
         solution_draft.generate_grounded_solution_draft(analysis_record(), llm_provider=provider)
     assert exc.value.code == "solution_draft_invalid_response"
     assert len(endpoint.calls) == 1
-    assert endpoint.calls[0]["max_tokens"] == 4000
+    assert endpoint.calls[0]["max_tokens"] == 6000

@@ -295,7 +295,7 @@ def test_prompt_contract_preserves_atomicity_and_forbids_invented_commitments():
         admission_fixture(),
     )[0]["content"]
 
-    assert "one proposal = one independently verifiable proposition" in prompt
+    assert "one proposal = one independently approvable/rejectable technical judgment" in prompt
     assert "独立 atomic proposal" in prompt
     assert all(
         forbidden in prompt
@@ -336,6 +336,95 @@ def test_prompt_contract_requires_only_the_supported_transient_structure_relatio
     )
     assert "source_container_key" in prompt
     assert "target_container_key" in prompt
+
+
+def test_prompt_contract_explicitly_matches_strict_parser_reliability_rules():
+    from apps.sales.services.solution_prompt_v2 import build_solution_v2_messages
+
+    prompt = build_solution_v2_messages(
+        analysis_fixture(),
+        check_solution_readiness(analysis_fixture()),
+        (),
+        admission_fixture(),
+    )[0]["content"]
+
+    assert "[a-z][a-z0-9_]{0,63}" in prompt
+    assert "不得超过 38" in prompt
+    assert "4 个组件" in prompt and "至少占用 16 条" in prompt
+    assert "紧凑 JSON" in prompt
+    assert "不缩进" in prompt
+    assert "不得重复解释" in prompt
+    assert "输出前" in prompt and "逐项检查" in prompt
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        (lambda payload: payload.update(extra=True), "unknown_key"),
+        (
+            lambda payload: payload.update(
+                proposals=payload["proposals"] * 10,
+            ),
+            "proposal_count_exceeded",
+        ),
+        (
+            lambda payload: payload["proposals"].__setitem__(
+                slice(None),
+                [
+                    item
+                    for item in payload["proposals"]
+                    if item["placement"]["field"] != "interfaces"
+                ],
+            ),
+            "missing_component_interface",
+        ),
+        (
+            lambda payload: payload["proposals"][0].update(
+                related_requirement_fields=["not_a_dimension"],
+            ),
+            "malformed_requirement_linkage",
+        ),
+    ],
+)
+def test_evaluation_diagnostic_reports_safe_contract_categories(mutate, expected):
+    from apps.sales.services.solution_prompt_v2 import diagnose_solution_v2_output
+
+    payload = valid_payload()
+    mutate(payload)
+
+    category = diagnose_solution_v2_output(
+        json.dumps(payload, ensure_ascii=False),
+        allowed_source_labels=("S1",),
+    )
+
+    assert category is not None
+    assert category.value == expected
+
+
+def test_evaluation_diagnostic_distinguishes_truncation_dangling_and_valid_output():
+    from apps.sales.services.solution_prompt_v2 import diagnose_solution_v2_output
+
+    assert diagnose_solution_v2_output(
+        '{"proposals":[', allowed_source_labels=("S1",)
+    ).value == "malformed_json"
+
+    dangling = valid_payload()
+    dangling["structure_relations"] = [{
+        "relation_type": "component_request_flow",
+        "source_container_kind": "architecture_component",
+        "source_container_key": "knowledge_service",
+        "target_container_kind": "architecture_component",
+        "target_container_key": "missing_component",
+    }]
+    assert diagnose_solution_v2_output(
+        json.dumps(dangling, ensure_ascii=False),
+        allowed_source_labels=("S1",),
+    ).value == "dangling_relation"
+
+    assert diagnose_solution_v2_output(
+        json.dumps(valid_payload(), ensure_ascii=False),
+        allowed_source_labels=("S1",),
+    ) is None
 
 
 def test_prompt_json_example_is_accepted_by_the_strict_parser():

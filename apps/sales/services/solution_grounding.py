@@ -30,6 +30,14 @@ from apps.sales.services.solution_schema import (
     SolutionStatement,
     SolutionStatementType,
 )
+from apps.sales.services.verifier_diagnostics import (
+    DeterministicGuardReason,
+    QwenFailureCategory,
+    UnsupportedPrecisionCategory,
+    VerifierEvaluationDiagnostics,
+    qwen_failure_category,
+)
+from apps.llm.exceptions import LLMProviderError
 
 
 class GroundingRelation(StrEnum):
@@ -104,6 +112,7 @@ class ProposalAdmissibilityPacket:
     related_requirement_fields: tuple[RequirementDimension, ...]
     capability_basis: tuple[SolutionSource, ...]
     customer_context: "GroundingCustomerContext"
+    atomicity_required: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,11 +234,15 @@ def verify_atomic_solution_v2_proposals(
     sources: tuple[SolutionSource, ...],
     allowed_source_labels: tuple[str, ...],
     llm_provider: LLMProvider | None = None,
+    diagnostics: VerifierEvaluationDiagnostics | None = None,
 ):
     """Admit V2 engineering proposals without applying fact-entailment semantics."""
 
     from apps.sales.services.solution_prompt_v2 import (
         AtomicSolutionProposalSetV2,
+        SolutionV2ContainerKind,
+        SolutionV2PlacementField,
+        SolutionV2Section,
     )
 
     if (
@@ -250,26 +263,98 @@ def verify_atomic_solution_v2_proposals(
     packets = []
     for index, proposal in enumerate(proposals.proposals):
         related_fields = proposal.related_requirement_fields
-        if (
+        invalid_citations = (
             not isinstance(proposal.citations, tuple)
             or not proposal.citations
             or len(set(proposal.citations)) != len(proposal.citations)
             or any(label not in allowed_labels for label in proposal.citations)
-            or not isinstance(related_fields, tuple)
+        )
+        invalid_related_fields = invalid_citations or (
+            not isinstance(related_fields, tuple)
             or len(set(related_fields)) != len(related_fields)
             or any(not isinstance(field, RequirementDimension) for field in related_fields)
             or any(not _requirement_has_context(analysis, field) for field in related_fields)
-        ):
+        )
+        def record_rejection(
+            reason: DeterministicGuardReason,
+            *,
+            guard_name: str,
+            matched_category: str | None = None,
+            matched_value: str | None = None,
+        ) -> None:
+            if diagnostics is None:
+                return
+            diagnostics.deterministic_rejection(
+                proposal_index=index,
+                guard_name=guard_name,
+                placement={
+                    "section": proposal.placement.section.value,
+                    "container_kind": proposal.placement.container_kind.value,
+                    "container_key": proposal.placement.container_key,
+                    "field": proposal.placement.field.value,
+                },
+                reason_code=reason,
+                related_requirement_fields=tuple(
+                    field.value for field in related_fields
+                    if isinstance(field, RequirementDimension)
+                ) if isinstance(related_fields, tuple) else (),
+                citation_count=len(proposal.citations) if isinstance(proposal.citations, tuple) else 0,
+                grounding_present=not invalid_citations,
+                proposal_text=proposal.text,
+                matched_category=matched_category,
+                matched_value=matched_value,
+            )
+
+        if invalid_related_fields:
+            record_rejection(
+                DeterministicGuardReason.INVALID_GROUNDING_REFERENCE
+                if invalid_citations else DeterministicGuardReason.INVALID_REQUIREMENT_LINKAGE,
+                guard_name=(
+                    "verify_atomic_solution_v2_proposals.citation_validation"
+                    if invalid_citations else
+                    "verify_atomic_solution_v2_proposals.requirement_linkage_validation"
+                ),
+            )
             raise SolutionDraftGroundingError(SolutionGroundingErrorCode.INVALID_INPUT)
         if _asserts_unresolved_as_confirmed(analysis, related_fields, proposal.text):
+            record_rejection(
+                DeterministicGuardReason.UNRESOLVED_AS_CONFIRMED,
+                guard_name="_asserts_unresolved_as_confirmed",
+            )
             _proposal_not_admissible(f"proposals[{index}]")
         basis = tuple(source_by_label[label] for label in proposal.citations)
-        if _has_unsupported_precision(
+        unsupported_precision = _unsupported_precision_match(
             proposal.text,
             analysis,
             related_fields,
             basis,
-        ):
+        )
+        if unsupported_precision is not None:
+            record_rejection(
+                DeterministicGuardReason.UNSUPPORTED_PRECISION,
+                guard_name="_unsupported_precision_match",
+                matched_category=unsupported_precision[0].value,
+                matched_value=unsupported_precision[1],
+            )
+            if diagnostics is not None:
+                diagnostics.unsupported_precision(
+                    claim_id=f"proposals[{index}]",
+                    placement={
+                        "section": proposal.placement.section.value,
+                        "container_kind": proposal.placement.container_kind.value,
+                        "container_key": proposal.placement.container_key,
+                        "field": proposal.placement.field.value,
+                    },
+                    claim_type="proposal",
+                    precision_category=unsupported_precision[0],
+                    matched_value=unsupported_precision[1],
+                    related_requirement_fields=tuple(
+                        field.value for field in related_fields
+                    ),
+                    citation_count=len(proposal.citations),
+                    grounding_present=bool(basis),
+                    proposal_text=proposal.text,
+                )
             _proposal_not_admissible(f"proposals[{index}]")
         packets.append(ProposalAdmissibilityPacket(
             location=f"proposals[{index}]",
@@ -277,6 +362,11 @@ def verify_atomic_solution_v2_proposals(
             related_requirement_fields=related_fields,
             capability_basis=basis,
             customer_context=_complete_customer_context(analysis),
+            atomicity_required=not (
+                proposal.placement.section is SolutionV2Section.ARCHITECTURE
+                and proposal.placement.container_kind is SolutionV2ContainerKind.ARCHITECTURE_COMPONENT
+                and proposal.placement.field is SolutionV2PlacementField.IDENTITY
+            ),
         ))
 
     max_concurrency = settings.VERIFIER_MAX_CONCURRENCY
@@ -292,8 +382,14 @@ def verify_atomic_solution_v2_proposals(
         thread_name_prefix="solution-proposal-admissibility",
     ) as executor:
         futures = tuple(
-            executor.submit(_verify_proposal_admissibility_packet, packet, provider)
-            for packet in packets
+            executor.submit(
+                _verify_proposal_admissibility_packet,
+                packet,
+                provider,
+                call_index=index,
+                diagnostics=diagnostics,
+            )
+            for index, packet in enumerate(packets, start=1)
         )
         try:
             tuple(future.result() for future in futures)
@@ -315,6 +411,8 @@ _CONDITIONAL_BOUNDARY_MARKERS = (
 )
 _PRECISION_PATTERN = re.compile(
     r"(?:"
+    r"\d+(?:\.\d+)?\s*(?:个\s*)?工作日"
+    r"|"
     r"\d+(?:\.\d+)?\s*(?:%|％|QPS|TPS|毫秒|ms|秒|分钟|小时|天|周|月|人天|人日|节点|台|核|GB|TB)"
     r"|\d+\s*(?:个|台)?\s*(?:应用|数据库|服务|计算|存储)?\s*节点"
     r"|\d{4}[-/]\d{1,2}[-/]\d{1,2}"
@@ -360,9 +458,23 @@ def _has_unsupported_precision(
     related_fields: tuple[RequirementDimension, ...],
     basis: tuple[SolutionSource, ...],
 ) -> bool:
+    return _unsupported_precision_match(
+        text,
+        analysis,
+        related_fields,
+        basis,
+    ) is not None
+
+
+def _unsupported_precision_match(
+    text: str,
+    analysis: OpportunityRequirementAnalysis,
+    related_fields: tuple[RequirementDimension, ...],
+    basis: tuple[SolutionSource, ...],
+) -> tuple[UnsupportedPrecisionCategory, str] | None:
     matches = tuple(match.group(0) for match in _PRECISION_PATTERN.finditer(text))
     if not matches:
-        return False
+        return None
     supported_text = " ".join(
         tuple(
             value
@@ -376,9 +488,40 @@ def _has_unsupported_precision(
         + tuple(source.content for source in basis)
     )
     normalized_basis = "".join(supported_text.lower().split())
-    return any(
-        "".join(match.lower().split()) not in normalized_basis for match in matches
-    )
+    for match in matches:
+        if "".join(match.lower().split()) not in normalized_basis:
+            return _precision_category(match, text), match
+    return None
+
+
+def _precision_category(
+    matched_value: str,
+    proposal_text: str,
+) -> UnsupportedPrecisionCategory:
+    token = matched_value.lower()
+    context = proposal_text.lower()
+    if "qps" in token or "tps" in token or any(
+        unit in token for unit in ("核", "gb", "tb")
+    ):
+        return UnsupportedPrecisionCategory.CAPACITY
+    if "节点" in token or token.rstrip().endswith("台"):
+        return UnsupportedPrecisionCategory.NODE_COUNT
+    if "人天" in token or "人日" in token:
+        return UnsupportedPrecisionCategory.STAFFING
+    if "ms" in token or "毫秒" in token or (
+        "秒" in token and any(marker in context for marker in ("响应", "延迟", "latency"))
+    ):
+        return UnsupportedPrecisionCategory.LATENCY
+    if any(
+        unit in token
+        for unit in ("工作日", "分钟", "小时", "天", "周", "月")
+    ) or re.search(r"\d{4}(?:[-/]\d{1,2}[-/]\d{1,2}|年\d{1,2}月\d{1,2}日)", token):
+        return UnsupportedPrecisionCategory.DURATION
+    if "%" in token or "％" in token:
+        if any(marker in context for marker in ("sla", "可用", "availability")):
+            return UnsupportedPrecisionCategory.SLA
+        return UnsupportedPrecisionCategory.NUMERIC
+    return UnsupportedPrecisionCategory.NUMERIC
 
 
 def _proposal_not_admissible(location: str) -> NoReturn:
@@ -394,15 +537,56 @@ def _proposal_not_admissible(location: str) -> NoReturn:
 def _verify_proposal_admissibility_packet(
     packet: ProposalAdmissibilityPacket,
     provider: LLMProvider,
+    *,
+    call_index: int,
+    diagnostics: VerifierEvaluationDiagnostics | None,
 ) -> ProposalAdmissibilityResult:
-    generation = provider.generate(build_proposal_admissibility_messages((packet,)))
-    result = _parse_proposal_admissibility_results(
-        generation.content,
-        packets=(packet,),
-    )[0]
+    started = (
+        diagnostics.begin(call_index=call_index, claim_count=1)
+        if diagnostics is not None
+        else None
+    )
+    try:
+        generation = provider.generate(
+            build_proposal_admissibility_messages((packet,))
+        )
+    except LLMProviderError as error:
+        if diagnostics is not None and started is not None:
+            diagnostics.failure(
+                started,
+                failure_category=qwen_failure_category(error),
+                http_status=error.http_status,
+                provider_request_id=error.request_id,
+            )
+        raise
+    try:
+        result = _parse_proposal_admissibility_results(
+            generation.content,
+            packets=(packet,),
+        )[0]
+    except SolutionDraftGroundingError as error:
+        if (
+            diagnostics is not None
+            and started is not None
+            and error.code == SolutionGroundingErrorCode.INVALID_RESPONSE.value
+        ):
+            diagnostics.failure(
+                started,
+                failure_category=QwenFailureCategory.RESPONSE_PARSE_ERROR,
+                provider_request_id=generation.provider_request_id,
+            )
+        raise
+    if diagnostics is not None and started is not None:
+        diagnostics.success(
+            started,
+            provider_request_id=generation.provider_request_id,
+        )
     if (
         result.decision is not ProposalAdmissibilityDecision.ADMISSIBLE
-        or result.atomicity is not GroundingAtomicity.ATOMIC
+        or (
+            packet.atomicity_required
+            and result.atomicity is not GroundingAtomicity.ATOMIC
+        )
     ):
         _proposal_not_admissible(packet.location)
     return result

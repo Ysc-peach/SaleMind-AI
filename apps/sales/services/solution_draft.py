@@ -2,12 +2,13 @@
 
 from dataclasses import dataclass
 from enum import StrEnum
+from collections.abc import Callable, Sequence
 
 from django.conf import settings
 
 from apps.knowledge.embeddings.base import EmbeddingProvider
 from apps.knowledge.services.search import search_knowledge
-from apps.llm.base import LLMProvider
+from apps.llm.base import LLMMessage, LLMProvider
 from apps.llm.factory import get_llm_provider
 from apps.llm.verifier_factory import get_verifier_provider
 from apps.sales.models import OpportunityRequirementAnalysis as AnalysisRecord
@@ -20,8 +21,16 @@ from apps.sales.services.solution_grounding import (
 )
 from apps.sales.services.solution_prompt import build_solution_messages
 from apps.sales.services.solution_prompt_v2 import (
-    build_solution_v2_messages,
-    parse_atomic_solution_v2_proposals,
+    AtomicSolutionProposalSetV2,
+    assurance_runtime_proposal_budget,
+    build_solution_v2_assurance_messages,
+    build_solution_v2_core_messages,
+    build_solution_v2_implementation_messages,
+    implementation_runtime_proposal_budget,
+    merge_solution_v2_proposal_passes,
+    parse_solution_v2_assurance_output,
+    parse_solution_v2_core_output,
+    parse_solution_v2_implementation_output,
 )
 from apps.sales.services.solution_readiness import (
     SolutionReadiness, SolutionReadinessStatus, check_solution_readiness,
@@ -60,6 +69,29 @@ class GroundedSolutionDraftResult:
     admission: GroundingAdmission | None
     schema_version: int = 1
     v2_provenance_bindings: tuple[V2ClaimProvenanceBinding, ...] = ()
+
+
+def _generate_and_parse_v2_pass(
+    provider: LLMProvider,
+    messages: Sequence[LLMMessage],
+    parse: Callable[[str], AtomicSolutionProposalSetV2],
+) -> AtomicSolutionProposalSetV2:
+    """Regenerate once only when strict parsing rejects provider output."""
+
+    for attempt in range(2):
+        generation = provider.generate_json(
+            messages,
+            max_output_tokens=settings.SOLUTION_DRAFT_MAX_OUTPUT_TOKENS,
+        )
+        try:
+            return parse(generation.content)
+        except SolutionDraftError as error:
+            if (
+                attempt == 1
+                or error.code != SolutionDraftErrorCode.INVALID_RESPONSE.value
+            ):
+                raise
+    raise AssertionError("unreachable after two generation attempts")
 
 
 def generate_grounded_solution_draft(
@@ -107,25 +139,56 @@ def generate_grounded_solution_draft(
         )
     admission = build_solution_admission(typed, sources)
     provider = llm_provider if llm_provider is not None else get_llm_provider()
-    messages = (
-        build_solution_messages(typed, readiness, sources, admission)
-        if schema_version == 1
-        else build_solution_v2_messages(typed, readiness, sources, admission)
-    )
-    generation = provider.generate(
-        messages,
-        max_output_tokens=settings.SOLUTION_DRAFT_MAX_OUTPUT_TOKENS,
-    )
     if schema_version == 1:
+        generation = provider.generate(
+            build_solution_messages(typed, readiness, sources, admission),
+            max_output_tokens=settings.SOLUTION_DRAFT_MAX_OUTPUT_TOKENS,
+        )
         proposals = parse_atomic_solution_proposals(
             generation.content,
             allowed_source_labels=admission.allowed_proposal_source_labels,
         )
         has_proposals = bool(proposals.claims)
     else:
-        proposals = parse_atomic_solution_v2_proposals(
-            generation.content,
-            allowed_source_labels=admission.allowed_proposal_source_labels,
+        core = _generate_and_parse_v2_pass(
+            provider,
+            build_solution_v2_core_messages(typed, readiness, sources, admission),
+            lambda content: parse_solution_v2_core_output(
+                content,
+                allowed_source_labels=admission.allowed_proposal_source_labels,
+            ),
+        )
+        implementation_budget = implementation_runtime_proposal_budget(
+            len(core.proposals)
+        )
+        implementation = _generate_and_parse_v2_pass(
+            provider,
+            build_solution_v2_implementation_messages(
+                typed, readiness, sources, admission, core
+            ),
+            lambda content: parse_solution_v2_implementation_output(
+                content,
+                allowed_source_labels=admission.allowed_proposal_source_labels,
+                max_proposals=implementation_budget,
+            ),
+        )
+        assurance_budget = assurance_runtime_proposal_budget(
+            len(core.proposals), len(implementation.proposals)
+        )
+        assurance = _generate_and_parse_v2_pass(
+            provider,
+            build_solution_v2_assurance_messages(
+                typed, readiness, sources, admission, core, implementation
+            ),
+            lambda content: parse_solution_v2_assurance_output(
+                content,
+                allowed_source_labels=admission.allowed_proposal_source_labels,
+                implementation=implementation,
+                max_proposals=assurance_budget,
+            ),
+        )
+        proposals = merge_solution_v2_proposal_passes(
+            core, implementation, assurance
         )
         has_proposals = bool(proposals.proposals)
     if has_proposals:

@@ -1,5 +1,7 @@
 """Independent semantic-verifier configuration and factory."""
 
+from types import SimpleNamespace
+
 import pytest
 from django.test import override_settings
 
@@ -65,3 +67,53 @@ def test_verifier_settings_do_not_replace_generation_settings():
     assert settings.VERIFIER_MAX_OUTPUT_TOKENS > 0
     assert settings.LLM_PROVIDER == "deepseek"
     assert settings.LLM_MODEL == "deepseek-v4-flash"
+
+
+@override_settings(**{
+    **VERIFIER_SETTINGS,
+    "VERIFIER_MODEL": "qwen3.8-max-0902",
+    "VERIFIER_TIMEOUT_SECONDS": 60,
+    "VERIFIER_MAX_RETRIES": 0,
+    "VERIFIER_MAX_CONCURRENCY": 2,
+})
+def test_qwen_verifier_factory_propagates_disabled_thinking_only_to_supported_request(
+    monkeypatch,
+):
+    from django.conf import settings
+    from apps.llm import openai_compatible
+    from apps.llm.verifier_factory import get_verifier_provider
+
+    endpoint_calls = []
+    client_arguments = {}
+
+    def client_factory(**kwargs):
+        client_arguments.update(kwargs)
+
+        def create(**request):
+            endpoint_calls.append(request)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="verified"))],
+            )
+
+        return SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
+        )
+
+    monkeypatch.setattr(openai_compatible, "OpenAI", client_factory)
+
+    provider = get_verifier_provider()
+    provider.generate([{"role": "user", "content": "packet"}])
+
+    assert client_arguments == {
+        "api_key": "verifier-factory-secret",
+        "base_url": "https://mirror.invalid/v1",
+        "timeout": 60,
+        "max_retries": 0,
+    }
+    assert settings.VERIFIER_MAX_CONCURRENCY == 2
+    assert endpoint_calls == [{
+        "model": "qwen3.8-max-0902",
+        "messages": [{"role": "user", "content": "packet"}],
+        "max_tokens": 1500,
+        "extra_body": {"enable_thinking": False},
+    }]

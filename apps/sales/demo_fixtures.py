@@ -789,6 +789,43 @@ class DemoSolutionProposalProvider(LLMProvider):
         del max_output_tokens
         source_labels = _source_labels(messages)
         payload = _demo_solution_payload(self.scenario.key, source_labels)
+        system_prompt = messages[0]["content"] if messages else ""
+        if "Pass 1 — Technical Core" in system_prompt:
+            allowed_sections = {
+                "proposed_solution", "architecture", "deployment_and_integration",
+            }
+            allowed_relations = {
+                "component_dependency", "component_request_flow",
+                "component_data_flow",
+            }
+        elif "Pass 2 — Implementation Planning" in system_prompt:
+            allowed_sections = {
+                "implementation_plan", "milestones",
+            }
+            allowed_relations = {
+                "phase_dependency", "milestone_phase",
+            }
+        elif "Pass 3 — Assurance & Boundaries" in system_prompt:
+            allowed_sections = {
+                "risks", "acceptance_criteria", "out_of_scope",
+            }
+            allowed_relations = {
+                "phase_acceptance",
+            }
+        else:
+            allowed_sections = None
+            allowed_relations = None
+        if allowed_sections is not None:
+            payload = {
+                "proposals": [
+                    item for item in payload["proposals"]
+                    if item["placement"]["section"] in allowed_sections
+                ],
+                "structure_relations": [
+                    item for item in payload["structure_relations"]
+                    if item["relation_type"] in allowed_relations
+                ],
+            }
         return LLMGeneration(json.dumps(payload, ensure_ascii=False))
 
 

@@ -93,7 +93,7 @@ def test_generation_calls_existing_search_per_intent_and_preserves_source_author
     assert result.analysis_id == record.pk
     assert result.draft.title == "商机需求解决方案内部草稿"
     assert len(llm.calls) == 1
-    assert llm.requested_output_budgets == [4000]
+    assert llm.requested_output_budgets == [6000]
     assert [s.chunk_id for s in result.sources] == [1,4,7,2,5,8,3,6]
     assert [s.label for s in result.sources] == [f"S{i}" for i in range(1,9)]
     assert set(asdict(result.sources[0])) == {

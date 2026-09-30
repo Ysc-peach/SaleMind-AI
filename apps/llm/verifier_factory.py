@@ -13,7 +13,11 @@ def get_verifier_provider() -> OpenAICompatibleLLMProvider:
         raise LLMProviderError(LLMErrorCode.LLM_NOT_CONFIGURED)
     if provider_name.strip() != "openai_compatible":
         raise LLMProviderError(LLMErrorCode.UNSUPPORTED_LLM_PROVIDER)
-    return OpenAICompatibleLLMProvider(_config_from_settings())
+    config = _config_from_settings()
+    return OpenAICompatibleLLMProvider(
+        config,
+        supports_enable_thinking=config.model_name.casefold().startswith("qwen3"),
+    )
 
 
 def _config_from_settings() -> LLMProviderConfig:

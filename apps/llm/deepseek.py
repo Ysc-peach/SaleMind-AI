@@ -44,18 +44,43 @@ class DeepSeekLLMProvider(LLMProvider):
     def generate(
         self, messages: Sequence[LLMMessage], *, max_output_tokens: int | None = None,
     ) -> LLMGeneration:
+        return self._generate(
+            messages,
+            max_output_tokens=max_output_tokens,
+            json_output=False,
+        )
+
+    def generate_json(
+        self, messages: Sequence[LLMMessage], *, max_output_tokens: int | None = None,
+    ) -> LLMGeneration:
+        return self._generate(
+            messages,
+            max_output_tokens=max_output_tokens,
+            json_output=True,
+        )
+
+    def _generate(
+        self,
+        messages: Sequence[LLMMessage],
+        *,
+        max_output_tokens: int | None,
+        json_output: bool,
+    ) -> LLMGeneration:
         validated_messages = self._validate_messages(messages)
         output_budget = self._config.max_output_tokens if max_output_tokens is None else max_output_tokens
         if not isinstance(output_budget, int) or isinstance(output_budget, bool) or output_budget <= 0:
             raise LLMProviderError(LLMErrorCode.LLM_NOT_CONFIGURED)
         thinking_type = "enabled" if self.thinking_enabled else "disabled"
+        request = {
+            "model": self.model_name,
+            "messages": validated_messages,
+            "max_tokens": output_budget,
+            "extra_body": {"thinking": {"type": thinking_type}},
+        }
+        if json_output:
+            request["response_format"] = {"type": "json_object"}
         try:
-            response = self._client.chat.completions.create(
-                model=self.model_name,
-                messages=validated_messages,
-                max_tokens=output_budget,
-                extra_body={"thinking": {"type": thinking_type}},
-            )
+            response = self._client.chat.completions.create(**request)
         except OpenAIError:
             raise LLMProviderError(LLMErrorCode.LLM_PROVIDER_ERROR) from None
 

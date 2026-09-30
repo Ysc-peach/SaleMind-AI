@@ -78,3 +78,75 @@ def test_openai_compatible_provider_honors_per_call_output_budget(monkeypatch):
     provider.generate([{"role": "user", "content": "packet"}], max_output_tokens=321)
 
     assert endpoint.calls[0]["max_tokens"] == 321
+
+
+def test_qwen_capability_sends_explicit_disabled_thinking_without_changing_request(monkeypatch):
+    from apps.llm import openai_compatible
+
+    endpoint = _Endpoint()
+    monkeypatch.setattr(
+        openai_compatible,
+        "OpenAI",
+        lambda **kwargs: SimpleNamespace(chat=SimpleNamespace(completions=endpoint)),
+    )
+    provider = openai_compatible.OpenAICompatibleLLMProvider(
+        LLMProviderConfig(
+            provider_name="openai_compatible",
+            model_name="qwen3.8-max-0902",
+            api_key="secret",
+            base_url="https://dashscope-compatible.invalid/v1",
+            timeout_seconds=60,
+            max_retries=0,
+            max_output_tokens=1500,
+            thinking_enabled=False,
+        ),
+        supports_enable_thinking=True,
+    )
+
+    result = provider.generate([
+        {"role": "system", "content": "  verifier contract  "},
+        {"role": "user", "content": "  synthetic packet  "},
+    ])
+
+    assert result.content == "verified"
+    assert endpoint.calls == [{
+        "model": "qwen3.8-max-0902",
+        "messages": [
+            {"role": "system", "content": "verifier contract"},
+            {"role": "user", "content": "synthetic packet"},
+        ],
+        "max_tokens": 1500,
+        "extra_body": {"enable_thinking": False},
+    }]
+
+
+def test_qwen_capability_preserves_provider_default_when_thinking_is_unspecified(monkeypatch):
+    from apps.llm import openai_compatible
+
+    endpoint = _Endpoint()
+    monkeypatch.setattr(
+        openai_compatible,
+        "OpenAI",
+        lambda **kwargs: SimpleNamespace(chat=SimpleNamespace(completions=endpoint)),
+    )
+    provider = openai_compatible.OpenAICompatibleLLMProvider(
+        LLMProviderConfig(
+            provider_name="openai_compatible",
+            model_name="qwen3.8-max-0902",
+            api_key="secret",
+            base_url="https://dashscope-compatible.invalid/v1",
+            timeout_seconds=60,
+            max_retries=0,
+            max_output_tokens=1500,
+            thinking_enabled=None,
+        ),
+        supports_enable_thinking=True,
+    )
+
+    provider.generate([{"role": "user", "content": "packet"}])
+
+    assert endpoint.calls == [{
+        "model": "qwen3.8-max-0902",
+        "messages": [{"role": "user", "content": "packet"}],
+        "max_tokens": 1500,
+    }]

@@ -109,7 +109,7 @@ def test_orchestration_generates_then_verifies_once_and_assembles(monkeypatch):
     llm = SolutionFakeLLM(content=proposal_content())
     result = service.generate_grounded_solution_draft(analysis_record(), llm_provider=llm)
     assert result.generation_status == "generated"
-    assert len(llm.calls) == 2 and llm.requested_output_budgets == [4000, None]
+    assert len(llm.calls) == 2 and llm.requested_output_budgets == [6000, None]
     assert "<grounding_claim_packets>" in llm.calls[1][1]["content"]
     assert len(result.draft.solution_sections) == 5
 
@@ -146,7 +146,7 @@ def test_structurally_invalid_atomic_generation_never_calls_verifier(monkeypatch
     llm = SolutionFakeLLM(content='{"title":"truncated"')
     with pytest.raises(SolutionDraftError):
         service.generate_grounded_solution_draft(analysis_record(), llm_provider=llm)
-    assert len(llm.calls) == 1 and llm.requested_output_budgets == [4000]
+    assert len(llm.calls) == 1 and llm.requested_output_budgets == [6000]
 
 
 def test_verifier_failure_is_not_retried_or_assembled(monkeypatch):

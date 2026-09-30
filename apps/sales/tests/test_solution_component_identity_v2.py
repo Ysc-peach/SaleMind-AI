@@ -78,7 +78,9 @@ def _component_proposals(count: int) -> list[dict]:
 def test_bounded_component_and_proposal_budgets_accept_the_exact_ceilings():
     from apps.sales.services.solution_prompt_v2 import (
         MAX_ARCHITECTURE_COMPONENTS,
+        MAX_CORE_PROPOSALS,
         MAX_SOLUTION_V2_PROPOSALS,
+        parse_solution_v2_core_output,
     )
 
     proposals = _component_proposals(MAX_ARCHITECTURE_COMPONENTS)
@@ -90,17 +92,23 @@ def test_bounded_component_and_proposal_budgets_accept_the_exact_ceilings():
             section="proposed_solution",
             kind="root",
         )
-        for index in range(MAX_SOLUTION_V2_PROPOSALS - len(proposals))
+        for index in range(MAX_CORE_PROPOSALS - len(proposals))
     )
 
-    parsed = _parse(
-        proposals,
-        relations=_request_flow_relations(MAX_ARCHITECTURE_COMPONENTS),
+    parsed = parse_solution_v2_core_output(
+        json.dumps({
+            "proposals": proposals,
+            "structure_relations": _request_flow_relations(
+                MAX_ARCHITECTURE_COMPONENTS
+            ),
+        }),
+        allowed_source_labels=("S1",),
     )
 
     assert MAX_ARCHITECTURE_COMPONENTS == 4
-    assert MAX_SOLUTION_V2_PROPOSALS == 38
-    assert len(parsed.proposals) == 38
+    assert MAX_CORE_PROPOSALS == 46
+    assert MAX_SOLUTION_V2_PROPOSALS == 82
+    assert len(parsed.proposals) == 46
 
 
 def test_fifth_architecture_component_is_rejected_without_truncation():
@@ -108,7 +116,9 @@ def test_fifth_architecture_component_is_rejected_without_truncation():
         _parse(_component_proposals(5), relations=_request_flow_relations(5))
 
 
-def test_thirty_ninth_proposal_is_rejected_without_truncation():
+def test_forty_seventh_proposal_is_rejected_without_truncation():
+    from apps.sales.services.solution_prompt_v2 import parse_solution_v2_core_output
+
     proposals = _component_proposals(1)
     proposals.extend(
         _proposal(
@@ -118,11 +128,14 @@ def test_thirty_ninth_proposal_is_rejected_without_truncation():
             section="proposed_solution",
             kind="root",
         )
-        for index in range(35)
+        for index in range(43)
     )
 
     with pytest.raises(SolutionDraftError):
-        _parse(proposals)
+        parse_solution_v2_core_output(
+            json.dumps({"proposals": proposals, "structure_relations": []}),
+            allowed_source_labels=("S1",),
+        )
 
 
 def test_new_component_requires_exactly_one_identity_proposal():

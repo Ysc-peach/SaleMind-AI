@@ -48,13 +48,16 @@ def _proposal(
     *,
     citations=("S1",),
     related=(RequirementDimension.DEPLOYMENT_REQUIREMENT,),
+    section=SolutionV2Section.ARCHITECTURE,
+    container_kind=SolutionV2ContainerKind.ARCHITECTURE_COMPONENT,
+    field=SolutionV2PlacementField.RATIONALE,
 ) -> AtomicSolutionProposalSetV2:
     return AtomicSolutionProposalSetV2((AtomicSolutionProposalV2(
         placement=SolutionV2Placement(
-            section=SolutionV2Section.ARCHITECTURE,
-            container_kind=SolutionV2ContainerKind.ARCHITECTURE_COMPONENT,
-            container_key="application_boundary",
-            field=SolutionV2PlacementField.RATIONALE,
+            section=section,
+            container_kind=container_kind,
+            container_key=(None if container_kind is SolutionV2ContainerKind.ROOT else "application_boundary"),
+            field=field,
         ),
         text=text,
         citations=citations,
@@ -88,7 +91,15 @@ class _AdmissibilityVerifier(DeterministicFakeLLM):
         ]}))
 
 
-def _verify(proposals, provider, *, analysis=None, sources=None, allowed=("S1",)):
+def _verify(
+    proposals,
+    provider,
+    *,
+    analysis=None,
+    sources=None,
+    allowed=("S1",),
+    diagnostics=None,
+):
     from apps.sales.services.solution_grounding import (
         verify_atomic_solution_v2_proposals,
     )
@@ -101,6 +112,7 @@ def _verify(proposals, provider, *, analysis=None, sources=None, allowed=("S1",)
         ),
         allowed_source_labels=allowed,
         llm_provider=provider,
+        diagnostics=diagnostics,
     )
 
 
@@ -242,6 +254,129 @@ def test_unsupported_precision_or_commitment_is_rejected_before_llm(text):
     assert provider.calls == []
 
 
+@pytest.mark.parametrize(
+    ("text", "expected_category", "expected_token"),
+    [
+        (
+            "建议按 10000 QPS 配置容量。",
+            "unsupported_capacity_precision",
+            "10000 QPS",
+        ),
+        (
+            "建议将响应时间控制在 200ms。",
+            "unsupported_latency_precision",
+            "200ms",
+        ),
+        (
+            "建议固定部署 3 个节点。",
+            "unsupported_node_count",
+            "3 个节点",
+        ),
+        (
+            "建议在 20 个工作日内完成交付。",
+            "unsupported_duration",
+            "20 个工作日",
+        ),
+    ],
+)
+def test_unsupported_precision_records_safe_evaluation_diagnostic(
+    text,
+    expected_category,
+    expected_token,
+):
+    from apps.sales.services.solution_grounding import SolutionDraftGroundingError
+    from apps.sales.services.verifier_diagnostics import VerifierEvaluationDiagnostics
+
+    provider = _AdmissibilityVerifier()
+    diagnostics = VerifierEvaluationDiagnostics()
+
+    with pytest.raises(SolutionDraftGroundingError):
+        _verify(_proposal(text), provider, diagnostics=diagnostics)
+
+    assert provider.calls == []
+    assert len(diagnostics.precision_rejections) == 1
+    item = diagnostics.precision_rejections[0]
+    assert item.claim_id == "proposals[0]"
+    assert item.placement == {
+        "section": "architecture",
+        "container_kind": "architecture_component",
+        "container_key": "application_boundary",
+        "field": "rationale",
+    }
+    assert item.claim_type == "proposal"
+    assert item.precision_category.value == expected_category
+    assert item.matched_value == expected_token
+    assert item.related_requirement_fields == ("deployment_requirement",)
+    assert item.citation_count == 1
+    assert item.grounding_present is True
+    assert item.reason_code == expected_category
+    safe = item.safe_dict()
+    assert safe["proposal_excerpt"] == text
+    assert not ({"api_key", "prompt", "raw_response", "source_content"} & safe.keys())
+
+
+@pytest.mark.parametrize(
+    ("text", "source_content"),
+    [
+        (
+            "建议按 10000 QPS 配置容量。",
+            "现有已确认能力支持 10000 QPS。",
+        ),
+        (
+            "建议采用 OAuth 2.1 协议。",
+            "现有身份集成能力支持 OAuth 2.1 协议。",
+        ),
+    ],
+)
+def test_precision_grounded_by_cited_enterprise_fact_keeps_existing_allowance(
+    text,
+    source_content,
+):
+    from apps.sales.services.verifier_diagnostics import VerifierEvaluationDiagnostics
+
+    provider = _AdmissibilityVerifier()
+    diagnostics = VerifierEvaluationDiagnostics()
+    proposals = _proposal(text)
+
+    assert _verify(
+        proposals,
+        provider,
+        sources=(_source("S1", content=source_content),),
+        diagnostics=diagnostics,
+    ) is proposals
+    assert len(provider.calls) == 1
+    assert diagnostics.precision_rejections == ()
+
+
+def test_ordinary_stage_enumeration_is_not_numeric_precision():
+    from apps.sales.services.verifier_diagnostics import VerifierEvaluationDiagnostics
+
+    provider = _AdmissibilityVerifier()
+    diagnostics = VerifierEvaluationDiagnostics()
+    proposals = _proposal("第一阶段确认接口，第二阶段开展受控验证。")
+
+    assert _verify(proposals, provider, diagnostics=diagnostics) is proposals
+    assert len(provider.calls) == 1
+    assert diagnostics.precision_rejections == ()
+
+
+def test_ungrounded_product_version_remains_unsupported_numeric_precision():
+    from apps.sales.services.solution_grounding import SolutionDraftGroundingError
+    from apps.sales.services.verifier_diagnostics import VerifierEvaluationDiagnostics
+
+    provider = _AdmissibilityVerifier()
+    diagnostics = VerifierEvaluationDiagnostics()
+
+    with pytest.raises(SolutionDraftGroundingError):
+        _verify(_proposal("建议采用 v2.1 产品接口。"), provider, diagnostics=diagnostics)
+
+    assert provider.calls == []
+    assert diagnostics.precision_rejections[0].precision_category.value == (
+        "unsupported_numeric_precision"
+    )
+    assert diagnostics.precision_rejections[0].matched_value == "v2.1"
+
+
 def test_precision_from_unrelated_requirement_cannot_authorize_proposal():
     analysis = analysis_fixture()
     analysis = replace(
@@ -317,6 +452,58 @@ def test_compound_proposal_remains_rejected_by_atomicity_gate():
             _proposal("建议采用私有化部署，并同时承诺完成身份集成。"),
             _AdmissibilityVerifier(atomicity="COMPOUND"),
         )
+
+
+def test_architecture_identity_is_not_vetoed_only_for_compound_atomicity():
+    proposals = _proposal(
+        "门户接入与统一身份层",
+        field=SolutionV2PlacementField.IDENTITY,
+    )
+    provider = _AdmissibilityVerifier(decision="ADMISSIBLE", atomicity="COMPOUND")
+
+    assert _verify(proposals, provider) is proposals
+    assert len(provider.calls) == 1
+
+
+def test_architecture_identity_still_requires_admissible_decision():
+    from apps.sales.services.solution_grounding import SolutionDraftGroundingError
+
+    proposals = _proposal(
+        "门户接入与统一身份层",
+        field=SolutionV2PlacementField.IDENTITY,
+    )
+    provider = _AdmissibilityVerifier(decision="INADMISSIBLE", atomicity="COMPOUND")
+
+    with pytest.raises(SolutionDraftGroundingError):
+        _verify(proposals, provider)
+    assert len(provider.calls) == 1
+
+
+def test_independent_technical_decisions_in_overview_remain_compound_veto():
+    from apps.sales.services.solution_grounding import SolutionDraftGroundingError
+
+    proposals = _proposal(
+        "部署应用服务，同时采用缓存层，并对接企业 OA。",
+        related=(),
+        section=SolutionV2Section.PROPOSED_SOLUTION,
+        container_kind=SolutionV2ContainerKind.ROOT,
+        field=SolutionV2PlacementField.OVERVIEW,
+    )
+    provider = _AdmissibilityVerifier(atomicity="COMPOUND")
+
+    with pytest.raises(SolutionDraftGroundingError):
+        _verify(proposals, provider)
+    assert len(provider.calls) == 1
+
+
+def test_one_engineering_judgment_with_supporting_action_remains_atomic():
+    proposals = _proposal("通过健康检查识别应用服务故障，以便触发受控恢复。")
+    provider = _AdmissibilityVerifier(atomicity="ATOMIC")
+
+    assert _verify(proposals, provider) is proposals
+    prompt = provider.calls[0][0]["content"]
+    assert "独立批准或否决" in prompt
+    assert "动词数量" in prompt
 
 
 def test_proposal_prompt_defines_admissibility_instead_of_fact_entailment():

@@ -211,9 +211,30 @@ class _GenerationProvider(LLMProvider):
 
     def generate(self, messages, *, max_output_tokens=None):
         self.calls.append(messages)
+        system_prompt = messages[0]["content"]
+        if "Pass 1 — Technical Core" in system_prompt:
+            allowed_sections = {
+                "proposed_solution", "architecture", "deployment_and_integration",
+            }
+            allowed_relations = {
+                "component_dependency", "component_request_flow",
+                "component_data_flow",
+            }
+        elif "Pass 2 — Implementation Planning" in system_prompt:
+            allowed_sections = {"implementation_plan", "milestones"}
+            allowed_relations = {"phase_dependency", "milestone_phase"}
+        else:
+            allowed_sections = {"risks", "acceptance_criteria", "out_of_scope"}
+            allowed_relations = {"phase_acceptance"}
         return LLMGeneration(content=json.dumps({
-            "proposals": self.proposals,
-            "structure_relations": self.structure_relations,
+            "proposals": [
+                item for item in self.proposals
+                if item["placement"]["section"] in allowed_sections
+            ],
+            "structure_relations": [
+                item for item in self.structure_relations
+                if item["relation_type"] in allowed_relations
+            ],
         }, ensure_ascii=False))
 
 
@@ -303,12 +324,44 @@ def test_explicit_v2_selection_builds_structured_draft_and_skips_verifier_for_de
     assert result.schema_version == 2
     assert isinstance(result.draft, SolutionDraftV2)
     assert verifier.calls == []
-    assert "container_kind" in generation.calls[0][0]["content"]
+    assert '"ir_version":"semantic_v1"' in generation.calls[0][0]["content"]
+    assert '"container_kind"' not in generation.calls[0][0]["content"]
     assert any(claim.statement_type is SolutionClaimTypeV2.ENTERPRISE_FACT for claim in result.draft.claims)
     assert any(
         claim.statement_type is SolutionClaimTypeV2.UNRESOLVED and "SSO" in claim.text
         for claim in result.draft.claims
     )
+
+
+def test_v2_generation_uses_json_output_capability_when_available(monkeypatch):
+    from apps.sales.services import solution_draft as service
+
+    class JsonGenerationProvider(_GenerationProvider):
+        def __init__(self):
+            super().__init__([])
+            self.json_calls = []
+
+        def generate(self, messages, *, max_output_tokens=None):
+            pytest.fail("V2 generation must request JSON output.")
+
+        def generate_json(self, messages, *, max_output_tokens=None):
+            self.json_calls.append(max_output_tokens)
+            return LLMGeneration(content=json.dumps({
+                "proposals": [],
+                "structure_relations": [],
+            }))
+
+    monkeypatch.setattr(service, "search_knowledge", lambda **kwargs: [search_result()])
+    sequence = iter((admission_fixture(), admission_fixture()))
+    monkeypatch.setattr(service, "build_solution_admission", lambda *args: next(sequence))
+    provider = JsonGenerationProvider()
+
+    result = service.generate_grounded_solution_draft(
+        analysis_record(), llm_provider=provider, schema_version=2,
+    )
+
+    assert result.generation_status == "generated"
+    assert provider.json_calls == [6000, 6000, 6000]
 
 
 def test_each_v2_proposal_is_verified_independently_and_placement_order_survives(monkeypatch):
@@ -331,7 +384,9 @@ def test_each_v2_proposal_is_verified_independently_and_placement_order_survives
 
     assert len(verifier.calls) == 5
     assert all(len(call) == 1 for call in verifier.calls)
-    assert [call[0]["text"] for call in verifier.calls] == [item["text"] for item in proposals]
+    assert {call[0]["text"] for call in verifier.calls} == {
+        item["text"] for item in proposals
+    }
     component = result.draft.architecture.components[0]
     by_id = {claim.claim_id: claim for claim in result.draft.claims}
     assert by_id[component.identity_claim_id].text == proposals[0]["text"]

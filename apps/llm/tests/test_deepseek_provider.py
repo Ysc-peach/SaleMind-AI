@@ -111,6 +111,24 @@ def test_generate_passes_normalized_messages_and_explicit_non_thinking(monkeypat
     ]
 
 
+def test_generate_json_uses_provider_supported_json_object_mode(monkeypatch):
+    provider, endpoint, _ = _build_provider(monkeypatch)
+
+    result = provider.generate_json(
+        [{"role": "user", "content": "Return one JSON object."}],
+        max_output_tokens=6000,
+    )
+
+    assert result.content == "SalesMind LLM connected"
+    assert endpoint.calls == [{
+        "model": "deepseek-v4-flash",
+        "messages": [{"role": "user", "content": "Return one JSON object."}],
+        "max_tokens": 6000,
+        "extra_body": {"thinking": {"type": "disabled"}},
+        "response_format": {"type": "json_object"},
+    }]
+
+
 def test_reasoning_content_is_not_exposed_by_generation_result(monkeypatch):
     secret_reasoning = "private chain of thought"
     provider, _, _ = _build_provider(

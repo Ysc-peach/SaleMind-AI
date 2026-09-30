@@ -68,7 +68,7 @@ def test_explicit_verifier_provider_is_used_only_for_semantic_verification(monke
 
     assert result.generation_status == "generated"
     assert len(generation.calls) == 1
-    assert generation.requested_output_budgets == [4000]
+    assert generation.requested_output_budgets == [6000]
     assert len(verifier.calls) == 1
     assert verifier.requested_output_budgets == [None]
 

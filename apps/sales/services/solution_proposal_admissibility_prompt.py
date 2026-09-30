@@ -31,8 +31,9 @@ _SYSTEM_PROMPT = """你是企业售前 Solution V2 proposal admissibility 验证
    proposal 可以保留“如果/若/以前提”等边界，且不得让原 unresolved 消失。
 5. unsupported precision/commitment：不得编造 SLA、QPS/TPS、容量、延迟、硬件数量、日期、人天、
    协议版本、成本或合同/商业承诺。
-6. atomicity：ATOMIC 只含一个可独立判断的实质性 proposition；包含两个或更多可分别成立或失败的
-   命题必须为 COMPOUND。admissibility 与 atomicity 必须独立判断。
+6. atomicity：ATOMIC 只含一个可独立批准或否决的技术判断；不要按动词数量或配套动作数量判断。
+   同一个技术判断的目的、条件或紧密配套动作不自动构成 COMPOUND；若包含两个或更多可分别
+   批准、否决或寻找证据的独立技术决策，则为 COMPOUND。admissibility 与 atomicity 必须独立判断。
 
 recommendation、rationale、tradeoff 和 conditional proposal 都可以是合法工程推导。rationale 必须
 与建议及客户上下文相关；tradeoff 只能表达可能的限制或重新评估条件，不能冒充已发生事实或编造

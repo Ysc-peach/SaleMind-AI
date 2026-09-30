@@ -17,6 +17,7 @@ class LLMGeneration:
     """Safe final model output exposed to future business services."""
 
     content: str
+    provider_request_id: str | None = None
 
 
 class LLMProvider(ABC):
@@ -38,6 +39,13 @@ class LLMProvider(ABC):
     ) -> LLMGeneration:
         """Generate once; None keeps the configured output budget for this call."""
 
+    def generate_json(
+        self, messages: Sequence[LLMMessage], *, max_output_tokens: int | None = None,
+    ) -> LLMGeneration:
+        """Request JSON when supported, otherwise preserve the provider contract."""
+
+        return self.generate(messages, max_output_tokens=max_output_tokens)
+
 
 @dataclass(frozen=True, slots=True)
 class LLMProviderConfig:
@@ -50,4 +58,4 @@ class LLMProviderConfig:
     timeout_seconds: int
     max_retries: int
     max_output_tokens: int
-    thinking_enabled: bool
+    thinking_enabled: bool | None
