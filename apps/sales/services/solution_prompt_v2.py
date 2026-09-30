@@ -610,6 +610,11 @@ def _semantic_pass_prompt(pass_name: str, runtime_budget: int) -> str:
             "两个以上组件至少一条 request_flows；存在真实数据读写时生成 data_flows。"
             "proposed_solution 是总体技术推荐的 atomic claims；architecture.overview 可选；"
             "capability_groups 可选，每项为 ref 与 items。"
+            "proposed_solution.items（包括 capability_groups[].items）的每个 item 必须只表达一个可独立批准/拒绝的技术判断。"
+            "如果一句话包含两个独立能力、技术选择或交付项，必须拆成两个独立 item。"
+            "BAD：接口服务能力可支撑 JWT 身份认证与 CSV 批量导出。"
+            "GOOD：两个独立 item：接口服务能力可支撑 JWT 身份认证。接口服务能力可支撑 CSV 批量导出。"
+            "不禁止所有“和/与”句式；只有可以独立成立、独立失败、独立审批的技术判断才必须拆分。"
             "deployment_and_integration 只允许四个主题列表："
             + "；".join(
                 f"{topic} 最多 {limit} 条"

@@ -645,6 +645,30 @@ def test_core_prompt_declares_exact_five_key_component_contract():
     assert "示例中的 architecture.components 即合法五键格式" in prompt
 
 
+def test_core_prompt_scopes_independent_judgment_rule_to_proposed_solution_items():
+    analysis = analysis_fixture()
+    prompt = build_solution_v2_core_messages(
+        analysis, check_solution_readiness(analysis), (), admission_fixture(),
+    )[0]["content"]
+
+    assert "proposed_solution.items（包括 capability_groups[].items）" in prompt
+    assert "每个 item 必须只表达一个可独立批准/拒绝的技术判断" in prompt
+    assert "两个独立能力、技术选择或交付项，必须拆成两个独立 item" in prompt
+
+
+def test_core_prompt_demonstrates_independent_capability_split_without_conjunction_ban():
+    analysis = analysis_fixture()
+    prompt = build_solution_v2_core_messages(
+        analysis, check_solution_readiness(analysis), (), admission_fixture(),
+    )[0]["content"]
+
+    assert "BAD：接口服务能力可支撑 JWT 身份认证与 CSV 批量导出。" in prompt
+    assert "GOOD：两个独立 item：接口服务能力可支撑 JWT 身份认证。" in prompt
+    assert "接口服务能力可支撑 CSV 批量导出。" in prompt
+    assert "不禁止所有“和/与”句式" in prompt
+    assert "独立成立、独立失败、独立审批" in prompt
+
+
 def test_core_prompt_declares_every_semantic_ir_local_limit():
     analysis = analysis_fixture()
     prompt = build_solution_v2_core_messages(

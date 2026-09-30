@@ -5,7 +5,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import NoReturn
+from typing import NoReturn, TYPE_CHECKING
 
 from django.conf import settings
 
@@ -38,6 +38,9 @@ from apps.sales.services.verifier_diagnostics import (
     qwen_failure_category,
 )
 from apps.llm.exceptions import LLMProviderError
+
+if TYPE_CHECKING:
+    from apps.sales.services.solution_prompt_v2 import SolutionV2Placement
 
 
 class GroundingRelation(StrEnum):
@@ -113,6 +116,8 @@ class ProposalAdmissibilityPacket:
     capability_basis: tuple[SolutionSource, ...]
     customer_context: "GroundingCustomerContext"
     atomicity_required: bool = True
+    placement: "SolutionV2Placement | None" = None
+    phase_objective: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,6 +265,16 @@ def verify_atomic_solution_v2_proposals(
     if not allowed_labels <= source_by_label.keys():
         raise SolutionDraftGroundingError(SolutionGroundingErrorCode.INVALID_INPUT)
 
+    phase_objectives: dict[str, list[str]] = {}
+    for proposal in proposals.proposals:
+        placement = proposal.placement
+        if (
+            placement.section is SolutionV2Section.IMPLEMENTATION_PLAN
+            and placement.container_kind is SolutionV2ContainerKind.IMPLEMENTATION_PHASE
+            and placement.field is SolutionV2PlacementField.OBJECTIVE
+        ):
+            phase_objectives.setdefault(placement.container_key, []).append(proposal.text)
+
     packets = []
     for index, proposal in enumerate(proposals.proposals):
         related_fields = proposal.related_requirement_fields
@@ -366,6 +381,15 @@ def verify_atomic_solution_v2_proposals(
                 proposal.placement.section is SolutionV2Section.ARCHITECTURE
                 and proposal.placement.container_kind is SolutionV2ContainerKind.ARCHITECTURE_COMPONENT
                 and proposal.placement.field is SolutionV2PlacementField.IDENTITY
+            ),
+            placement=proposal.placement,
+            phase_objective=(
+                tuple(sorted(phase_objectives.get(proposal.placement.container_key, ())))
+                if (
+                    proposal.placement.section is SolutionV2Section.IMPLEMENTATION_PLAN
+                    and proposal.placement.container_kind is SolutionV2ContainerKind.IMPLEMENTATION_PHASE
+                    and proposal.placement.field is SolutionV2PlacementField.TASKS
+                ) else ()
             ),
         ))
 

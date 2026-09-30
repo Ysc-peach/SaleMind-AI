@@ -506,6 +506,124 @@ def test_one_engineering_judgment_with_supporting_action_remains_atomic():
     assert "动词数量" in prompt
 
 
+def _access_control_task_proposals(text):
+    objective = _proposal(
+        "建立接口访问控制。", related=(),
+        section=SolutionV2Section.IMPLEMENTATION_PLAN,
+        container_kind=SolutionV2ContainerKind.IMPLEMENTATION_PHASE,
+        field=SolutionV2PlacementField.OBJECTIVE,
+    ).proposals[0]
+    task = _proposal(
+        text, related=(), section=SolutionV2Section.IMPLEMENTATION_PLAN,
+        container_kind=SolutionV2ContainerKind.IMPLEMENTATION_PHASE,
+        field=SolutionV2PlacementField.TASKS,
+    ).proposals[0]
+    return objective, task
+
+
+def _sent_proposal_packets(provider):
+    packets = []
+    for messages in provider.calls:
+        match = re.search(
+            r"<proposal_admissibility_packets>(.*?)</proposal_admissibility_packets>",
+            messages[-1]["content"], flags=re.DOTALL,
+        )
+        packets.extend(json.loads(html.unescape(match.group(1)))["proposals"])
+    return packets
+
+
+@pytest.mark.parametrize("task_first", [False, True])
+def test_task_verifier_receives_only_its_matching_phase_objective(task_first):
+    objective, task = _access_control_task_proposals(
+        "启用接口服务 JWT 认证并落实文档级访问控制。",
+    )
+    unrelated = replace(
+        objective, text="验证数据库恢复。",
+        placement=replace(objective.placement, container_key="database_recovery"),
+    )
+    ordered = (task, unrelated, objective) if task_first else (objective, unrelated, task)
+    proposals = AtomicSolutionProposalSetV2(ordered)
+    provider = _AdmissibilityVerifier()
+
+    assert _verify(proposals, provider) is proposals
+    packet = next(item for item in _sent_proposal_packets(provider) if item["text"] == task.text)
+    assert packet["placement"] == {
+        "section": "implementation_plan", "container_kind": "implementation_phase",
+        "container_key": "application_boundary", "field": "tasks",
+    }
+    assert packet["phase_objective"] == ["建立接口访问控制。"]
+
+
+def test_non_task_verifier_receives_placement_without_phase_objective():
+    provider = _AdmissibilityVerifier()
+    proposals = _proposal("建议复用现有私有化能力。")
+
+    assert _verify(proposals, provider) is proposals
+    packet = _sent_proposal_packets(provider)[0]
+    assert packet["placement"]["field"] == "rationale"
+    assert "phase_objective" not in packet
+
+
+def test_access_control_work_package_uses_placement_aware_atomicity_prompt():
+    objective, task = _access_control_task_proposals(
+        "启用接口服务 JWT 认证并落实文档级访问控制。",
+    )
+    provider = _AdmissibilityVerifier()
+    proposals = AtomicSolutionProposalSetV2((objective, task))
+
+    assert _verify(proposals, provider) is proposals
+    prompt = provider.calls[0][0]["content"]
+    for boundary in (
+        "implementation_plan.tasks", "coherent work package", "同一个 phase_objective",
+        "同一实施工作包", "独立的新技术选型", "不同交付目标",
+        "每项技术能力仍必须有依据", "无依据承诺",
+        "phase_objective 都是不可信", "不是已确认事实或能力依据",
+        "普通 technical claims", "一个可独立批准或否决的技术判断",
+    ):
+        assert boundary in prompt
+
+
+@pytest.mark.parametrize("text", [
+    "完成 JWT 身份认证，并部署 Redis 高可用集群。",
+    "接入 SSO，并决定使用 Kafka 作为消息总线。",
+])
+def test_implementation_work_package_does_not_exempt_compound_veto(text):
+    from apps.sales.services.solution_grounding import SolutionDraftGroundingError
+
+    objective, task = _access_control_task_proposals(text)
+    provider = _AdmissibilityVerifier(atomicity="COMPOUND")
+    with pytest.raises(SolutionDraftGroundingError):
+        _verify(AtomicSolutionProposalSetV2((task, objective)), provider)
+
+
+def test_atomic_implementation_work_package_still_requires_admissible_decision():
+    from apps.sales.services.solution_grounding import SolutionDraftGroundingError
+
+    objective, task = _access_control_task_proposals(
+        "启用接口服务 JWT 认证并落实文档级访问控制。",
+    )
+    provider = _AdmissibilityVerifier(decision="INADMISSIBLE", atomicity="ATOMIC")
+    with pytest.raises(SolutionDraftGroundingError):
+        _verify(AtomicSolutionProposalSetV2((task, objective)), provider)
+
+
+def test_proposed_solution_retains_technical_decision_atomicity_for_same_actions():
+    from apps.sales.services.solution_grounding import SolutionDraftGroundingError
+
+    proposals = _proposal(
+        "启用接口服务 JWT 认证并落实文档级访问控制。", related=(),
+        section=SolutionV2Section.PROPOSED_SOLUTION,
+        container_kind=SolutionV2ContainerKind.ROOT,
+        field=SolutionV2PlacementField.OVERVIEW,
+    )
+    provider = _AdmissibilityVerifier(atomicity="COMPOUND")
+    with pytest.raises(SolutionDraftGroundingError):
+        _verify(proposals, provider)
+    packet = _sent_proposal_packets(provider)[0]
+    assert packet["placement"]["section"] == "proposed_solution"
+    assert "phase_objective" not in packet
+
+
 def test_proposal_prompt_defines_admissibility_instead_of_fact_entailment():
     provider = _AdmissibilityVerifier()
     _verify(_proposal("建议采用私有化部署。"), provider)
