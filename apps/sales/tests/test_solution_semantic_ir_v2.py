@@ -669,6 +669,44 @@ def test_core_prompt_demonstrates_independent_capability_split_without_conjuncti
     assert "独立成立、独立失败、独立审批" in prompt
 
 
+def test_core_overview_prompt_requires_independently_reviewable_recommendations():
+    analysis = analysis_fixture()
+    prompt = build_solution_v2_core_messages(
+        analysis, check_solution_readiness(analysis), (), admission_fixture(),
+    )[0]["content"]
+
+    for requirement in (
+        "proposed_solution 数组对应最终 proposed_solution.overview",
+        "每条 claim 必须代表一个独立可审核的总体技术推荐",
+        "多个独立技术选型", "多个独立系统集成决策",
+        "多个可以分别批准/拒绝的能力建设", "拆成多个 overview claim",
+    ):
+        assert requirement in prompt
+
+
+def test_core_overview_prompt_demonstrates_separate_oa_and_sso_decisions():
+    analysis = analysis_fixture()
+    prompt = build_solution_v2_core_messages(
+        analysis, check_solution_readiness(analysis), (), admission_fixture(),
+    )[0]["content"]
+
+    assert "BAD overview：建议通过标准接口对接 OA 门户并接入企业 SSO 统一身份。" in prompt
+    assert "GOOD overview claim：建议通过标准接口对接现有 OA 门户。" in prompt
+    assert "GOOD overview claim：建议接入企业 SSO 实现统一身份管理。" in prompt
+
+
+def test_core_overview_prompt_preserves_supporting_description_not_independent_choices():
+    analysis = analysis_fixture()
+    prompt = build_solution_v2_core_messages(
+        analysis, check_solution_readiness(analysis), (), admission_fixture(),
+    )[0]["content"]
+
+    assert "允许同一推荐的目的、条件或紧密配套描述" in prompt
+    assert "允许 overview：建设统一智能服务平台，提升企业知识管理能力。" in prompt
+    assert "BAD overview：采用 Kafka、Redis、Kubernetes 完成消息、缓存、高可用部署。" in prompt
+    assert "不按动词数量判断，也不禁止所有“和/与”句式" in prompt
+
+
 def test_core_prompt_declares_every_semantic_ir_local_limit():
     analysis = analysis_fixture()
     prompt = build_solution_v2_core_messages(
