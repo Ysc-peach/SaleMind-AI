@@ -436,6 +436,13 @@ _CONDITIONAL_BOUNDARY_MARKERS = (
     "取决于",
     "根据确认结果",
 )
+# Recognize a bounded confirmation prerequisite within one clause. Do not
+# bridge sentence boundaries or interpret "before confirmation" as "after".
+_CONFIRMATION_BOUNDARY_PATTERN = re.compile(
+    r"(?<!不)(?<!无需)(?<!无须)"
+    r"(?:待(?:与)?(?:客户)?确认|(?:经|在)客户确认|确认(?:完成|时间))"
+    r"[^，,。.!！?？;；\r\n前]{0,64}后"
+)
 _PRECISION_PATTERN = re.compile(
     r"(?:"
     r"\d+(?:\.\d+)?\s*(?:个\s*)?工作日"
@@ -474,8 +481,9 @@ def _asserts_unresolved_as_confirmed(
         getattr(analysis.requirements, field.value).status is not RequirementStatus.KNOWN
         for field in related_fields
     )
-    return has_unresolved_dependency and not any(
-        marker in text for marker in _CONDITIONAL_BOUNDARY_MARKERS
+    return has_unresolved_dependency and not (
+        any(marker in text for marker in _CONDITIONAL_BOUNDARY_MARKERS)
+        or _CONFIRMATION_BOUNDARY_PATTERN.search(text) is not None
     )
 
 

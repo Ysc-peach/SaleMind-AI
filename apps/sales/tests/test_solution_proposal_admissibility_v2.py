@@ -237,6 +237,90 @@ def test_conditional_proposal_preserves_unresolved_requirement():
 @pytest.mark.parametrize(
     "text",
     [
+        "待确认后排期。",
+        "待客户确认后排期。",
+        "待与客户确认首批上线时间后排定本阶段时间。",
+        "经客户确认首批上线时间后排期。",
+        "在客户确认首批上线时间后安排上线。",
+        "确认完成后再上线。",
+        "确认时间后再排期。",
+    ],
+)
+def test_confirmation_before_execution_preserves_unresolved_timeline(text):
+    from apps.sales.services.verifier_diagnostics import VerifierEvaluationDiagnostics
+
+    provider = _AdmissibilityVerifier()
+    diagnostics = VerifierEvaluationDiagnostics()
+    proposals = _proposal(
+        text,
+        related=(RequirementDimension.TIMELINE,),
+        section=SolutionV2Section.IMPLEMENTATION_PLAN,
+        container_kind=SolutionV2ContainerKind.IMPLEMENTATION_PHASE,
+        field=SolutionV2PlacementField.TIMING,
+    )
+
+    assert _verify(proposals, provider, diagnostics=diagnostics) is proposals
+    assert diagnostics.deterministic_rejections == ()
+    assert provider.packets[0]["text"] == text
+    requirement = next(
+        item for item in provider.packets[0]["customer_context"]["requirements"]
+        if item["field"] == "timeline"
+    )
+    assert requirement["analysis"]["status"] == "unknown"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "首批上线时间为10月15日。",
+        "本阶段将在两周内完成。",
+        "预计两周内完成。",
+        "系统将于确认前直接上线。",
+        "待客户确认首批上线时间前直接上线。",
+        "待客户确认排期。系统随后上线。",
+        "系统不待客户确认首批上线时间后直接上线。",
+        "待客户确认" + "甲" * 65 + "后上线。",
+    ],
+)
+def test_nonconditional_timing_still_rejected_before_verifier(text):
+    from apps.sales.services.solution_grounding import SolutionDraftGroundingError
+    from apps.sales.services.verifier_diagnostics import VerifierEvaluationDiagnostics
+
+    provider = _AdmissibilityVerifier()
+    diagnostics = VerifierEvaluationDiagnostics()
+    proposals = _proposal(text, related=(RequirementDimension.TIMELINE,))
+
+    with pytest.raises(SolutionDraftGroundingError):
+        _verify(proposals, provider, diagnostics=diagnostics)
+    assert provider.calls == []
+    assert diagnostics.deterministic_rejections[0].reason_code.value == (
+        "unresolved_as_confirmed"
+    )
+
+
+def test_confirmation_condition_does_not_exempt_unsupported_duration():
+    from apps.sales.services.solution_grounding import SolutionDraftGroundingError
+    from apps.sales.services.verifier_diagnostics import VerifierEvaluationDiagnostics
+
+    provider = _AdmissibilityVerifier()
+    diagnostics = VerifierEvaluationDiagnostics()
+    proposals = _proposal(
+        "待客户确认首批上线时间后在 14 天内完成。",
+        related=(RequirementDimension.TIMELINE,),
+    )
+
+    with pytest.raises(SolutionDraftGroundingError):
+        _verify(proposals, provider, diagnostics=diagnostics)
+    assert provider.calls == []
+    rejection = diagnostics.deterministic_rejections[0]
+    assert rejection.reason_code.value == "unsupported_precision"
+    assert rejection.matched_category == "unsupported_duration"
+    assert rejection.matched_value == "14 天"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
         "建议承诺 99.9% SLA。",
         "建议按 1000 QPS 配置容量。",
         "建议在 2027-01-01 上线。",
