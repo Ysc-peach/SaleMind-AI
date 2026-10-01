@@ -135,7 +135,7 @@ def _parse_core(payload):
     )
 
 
-def _parse_implementation(payload, *, max_proposals=16):
+def _parse_implementation(payload, *, max_proposals=18):
     from apps.sales.services.solution_prompt_v2 import (
         parse_solution_v2_implementation_output,
     )
@@ -167,9 +167,9 @@ def test_three_pass_limits_are_bounded_without_changing_core():
     )
 
     assert MAX_CORE_PROPOSALS == 46
-    assert MAX_IMPLEMENTATION_PROPOSALS == 16
+    assert MAX_IMPLEMENTATION_PROPOSALS == 18
     assert MAX_ASSURANCE_PROPOSALS == 20
-    assert MAX_SOLUTION_V2_PROPOSALS == 82
+    assert MAX_SOLUTION_V2_PROPOSALS == 84
 
 
 def test_core_accepts_46_and_rejects_47_proposals():
@@ -178,7 +178,7 @@ def test_core_accepts_46_and_rejects_47_proposals():
         _parse_core(_core_payload(47))
 
 
-@pytest.mark.parametrize(("core_count", "expected"), ((22, 16), (25, 16), (46, 16)))
+@pytest.mark.parametrize(("core_count", "expected"), ((22, 18), (25, 18), (46, 18)))
 def test_implementation_runtime_budget_uses_remaining_global_capacity(
     core_count, expected
 ):
@@ -191,7 +191,7 @@ def test_implementation_runtime_budget_uses_remaining_global_capacity(
 
 @pytest.mark.parametrize(
     ("core_count", "implementation_count", "expected"),
-    ((22, 16, 20), (25, 16, 20), (46, 16, 20)),
+    ((22, 18, 20), (25, 18, 20), (46, 18, 20)),
 )
 def test_assurance_runtime_budget_uses_remaining_global_capacity(
     core_count, implementation_count, expected
@@ -232,8 +232,8 @@ def test_pass_prompts_publish_runtime_and_section_contracts():
     assert "proposed_solution" in core_prompt
     assert "多个独立技术决策" in core_prompt
     assert "单条 proposal" in core_prompt
-    assert "runtime proposal 总预算最多 16 条" in implementation_prompt
-    assert "implementation_plan 最多 14 条" in implementation_prompt
+    assert "runtime proposal 总预算最多 18 条" in implementation_prompt
+    assert "implementation_plan 最多 16 条" in implementation_prompt
     assert "milestones 最多 4 条" in implementation_prompt
     assert "runtime proposal 总预算最多 20 条" in assurance_prompt
     assert "risks 最多 3 个" in assurance_prompt
@@ -244,16 +244,16 @@ def test_pass_prompts_publish_runtime_and_section_contracts():
     assert "validated_implementation_plan" in assurance_messages[1]["content"]
 
 
-def test_implementation_accepts_16_total_and_rejects_17():
-    assert len(_parse_implementation(_implementation_payload(14, 2)).proposals) == 16
+def test_implementation_accepts_18_total_and_rejects_19():
+    assert len(_parse_implementation(_implementation_payload(16, 2)).proposals) == 18
     with pytest.raises(SolutionDraftError):
-        _parse_implementation(_implementation_payload(15, 2))
+        _parse_implementation(_implementation_payload(16, 3))
 
 
 def test_implementation_section_ceilings_fail_closed():
-    assert len(_parse_implementation(_implementation_payload(14, 0)).proposals) == 14
+    assert len(_parse_implementation(_implementation_payload(16, 0)).proposals) == 16
     with pytest.raises(SolutionDraftError):
-        _parse_implementation(_implementation_payload(15, 0))
+        _parse_implementation(_implementation_payload(17, 0))
     assert len(_parse_implementation(_implementation_payload(1, 2)).proposals) == 3
     assert len(_parse_implementation(_implementation_payload(1, 4)).proposals) == 5
     with pytest.raises(SolutionDraftError):
@@ -303,7 +303,7 @@ def test_valid_three_pass_merge_is_deterministic_and_preserves_cross_pass_relati
     )
 
     core = _parse_core(_core_payload(46))
-    implementation = _parse_implementation(_implementation_payload(14, 2))
+    implementation = _parse_implementation(_implementation_payload(16, 2))
     assurance = _parse_assurance(
         _assurance_payload(12, 6, 2), implementation, max_proposals=20
     )
@@ -316,18 +316,18 @@ def test_valid_three_pass_merge_is_deterministic_and_preserves_cross_pass_relati
         ),
     )
 
-    assert len(first.proposals) == 82
+    assert len(first.proposals) == 84
     assert first == second
     assert first.structure_relations[-1].relation_type.value == "phase_acceptance"
 
 
-def test_global_83_proposals_are_rejected_without_truncation():
+def test_global_85_proposals_are_rejected_without_truncation():
     from apps.sales.services.solution_prompt_v2 import parse_atomic_solution_v2_proposals
 
-    payload = json.dumps(_core_payload(83))
+    payload = json.dumps(_core_payload(85))
     with pytest.raises(SolutionDraftError):
         parse_atomic_solution_v2_proposals(
-            payload, allowed_source_labels=("S1",), _max_proposals=82
+            payload, allowed_source_labels=("S1",), _max_proposals=84
         )
 
 

@@ -107,7 +107,7 @@ def test_bounded_component_and_proposal_budgets_accept_the_exact_ceilings():
 
     assert MAX_ARCHITECTURE_COMPONENTS == 4
     assert MAX_CORE_PROPOSALS == 46
-    assert MAX_SOLUTION_V2_PROPOSALS == 82
+    assert MAX_SOLUTION_V2_PROPOSALS == 84
     assert len(parsed.proposals) == 46
 
 

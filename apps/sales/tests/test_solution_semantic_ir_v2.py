@@ -297,10 +297,9 @@ def _implementation_shared_budget_ir(tasks, phase_timings, milestone_timings):
 
 
 @pytest.mark.parametrize(("tasks", "phase_timings", "milestone_timings"), (
-    ([2, 2, 1, 1], [0, 0, 0, 0], [0, 0]),  # P4 M2 T6
-    ([2, 2, 1, 1], [0, 0, 0, 0], [1]),     # P4 M1 T7
-    ([2, 2, 2], [1, 1, 0], [0, 0]),        # P3 M2 T8
-    ([2, 2, 2], [1, 1, 0], [1]),           # P3 M1 T9
+    ([2, 2, 2, 2], [0, 0, 0, 0], [0, 0]),  # P4 M2 T8
+    ([2, 2, 2, 2], [0, 0, 0, 0], [1]),     # P4 M1 T9
+    ([2, 2, 2], [1, 1, 0], [1, 1]),        # P3 M2 T10
 ))
 def test_implementation_dynamic_shared_budget_at_limit_is_accepted(
     tasks, phase_timings, milestone_timings,
@@ -308,19 +307,18 @@ def test_implementation_dynamic_shared_budget_at_limit_is_accepted(
     result = parse_implementation(
         _implementation_shared_budget_ir(tasks, phase_timings, milestone_timings)
     )
-    assert len(result.proposals) == 16
+    assert len(result.proposals) == 18
     assert sum(p.placement.section.value == "implementation_plan"
-               for p in result.proposals) == 14
+               for p in result.proposals) <= 16
     assert sum(p.placement.section.value == "milestones"
-               for p in result.proposals) == 2
+               for p in result.proposals) <= 4
 
 
 @pytest.mark.parametrize(
     ("tasks", "phase_timings", "milestone_timings", "expected_limit"), (
-        ([2, 2, 1, 1], [0, 0, 0, 0], [0, 0], 6),
-        ([2, 2, 1, 1], [0, 0, 0, 0], [1], 7),
-        ([2, 2, 2], [1, 1, 0], [0, 0], 8),
-        ([2, 2, 2], [1, 1, 0], [1], 9),
+        ([2, 2, 2, 2], [0, 0, 0, 0], [0, 0], 8),
+        ([2, 2, 2, 2], [0, 0, 0, 0], [1], 9),
+        ([2, 2, 2], [1, 1, 0], [1, 1], 10),
     ),
 )
 def test_implementation_dynamic_shared_budget_plus_one_rejected_before_claims(
@@ -353,14 +351,14 @@ def test_implementation_dynamic_shared_budget_plus_one_rejected_before_claims(
 def test_implementation_dynamic_total_allowance_preserves_section_limit():
     from apps.sales.services.solution_semantic_ir_v2 import convert_semantic_solution_v2_output
 
-    # P4 M1 T7 fits the dynamic total, but putting all T into phases makes
-    # implementation_plan contain 15 claims, still exceeding its own limit.
-    payload = _implementation_shared_budget_ir([2, 2, 2, 1], [0, 0, 0, 0], [0])
+    # P4 M1 T9 fits the dynamic total, but putting all T into phases makes
+    # implementation_plan contain 17 claims, still exceeding its own limit.
+    payload = _implementation_shared_budget_ir([2, 2, 2, 2], [1, 0, 0, 0], [0])
     result = convert_semantic_solution_v2_output(
         json.dumps(payload), pass_name="implementation",
-        allowed_source_labels=("S1",), max_proposals=16,
+        allowed_source_labels=("S1",), max_proposals=18,
     )
-    assert len(result.proposals) == 16
+    assert len(result.proposals) == 18
     with pytest.raises(SolutionDraftError):
         parse_implementation(payload)
 
@@ -371,11 +369,11 @@ def test_implementation_shared_limit_rejects_before_any_atomic_claim_is_added(
 ):
     from apps.sales.services import solution_semantic_ir_v2 as semantic_ir
 
-    payload = _bounded_implementation_ir()
+    payload = _implementation_shared_budget_ir([2, 2, 1, 1], [1, 1, 0, 0], [0, 0])
     if extra_work == "task":
         payload["phases"][2]["tasks"].append(claim("Extra task."))
     elif extra_work == "phase_timing":
-        payload["phases"][0]["timing"] = [claim("Confirmed phase timing.")]
+        payload["phases"][2]["timing"] = [claim("Confirmed phase timing.")]
     else:
         payload["milestones"][0]["timing"] = [claim("Confirmed milestone timing.")]
 
@@ -391,8 +389,8 @@ def test_implementation_shared_limit_rejects_before_any_atomic_claim_is_added(
         parse_implementation(payload)
     assert added_claims == []
     assert caught.value.category == "implementation_shared_work_cardinality"
-    assert caught.value.actual_count == 7
-    assert caught.value.maximum_count == 6
+    assert caught.value.actual_count == 9
+    assert caught.value.maximum_count == 8
     assert caught.value.code == "solution_draft_invalid_response"
 
 
@@ -498,9 +496,10 @@ def test_implementation_milestone_and_outcome_cardinality_fails_closed():
             parse_implementation(payload)
 
 
-def test_implementation_seventeenth_claim_is_rejected_without_truncation():
-    payload = _bounded_implementation_ir()
-    payload["phases"][2]["tasks"].append(claim("Seventeenth claim."))
+def test_implementation_eighteen_claims_fit_and_nineteenth_is_rejected_without_truncation():
+    payload = _implementation_shared_budget_ir([2, 2, 2, 2], [0, 0, 0, 0], [0, 0])
+    assert len(parse_implementation(payload).proposals) == 18
+    payload["phases"][0]["timing"] = [claim("Nineteenth claim.")]
     with pytest.raises(SolutionDraftError):
         parse_implementation(payload)
 
@@ -517,10 +516,10 @@ def test_implementation_prompt_states_same_local_cardinality_as_parser():
         "phase tasks + phase timing + milestone timing",
         "必须控制在剩余 Implementation proposal budget 内",
         "MAX_IMPLEMENTATION_PROPOSALS - 2 * phase_count - milestone_count",
-        "MAX_IMPLEMENTATION_PROPOSALS=16",
-        "4 phases + 2 milestones → 最多 6",
-        "4 phases + 1 milestone → 最多 7",
-        "3 phases + 2 milestones → 最多 8",
+        "MAX_IMPLEMENTATION_PROPOSALS=18",
+        "4 phases + 2 milestones → 最多 8",
+        "4 phases + 1 milestone → 最多 9",
+        "3 phases + 2 milestones → 最多 10",
         "milestones 最多 2 个",
         "每个 milestone 的 outcome 恰好 1 条",
     ):

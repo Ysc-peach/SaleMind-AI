@@ -42,7 +42,7 @@ MAX_CORE_PROPOSALS = (
     + sum(CORE_DEPLOYMENT_TOPIC_LIMITS.values())
     + CORE_CAPABILITY_GROUP_LIMIT * CORE_CAPABILITY_GROUP_ITEMS_LIMIT
 )
-MAX_IMPLEMENTATION_PROPOSALS = 16
+MAX_IMPLEMENTATION_PROPOSALS = 18
 MAX_ASSURANCE_PROPOSALS = 20
 MAX_ASSURANCE_RISKS = 3
 ASSURANCE_RISK_FIELDS = ("condition", "impact", "mitigation", "trigger")
@@ -69,7 +69,7 @@ IMPLEMENTATION_MILESTONE_FIELD_LIMITS = {
 }
 
 IMPLEMENTATION_SECTION_PROPOSAL_LIMITS = {
-    "implementation_plan": 14,
+    "implementation_plan": 16,
     "milestones": MAX_IMPLEMENTATION_MILESTONES * (
         IMPLEMENTATION_MILESTONE_FIELD_LIMITS["outcome"][1]
         + IMPLEMENTATION_MILESTONE_FIELD_LIMITS["timing"][1]
@@ -401,7 +401,7 @@ _IMPLEMENTATION_PASS_CONTRACT = """
 
 当前任务是三阶段生成中的 Pass 2 — Implementation Planning，只回答“已确定的技术方案应该怎样实施”。本次输出必须严格收窄为：
 - 本次 runtime proposal 总预算最多 __IMPLEMENTATION_RUNTIME_BUDGET__ 条；这是由已验证 Core 实际数量计算出的硬上限，不是生成目标。
-- section maximum：implementation_plan 最多 14 条；milestones 最多 4 条。
+- section maximum：implementation_plan 最多 16 条；milestones 最多 4 条。
 - 只允许 implementation_plan、milestones placement；只允许 phase_dependency、milestone_phase relation。
 - 禁止输出 proposed_solution、architecture、deployment_and_integration、risks、acceptance_criteria、out_of_scope placement。
 - 禁止输出 component_dependency、component_request_flow、component_data_flow、phase_acceptance relation。
@@ -657,9 +657,9 @@ def _semantic_pass_prompt(pass_name: str, runtime_budget: int) -> str:
             "dynamic maximum = MAX_IMPLEMENTATION_PROPOSALS - 2 * phase_count - milestone_count"
             f"（MAX_IMPLEMENTATION_PROPOSALS={MAX_IMPLEMENTATION_PROPOSALS}）；"
             "phase_count 和 milestone_count 是本次实际生成的阶段数和里程碑数。"
-            "例如：4 phases + 2 milestones → 最多 6；"
-            "4 phases + 1 milestone → 最多 7；"
-            "3 phases + 2 milestones → 最多 8。"
+            "例如：4 phases + 2 milestones → 最多 8；"
+            "4 phases + 1 milestone → 最多 9；"
+            "3 phases + 2 milestones → 最多 10。"
             "这是动态剩余额度，不是填满目标；仍须遵守 runtime 总预算和各 section 上限。"
             f"milestones 最多 {MAX_IMPLEMENTATION_MILESTONES} 个；"
             f"每个 milestone 的 outcome 恰好 {IMPLEMENTATION_MILESTONE_FIELD_LIMITS['outcome'][1]} 条，"
