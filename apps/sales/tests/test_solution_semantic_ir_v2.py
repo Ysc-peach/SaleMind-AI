@@ -283,6 +283,88 @@ def test_implementation_four_complete_phases_and_sixteen_claims_are_accepted():
     }
 
 
+def _implementation_shared_budget_ir(tasks, phase_timings, milestone_timings):
+    payload = _bounded_implementation_ir()
+    payload["phases"] = payload["phases"][:len(tasks)]
+    for index, phase in enumerate(payload["phases"]):
+        phase["tasks"] = [claim(f"Task {index}-{n}.") for n in range(tasks[index])]
+        phase["timing"] = [claim(f"Phase timing {index}.")] * phase_timings[index]
+    payload["milestones"] = payload["milestones"][:len(milestone_timings)]
+    for index, milestone in enumerate(payload["milestones"]):
+        milestone["timing"] = [claim(f"Milestone timing {index}.")] * milestone_timings[index]
+    payload["dependencies"] = payload["dependencies"][:len(tasks) - 1]
+    return payload
+
+
+@pytest.mark.parametrize(("tasks", "phase_timings", "milestone_timings"), (
+    ([2, 2, 1, 1], [0, 0, 0, 0], [0, 0]),  # P4 M2 T6
+    ([2, 2, 1, 1], [0, 0, 0, 0], [1]),     # P4 M1 T7
+    ([2, 2, 2], [1, 1, 0], [0, 0]),        # P3 M2 T8
+    ([2, 2, 2], [1, 1, 0], [1]),           # P3 M1 T9
+))
+def test_implementation_dynamic_shared_budget_at_limit_is_accepted(
+    tasks, phase_timings, milestone_timings,
+):
+    result = parse_implementation(
+        _implementation_shared_budget_ir(tasks, phase_timings, milestone_timings)
+    )
+    assert len(result.proposals) == 16
+    assert sum(p.placement.section.value == "implementation_plan"
+               for p in result.proposals) == 14
+    assert sum(p.placement.section.value == "milestones"
+               for p in result.proposals) == 2
+
+
+@pytest.mark.parametrize(
+    ("tasks", "phase_timings", "milestone_timings", "expected_limit"), (
+        ([2, 2, 1, 1], [0, 0, 0, 0], [0, 0], 6),
+        ([2, 2, 1, 1], [0, 0, 0, 0], [1], 7),
+        ([2, 2, 2], [1, 1, 0], [0, 0], 8),
+        ([2, 2, 2], [1, 1, 0], [1], 9),
+    ),
+)
+def test_implementation_dynamic_shared_budget_plus_one_rejected_before_claims(
+    monkeypatch, tasks, phase_timings, milestone_timings, expected_limit,
+):
+    from apps.sales.services import solution_semantic_ir_v2 as semantic_ir
+
+    payload = _implementation_shared_budget_ir(tasks, phase_timings, milestone_timings)
+    phase = next(p for p in payload["phases"] if not p["timing"])
+    phase["timing"] = [claim("Additional timing.")]
+    added_claims = []
+    original_claim = semantic_ir._claim
+
+    def record_claim(value):
+        added_claims.append(value)
+        return original_claim(value)
+
+    monkeypatch.setattr(semantic_ir, "_claim", record_claim)
+    with pytest.raises(SolutionDraftError) as caught:
+        parse_implementation(payload)
+    assert added_claims == []
+    error = caught.value
+    assert error.category == "implementation_shared_work_cardinality"
+    assert error.actual_count == expected_limit + 1
+    assert error.maximum_count == expected_limit
+    assert error.expected == f"at most {expected_limit} tasks and timing claims"
+    assert error.code == "solution_draft_invalid_response"
+
+
+def test_implementation_dynamic_total_allowance_preserves_section_limit():
+    from apps.sales.services.solution_semantic_ir_v2 import convert_semantic_solution_v2_output
+
+    # P4 M1 T7 fits the dynamic total, but putting all T into phases makes
+    # implementation_plan contain 15 claims, still exceeding its own limit.
+    payload = _implementation_shared_budget_ir([2, 2, 2, 1], [0, 0, 0, 0], [0])
+    result = convert_semantic_solution_v2_output(
+        json.dumps(payload), pass_name="implementation",
+        allowed_source_labels=("S1",), max_proposals=16,
+    )
+    assert len(result.proposals) == 16
+    with pytest.raises(SolutionDraftError):
+        parse_implementation(payload)
+
+
 @pytest.mark.parametrize("extra_work", ("task", "phase_timing", "milestone_timing"))
 def test_implementation_shared_limit_rejects_before_any_atomic_claim_is_added(
     monkeypatch, extra_work,
@@ -364,7 +446,7 @@ def test_implementation_phase_field_cardinality_fails_closed(field, size):
         parse_implementation(payload)
 
 
-def test_implementation_six_tasks_and_timing_claims_are_accepted_seven_rejected():
+def test_implementation_shared_allowance_increases_when_phase_count_decreases():
     payload = _bounded_implementation_ir()
     payload["phases"][0]["tasks"].pop()
     payload["phases"][1]["tasks"].pop()
@@ -378,13 +460,11 @@ def test_implementation_six_tasks_and_timing_claims_are_accepted_seven_rejected(
     payload["phases"][0]["timing"] = [claim("Confirmed phase timing.")]
     payload["dependencies"] = payload["dependencies"][:2]
     # Three objectives, three deliverables, seven task/timing claims and two
-    # milestones make only 15 claims: the shared local limit must reject it.
-    assert 3 + 3 + 7 + 2 == 15
-    with pytest.raises(SolutionDraftError):
-        parse_implementation(payload)
+    # milestones make 15 claims and fit the remaining allowance of eight.
+    assert len(parse_implementation(payload).proposals) == 15
 
 
-def test_implementation_milestone_timing_counts_against_shared_six():
+def test_implementation_milestone_timing_uses_dynamic_remaining_allowance():
     payload = _bounded_implementation_ir()
     payload["phases"] = payload["phases"][:3]
     payload["phases"][1]["tasks"].pop()
@@ -394,8 +474,7 @@ def test_implementation_milestone_timing_counts_against_shared_six():
     payload["milestones"][0]["timing"] = [claim("Confirmed milestone timing.")]
     assert len(parse_implementation(payload).proposals) == 13
     payload["phases"][0]["timing"] = [claim("Confirmed phase timing.")]
-    with pytest.raises(SolutionDraftError):
-        parse_implementation(payload)
+    assert len(parse_implementation(payload).proposals) == 14
 
 
 def test_implementation_milestone_and_outcome_cardinality_fails_closed():
@@ -435,10 +514,18 @@ def test_implementation_prompt_states_same_local_cardinality_as_parser():
     for requirement in (
         "phases 最多 4 个", "每个 phase 的 objective 恰好 1 条",
         "tasks 为 1～2 条", "deliverables 恰好 1 条",
-        "tasks 与所有 timing 合计最多 6 条", "milestones 最多 2 个",
+        "phase tasks + phase timing + milestone timing",
+        "必须控制在剩余 Implementation proposal budget 内",
+        "MAX_IMPLEMENTATION_PROPOSALS - 2 * phase_count - milestone_count",
+        "MAX_IMPLEMENTATION_PROPOSALS=16",
+        "4 phases + 2 milestones → 最多 6",
+        "4 phases + 1 milestone → 最多 7",
+        "3 phases + 2 milestones → 最多 8",
+        "milestones 最多 2 个",
         "每个 milestone 的 outcome 恰好 1 条",
     ):
         assert requirement in prompt
+    assert "tasks 与所有 timing 合计最多 6 条" not in prompt
 
 
 @pytest.mark.parametrize("broken", [

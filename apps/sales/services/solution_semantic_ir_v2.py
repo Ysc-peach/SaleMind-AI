@@ -24,7 +24,7 @@ from apps.sales.services.solution_prompt_v2 import (
     MAX_ASSURANCE_RISKS,
     MAX_IMPLEMENTATION_MILESTONES,
     MAX_IMPLEMENTATION_PHASES,
-    MAX_IMPLEMENTATION_TASKS_AND_TIMING,
+    MAX_IMPLEMENTATION_PROPOSALS,
     MAX_ARCHITECTURE_COMPONENTS,
     SolutionV2ContainerKind,
     _CONTAINER_KEY,
@@ -44,9 +44,10 @@ class ImplementationSharedWorkCardinalityError(SolutionDraftError):
 
     category = "implementation_shared_work_cardinality"
 
-    def __init__(self, actual_count):
+    def __init__(self, actual_count, maximum_count):
         self.actual_count = actual_count
-        self.maximum_count = MAX_IMPLEMENTATION_TASKS_AND_TIMING
+        self.maximum_count = maximum_count
+        self.expected = f"at most {maximum_count} tasks and timing claims"
         super().__init__(SolutionDraftErrorCode.INVALID_RESPONSE)
 
 
@@ -118,8 +119,13 @@ def _implementation_containers(payload):
                 if name in shared_fields:
                     tasks_and_timing += len(values)
             destination.append((item, fields))
-    if tasks_and_timing > MAX_IMPLEMENTATION_TASKS_AND_TIMING:
-        raise ImplementationSharedWorkCardinalityError(tasks_and_timing)
+    maximum_tasks_and_timing = (
+        MAX_IMPLEMENTATION_PROPOSALS - 2 * len(phases) - len(milestones)
+    )
+    if tasks_and_timing > maximum_tasks_and_timing:
+        raise ImplementationSharedWorkCardinalityError(
+            tasks_and_timing, maximum_tasks_and_timing,
+        )
     return phases, milestones
 
 
