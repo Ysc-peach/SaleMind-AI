@@ -624,6 +624,104 @@ def test_proposed_solution_retains_technical_decision_atomicity_for_same_actions
     assert "phase_objective" not in packet
 
 
+def _phase_outcome_proposals(objective_text, deliverable_text):
+    objective = _proposal(
+        objective_text, related=(),
+        section=SolutionV2Section.IMPLEMENTATION_PLAN,
+        container_kind=SolutionV2ContainerKind.IMPLEMENTATION_PHASE,
+        field=SolutionV2PlacementField.OBJECTIVE,
+    ).proposals[0]
+    deliverable = replace(
+        objective, text=deliverable_text,
+        placement=replace(objective.placement, field=SolutionV2PlacementField.DELIVERABLES),
+    )
+    return objective, deliverable
+
+
+@pytest.mark.parametrize("deliverable_first", [False, True])
+def test_deliverable_verifier_receives_only_its_matching_phase_objective(deliverable_first):
+    objective, deliverable = _phase_outcome_proposals(
+        "完成系统验证与上线准备。", "查询场景验证结论与首批上线准备清单。",
+    )
+    unrelated = replace(
+        objective, text="完成用户培训。",
+        placement=replace(objective.placement, container_key="training"),
+    )
+    ordered = (
+        (deliverable, unrelated, objective) if deliverable_first
+        else (objective, unrelated, deliverable)
+    )
+    proposals = AtomicSolutionProposalSetV2(ordered)
+    provider = _AdmissibilityVerifier()
+
+    assert _verify(proposals, provider) is proposals
+    packets = _sent_proposal_packets(provider)
+    packet = next(item for item in packets if item["text"] == deliverable.text)
+    assert packet["placement"] == {
+        "section": "implementation_plan", "container_kind": "implementation_phase",
+        "container_key": "application_boundary", "field": "deliverables",
+    }
+    assert packet["phase_objective"] == [objective.text]
+    assert all("phase_objective" not in item for item in packets if item is not packet)
+
+
+@pytest.mark.parametrize(("objective_text", "deliverable_text"), [
+    ("完成系统验证与上线准备。", "查询场景验证结论与首批上线准备清单。"),
+    ("完成接口测试与验收交付。", "接口测试结果与验收报告。"),
+])
+def test_atomic_outcome_package_still_uses_admissible_atomic_gate(objective_text, deliverable_text):
+    objective, deliverable = _phase_outcome_proposals(objective_text, deliverable_text)
+    proposals = AtomicSolutionProposalSetV2((objective, deliverable))
+    provider = _AdmissibilityVerifier(decision="ADMISSIBLE", atomicity="ATOMIC")
+
+    assert _verify(proposals, provider) is proposals
+    packet = _sent_proposal_packets(provider)[1]
+    assert packet["phase_objective"] == [objective_text]
+    assert "implementation_plan.deliverables" in provider.calls[0][0]["content"]
+
+
+def test_deliverables_prompt_requires_coherent_uniformly_accepted_phase_outcomes():
+    provider = _AdmissibilityVerifier()
+    _verify(_proposal("建议复用现有部署能力。"), provider)
+    prompt = provider.calls[0][0]["content"]
+    for boundary in (
+        "implementation_plan.deliverables", "outcome package coherence",
+        "可统一验收", "不同阶段目标", "独立技术选型", "无依据承诺",
+        "无法统一验收", "deliverable 没有 COMPOUND 放行例外",
+        "查询场景验证结论与首批上线准备清单", "接口测试结果与验收报告",
+        "Redis", "用户培训", "新数据库选型",
+        "普通 technical claims", "coherent work package",
+        "不是已确认事实或能力依据",
+    ):
+        assert boundary in prompt
+
+
+@pytest.mark.parametrize("text", [
+    "完成查询验证报告并部署生产 Redis 集群。",
+    "用户培训成果与新数据库选型结论。",
+])
+def test_deliverable_outcome_package_does_not_exempt_compound_veto(text):
+    from apps.sales.services.solution_grounding import SolutionDraftGroundingError
+
+    objective, deliverable = _phase_outcome_proposals("完成系统验证与上线准备。", text)
+    provider = _AdmissibilityVerifier(atomicity="COMPOUND")
+    with pytest.raises(SolutionDraftGroundingError):
+        _verify(AtomicSolutionProposalSetV2((deliverable, objective)), provider)
+    assert _sent_proposal_packets(provider)[0]["phase_objective"] == [objective.text]
+
+
+def test_atomic_deliverable_outcome_package_still_requires_admissible_decision():
+    from apps.sales.services.solution_grounding import SolutionDraftGroundingError
+
+    objective, deliverable = _phase_outcome_proposals(
+        "完成系统验证与上线准备。", "查询场景验证结论与首批上线准备清单。",
+    )
+    provider = _AdmissibilityVerifier(decision="INADMISSIBLE", atomicity="ATOMIC")
+    with pytest.raises(SolutionDraftGroundingError):
+        _verify(AtomicSolutionProposalSetV2((deliverable, objective)), provider)
+    assert _sent_proposal_packets(provider)[0]["phase_objective"] == [objective.text]
+
+
 def test_proposal_prompt_defines_admissibility_instead_of_fact_entailment():
     provider = _AdmissibilityVerifier()
     _verify(_proposal("建议采用私有化部署。"), provider)

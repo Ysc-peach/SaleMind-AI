@@ -47,7 +47,20 @@ _SYSTEM_PROMPT = """你是企业售前 Solution V2 proposal admissibility 验证
    BAD / COMPOUND task：完成 JWT 身份认证，并部署 Redis 高可用集群。二者属于不同实施目标。
    BAD / COMPOUND task：接入 SSO，并决定使用 Kafka 作为消息总线。第二项是独立的新技术选型。
    相同 JWT 认证与文档级访问控制文本若位于 proposed_solution，仍按普通 technical claims 判断，
-   不得套用 task 工作包规则。admissibility 与 atomicity 必须独立判断。
+   不得套用 task 工作包规则。
+   仅 implementation_plan.deliverables（implementation_phase 的 deliverables）使用 outcome package coherence：
+   ATOMIC 可以表示同一个 phase_objective 下可统一验收的一组阶段成果，允许多个紧密相关成果
+   组成一个交付包。不得混合不同阶段目标、独立技术选型、无依据承诺或无法统一验收的成果集合；
+   每项技术能力仍必须有依据。phase_objective 只是建议目标，不是已确认事实或能力依据，
+   不得据此绕过其余 admissibility 检查；缺少目标或无法确认成果包一致性时，不得猜测统一目标。
+   deliverable 没有 COMPOUND 放行例外。
+   GOOD / ATOMIC deliverable：查询场景验证结论与首批上线准备清单。
+   前提是两项成果共同组成“完成系统验证与上线准备”这一 phase_objective 的退出成果，可统一验收。
+   GOOD / ATOMIC deliverable：接口测试结果与验收报告。二者共同构成同一接口测试阶段的验收成果。
+   BAD / COMPOUND deliverable：完成查询验证报告并部署生产 Redis 集群。
+   验证成果与独立基础设施建设属于不同交付目标。
+   BAD / COMPOUND deliverable：用户培训成果与新数据库选型结论。第二项是独立技术选型。
+   其他 placements 不得套用 deliverable 成果包规则。admissibility 与 atomicity 必须独立判断。
 
 recommendation、rationale、tradeoff 和 conditional proposal 都可以是合法工程推导。rationale 必须
 与建议及客户上下文相关；tradeoff 只能表达可能的限制或重新评估条件，不能冒充已发生事实或编造
@@ -76,7 +89,7 @@ def build_proposal_admissibility_messages(
                     packet.placement is not None
                     and packet.placement.section == "implementation_plan"
                     and packet.placement.container_kind == "implementation_phase"
-                    and packet.placement.field == "tasks"
+                    and packet.placement.field in {"tasks", "deliverables"}
                 ) else {}),
                 "related_requirement_fields": [
                     field.value for field in packet.related_requirement_fields

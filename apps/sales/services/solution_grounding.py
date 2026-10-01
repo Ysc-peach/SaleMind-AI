@@ -388,7 +388,10 @@ def verify_atomic_solution_v2_proposals(
                 if (
                     proposal.placement.section is SolutionV2Section.IMPLEMENTATION_PLAN
                     and proposal.placement.container_kind is SolutionV2ContainerKind.IMPLEMENTATION_PHASE
-                    and proposal.placement.field is SolutionV2PlacementField.TASKS
+                    and proposal.placement.field in {
+                        SolutionV2PlacementField.TASKS,
+                        SolutionV2PlacementField.DELIVERABLES,
+                    }
                 ) else ()
             ),
         ))
