@@ -858,6 +858,30 @@ def test_core_overview_prompt_preserves_supporting_description_not_independent_c
     assert "不按动词数量判断，也不禁止所有“和/与”句式" in prompt
 
 
+def test_core_deployment_prompt_requires_independently_reviewable_technical_items():
+    analysis = analysis_fixture()
+    prompt = build_solution_v2_core_messages(
+        analysis, check_solution_readiness(analysis), (), admission_fixture(),
+    )[0]["content"]
+
+    assert "deployment_and_integration 中 deployment、integration、data_security、environment 的每条 item" in prompt
+    assert "只表达一个可独立审核的部署、集成、数据或环境技术判断" in prompt
+    assert "多个可以分别批准/拒绝的技术选型或能力决策，应拆成多条 claim" in prompt
+    assert "deployment_and_integration 不禁止所有“和/与”句式" in prompt
+    assert "仅拆分可以独立成立、独立失败或独立审核的技术判断" in prompt
+
+
+def test_core_deployment_prompt_demonstrates_separate_postgresql_and_pgvector_claims():
+    analysis = analysis_fixture()
+    prompt = build_solution_v2_core_messages(
+        analysis, check_solution_readiness(analysis), (), admission_fixture(),
+    )[0]["content"]
+
+    assert "BAD deployment_and_integration：建议知识数据服务采用 PostgreSQL，并使用 pgvector 支撑知识检索。" in prompt
+    assert "GOOD deployment_and_integration claim：建议知识数据服务采用 PostgreSQL。" in prompt
+    assert "GOOD deployment_and_integration claim：建议使用 pgvector 支撑向量检索。" in prompt
+
+
 def test_core_prompt_declares_every_semantic_ir_local_limit():
     analysis = analysis_fixture()
     prompt = build_solution_v2_core_messages(
