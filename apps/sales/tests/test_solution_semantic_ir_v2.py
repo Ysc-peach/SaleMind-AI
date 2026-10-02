@@ -242,6 +242,47 @@ def test_assurance_prompt_declares_same_local_limits_as_parser():
         assert phrase in prompt
 
 
+def test_assurance_prompt_distinguishes_supported_conditions_from_hypothetical_risks():
+    analysis = analysis_fixture()
+    prompt = build_solution_v2_assurance_messages(
+        analysis, check_solution_readiness(analysis), (), admission_fixture(),
+        parse_core(core_ir()), parse_implementation(implementation_ir()),
+    )[0]["content"]
+
+    assert "risks.condition" in prompt
+    assert "明确客户事实或 grounding fact 支持" in prompt
+    assert "可以直接陈述" in prompt
+    assert "潜在风险场景或尚未证实的问题" in prompt
+    assert "必须使用明确条件式表达" in prompt
+    for phrase in ("若……", "如果……", "当……发生时", "在……未满足的情况下"):
+        assert phrase in prompt
+    assert "禁止把 hypothetical risk 写成当前已存在的客户事实" in prompt
+    assert "条件式表达只说明风险触发条件" in prompt
+    assert "不能借此引入没有依据的精确数值、能力或承诺" in prompt
+    for bad, good in (
+        ("文档级访问控制未覆盖全部知识分类。", "若角色权限划分未覆盖全部知识分类……"),
+        ("接口契约发生变化。", "若接口契约后续发生变化……"),
+        ("当前权限模型存在遗漏。", "如果权限模型未覆盖新增知识分类……"),
+    ):
+        assert f"BAD：{bad}" in prompt
+        assert f"GOOD：{good}" in prompt
+
+
+def test_assurance_format_example_uses_a_conditional_risk_and_still_parses():
+    analysis = analysis_fixture()
+    implementation = parse_implementation(implementation_ir())
+    prompt = build_solution_v2_assurance_messages(
+        analysis, check_solution_readiness(analysis), (), admission_fixture(),
+        parse_core(core_ir()), implementation,
+    )[0]["content"]
+    example = json.loads(prompt.split("示例仅展示格式，不能照抄示例的技术结论：", 1)[1])
+
+    assert example["risks"][0]["condition"][0]["text"] == "若接口契约后续发生变化。"
+    parsed = parse_assurance(example, implementation)
+    condition = next(p for p in parsed.proposals if p.placement.field.value == "condition")
+    assert condition.text == "若接口契约后续发生变化。"
+
+
 def test_core_semantic_ir_lowers_claims_and_typed_relations_without_changing_semantics():
     result = parse_core(core_ir())
     assert isinstance(result, AtomicSolutionProposalSetV2)

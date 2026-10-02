@@ -672,7 +672,7 @@ def _semantic_pass_prompt(pass_name: str, runtime_budget: int) -> str:
     elif pass_name == "assurance":
         example = {
             "ir_version": "semantic_v1",
-            "risks": [{"ref": "integration_change", "condition": [sample("接口契约发生变化。")],
+            "risks": [{"ref": "integration_change", "condition": [sample("若接口契约后续发生变化。")],
                        "impact": [sample("适配器需要返工。")],
                        "mitigation": [sample("实施前验证接口契约。")],
                        "trigger": [sample("联调时发现接口字段不一致。")]}],
@@ -689,6 +689,18 @@ def _semantic_pass_prompt(pass_name: str, runtime_budget: int) -> str:
             "phase_acceptance 不计入 proposal 总预算，只表达关系；所有上限都不是生成目标。"
             "只生成 risks 的 condition、impact、mitigation、trigger；"
             "acceptance 的 criterion；out_of_scope。"
+            "risks.condition 描述风险发生条件：如果条件本身有明确客户事实或 grounding fact 支持，可以直接陈述；"
+            "如果只是潜在风险场景或尚未证实的问题，必须使用明确条件式表达，"
+            "例如若……、如果……、当……发生时、在……未满足的情况下。"
+            "禁止把 hypothetical risk 写成当前已存在的客户事实。"
+            "以下 BAD 示例在没有事实支持时不可直接断言："
+            "BAD：文档级访问控制未覆盖全部知识分类。"
+            "GOOD：若角色权限划分未覆盖全部知识分类……"
+            "BAD：接口契约发生变化。"
+            "GOOD：若接口契约后续发生变化……"
+            "BAD：当前权限模型存在遗漏。"
+            "GOOD：如果权限模型未覆盖新增知识分类……"
+            "条件式表达只说明风险触发条件，不能借此引入没有依据的精确数值、能力或承诺。"
             "phase_acceptance.from 必须引用 <validated_implementation_plan> 中真实 phase ref，"
             "to 必须引用本次 acceptance.ref。"
             "已确认的 Core/Implementation 不得重写；assumptions 和 open_questions 由程序保留，不生成。"
