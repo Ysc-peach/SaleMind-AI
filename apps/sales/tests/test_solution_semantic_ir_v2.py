@@ -772,6 +772,30 @@ def test_core_prompt_declares_exact_five_key_component_contract():
     assert "示例中的 architecture.components 即合法五键格式" in prompt
 
 
+def test_core_responsibility_prompt_requires_independently_judgeable_component_duties():
+    analysis = analysis_fixture()
+    prompt = build_solution_v2_core_messages(
+        analysis, check_solution_readiness(analysis), (), admission_fixture(),
+    )[0]["content"]
+
+    assert "architecture.components[].responsibilities" in prompt
+    assert "每条 responsibility 只表达一个可独立判断的组件职责" in prompt
+    assert "多个独立能力或处理链路，必须拆成多个 responsibility claim" in prompt
+    assert "responsibility 不禁止所有“和/与”句式" in prompt
+    assert "只有可以独立成立、独立失败或独立审核的职责才需要拆分" in prompt
+
+
+def test_core_responsibility_prompt_demonstrates_separate_retrieval_and_ocr_claims():
+    analysis = analysis_fixture()
+    prompt = build_solution_v2_core_messages(
+        analysis, check_solution_readiness(analysis), (), admission_fixture(),
+    )[0]["content"]
+
+    assert "BAD responsibility：对文档内容执行知识检索，并处理扫描版 PDF 的 OCR 后内容。" in prompt
+    assert "GOOD responsibility claim：负责对文档内容执行知识检索。" in prompt
+    assert "GOOD responsibility claim：负责处理扫描版 PDF 的 OCR 后内容。" in prompt
+
+
 def test_core_prompt_scopes_independent_judgment_rule_to_proposed_solution_items():
     analysis = analysis_fixture()
     prompt = build_solution_v2_core_messages(
