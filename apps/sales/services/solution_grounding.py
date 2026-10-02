@@ -118,6 +118,8 @@ class ProposalAdmissibilityPacket:
     atomicity_required: bool = True
     placement: "SolutionV2Placement | None" = None
     phase_objective: tuple[str, ...] = ()
+    risk_condition: tuple[str, ...] = ()
+    risk_impact: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,6 +268,8 @@ def verify_atomic_solution_v2_proposals(
         raise SolutionDraftGroundingError(SolutionGroundingErrorCode.INVALID_INPUT)
 
     phase_objectives: dict[str, list[str]] = {}
+    risk_conditions: dict[str, list[str]] = {}
+    risk_impacts: dict[str, list[str]] = {}
     for proposal in proposals.proposals:
         placement = proposal.placement
         if (
@@ -274,6 +278,14 @@ def verify_atomic_solution_v2_proposals(
             and placement.field is SolutionV2PlacementField.OBJECTIVE
         ):
             phase_objectives.setdefault(placement.container_key, []).append(proposal.text)
+        if (
+            placement.section is SolutionV2Section.RISKS
+            and placement.container_kind is SolutionV2ContainerKind.RISK
+        ):
+            if placement.field is SolutionV2PlacementField.CONDITION:
+                risk_conditions.setdefault(placement.container_key, []).append(proposal.text)
+            elif placement.field is SolutionV2PlacementField.IMPACT:
+                risk_impacts.setdefault(placement.container_key, []).append(proposal.text)
 
     packets = []
     for index, proposal in enumerate(proposals.proposals):
@@ -371,6 +383,11 @@ def verify_atomic_solution_v2_proposals(
                     proposal_text=proposal.text,
                 )
             _proposal_not_admissible(f"proposals[{index}]")
+        is_risk_mitigation = (
+            proposal.placement.section is SolutionV2Section.RISKS
+            and proposal.placement.container_kind is SolutionV2ContainerKind.RISK
+            and proposal.placement.field is SolutionV2PlacementField.MITIGATION
+        )
         packets.append(ProposalAdmissibilityPacket(
             location=f"proposals[{index}]",
             text=proposal.text,
@@ -393,6 +410,14 @@ def verify_atomic_solution_v2_proposals(
                         SolutionV2PlacementField.DELIVERABLES,
                     }
                 ) else ()
+            ),
+            risk_condition=(
+                tuple(sorted(risk_conditions.get(proposal.placement.container_key, ())))
+                if is_risk_mitigation else ()
+            ),
+            risk_impact=(
+                tuple(sorted(risk_impacts.get(proposal.placement.container_key, ())))
+                if is_risk_mitigation else ()
             ),
         ))
 

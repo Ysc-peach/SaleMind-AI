@@ -806,6 +806,141 @@ def test_atomic_deliverable_outcome_package_still_requires_admissible_decision()
     assert _sent_proposal_packets(provider)[0]["phase_objective"] == [objective.text]
 
 
+def _risk_mitigation_proposals(text):
+    condition = _proposal(
+        "权限隔离失效。", related=(), section=SolutionV2Section.RISKS,
+        container_kind=SolutionV2ContainerKind.RISK,
+        field=SolutionV2PlacementField.CONDITION,
+    ).proposals[0]
+    impact = replace(
+        condition, text="未授权用户可能检索到受限资料。",
+        placement=replace(condition.placement, field=SolutionV2PlacementField.IMPACT),
+    )
+    mitigation = replace(
+        condition, text=text,
+        placement=replace(condition.placement, field=SolutionV2PlacementField.MITIGATION),
+    )
+    return condition, impact, mitigation
+
+
+@pytest.mark.parametrize("mitigation_first", [False, True])
+def test_mitigation_verifier_receives_only_matching_risk_context(mitigation_first):
+    condition, impact, mitigation = _risk_mitigation_proposals(
+        "文档级访问控制保存资料，并通过不同权限身份验证检索权限。",
+    )
+    unrelated_condition = replace(
+        condition, text="接口契约变化。",
+        placement=replace(condition.placement, container_key="interface_change"),
+    )
+    unrelated_impact = replace(
+        impact, text="适配器需要返工。",
+        placement=replace(impact.placement, container_key="interface_change"),
+    )
+    non_risk_impact = replace(
+        impact, text="其他 section 的内容不是风险影响。",
+        placement=replace(impact.placement, section=SolutionV2Section.ARCHITECTURE),
+    )
+    ordered = (condition, impact, unrelated_condition, unrelated_impact, non_risk_impact, mitigation)
+    if mitigation_first:
+        ordered = tuple(reversed(ordered))
+    proposals = AtomicSolutionProposalSetV2(ordered)
+    provider = _AdmissibilityVerifier()
+
+    assert _verify(proposals, provider) is proposals
+    packets = _sent_proposal_packets(provider)
+    packet = next(item for item in packets if item["text"] == mitigation.text)
+    assert packet["placement"] == {
+        "section": "risks", "container_kind": "risk",
+        "container_key": "application_boundary", "field": "mitigation",
+    }
+    assert packet["risk_condition"] == ["权限隔离失效。"]
+    assert packet["risk_impact"] == ["未授权用户可能检索到受限资料。"]
+    assert "phase_objective" not in packet
+    assert all("risk_condition" not in item and "risk_impact" not in item
+               for item in packets if item is not packet)
+
+
+def test_mitigation_context_without_matching_risk_is_empty_not_inferred():
+    condition, impact, mitigation = _risk_mitigation_proposals("实施权限验证。")
+    mitigation = replace(
+        mitigation, placement=replace(mitigation.placement, container_key="other_risk"),
+    )
+    provider = _AdmissibilityVerifier()
+    _verify(AtomicSolutionProposalSetV2((condition, impact, mitigation)), provider)
+    packet = next(item for item in _sent_proposal_packets(provider)
+                  if item["text"] == mitigation.text)
+    assert packet["risk_condition"] == []
+    assert packet["risk_impact"] == []
+
+
+def test_mitigation_prompt_requires_risk_strategy_coherence_and_keeps_safety_boundaries():
+    condition, impact, mitigation = _risk_mitigation_proposals(
+        "文档级访问控制保存资料，并通过不同权限身份验证检索权限。",
+    )
+    proposals = AtomicSolutionProposalSetV2((condition, impact, mitigation))
+    provider = _AdmissibilityVerifier()
+    assert _verify(proposals, provider) is proposals
+    prompt = provider.calls[0][0]["content"]
+    for boundary in (
+        "仅 risks.mitigation", "coherent mitigation strategy",
+        "共同降低同一个风险", "同一个缓解策略", "独立技术选型",
+        "risk_condition", "risk_impact", "不是已确认事实或能力依据",
+        "缺少风险上下文", "不得猜测", "每项技术能力仍必须有依据",
+        "无依据承诺", "mitigation 没有 COMPOUND 放行例外",
+        "文档级访问控制保存资料，并通过不同权限身份验证检索权限。",
+        "使用文档级访问控制，并部署 Redis 集群。",
+    ):
+        assert boundary in prompt
+
+
+@pytest.mark.parametrize("text", [
+    "使用文档级访问控制，并部署 Redis 集群。",
+    "使用文档级访问控制，并决定使用 Kafka 作为消息总线。",
+])
+def test_mitigation_strategy_does_not_exempt_compound_veto(text):
+    from apps.sales.services.solution_grounding import SolutionDraftGroundingError
+
+    condition, impact, mitigation = _risk_mitigation_proposals(text)
+    proposals = AtomicSolutionProposalSetV2((mitigation, condition, impact))
+    provider = _AdmissibilityVerifier(atomicity="COMPOUND")
+    with pytest.raises(SolutionDraftGroundingError) as caught:
+        _verify(proposals, provider)
+    assert caught.value.violations[0].location == "proposals[0]"
+
+
+def test_atomic_mitigation_still_requires_admissible_decision():
+    from apps.sales.services.solution_grounding import SolutionDraftGroundingError
+
+    condition, impact, mitigation = _risk_mitigation_proposals(
+        "文档级访问控制保存资料，并通过不同权限身份验证检索权限。",
+    )
+    proposals = AtomicSolutionProposalSetV2((mitigation, condition, impact))
+    provider = _AdmissibilityVerifier(decision="INADMISSIBLE", atomicity="ATOMIC")
+    with pytest.raises(SolutionDraftGroundingError) as caught:
+        _verify(proposals, provider)
+    assert caught.value.violations[0].location == "proposals[0]"
+
+
+def test_non_mitigation_claims_do_not_receive_risk_strategy_context():
+    from apps.sales.services.solution_grounding import SolutionDraftGroundingError
+
+    condition, impact, mitigation = _risk_mitigation_proposals(
+        "文档级访问控制保存资料，并通过不同权限身份验证检索权限。",
+    )
+    overview = replace(mitigation, placement=SolutionV2Placement(
+        section=SolutionV2Section.PROPOSED_SOLUTION,
+        container_kind=SolutionV2ContainerKind.ROOT, container_key=None,
+        field=SolutionV2PlacementField.OVERVIEW,
+    ))
+    provider = _AdmissibilityVerifier(atomicity="COMPOUND")
+    with pytest.raises(SolutionDraftGroundingError):
+        _verify(AtomicSolutionProposalSetV2((overview, condition, impact)), provider)
+    packet = _sent_proposal_packets(provider)[0]
+    assert packet["placement"]["section"] == "proposed_solution"
+    assert "risk_condition" not in packet
+    assert "risk_impact" not in packet
+
+
 def test_proposal_prompt_defines_admissibility_instead_of_fact_entailment():
     provider = _AdmissibilityVerifier()
     _verify(_proposal("建议采用私有化部署。"), provider)
