@@ -15,6 +15,7 @@ from apps.sales.services.solution_prompt_v2 import (
     build_solution_v2_core_messages,
     build_solution_v2_implementation_messages,
     build_solution_v2_assurance_messages,
+    build_solution_v2_messages,
 )
 from apps.sales.services.solution_readiness import check_solution_readiness
 from apps.sales.tests.test_solution_v2_pipeline import analysis_fixture, admission_fixture
@@ -266,6 +267,68 @@ def test_assurance_prompt_distinguishes_supported_conditions_from_hypothetical_r
     ):
         assert f"BAD：{bad}" in prompt
         assert f"GOOD：{good}" in prompt
+
+
+@pytest.mark.parametrize("prompt_kind", ("semantic_assurance", "atomic_compatibility"))
+def test_acceptance_prompt_requires_one_independently_executable_pass_fail_check(prompt_kind):
+    analysis = analysis_fixture()
+    context = (analysis, check_solution_readiness(analysis), (), admission_fixture())
+    if prompt_kind == "semantic_assurance":
+        messages = build_solution_v2_assurance_messages(
+            *context, parse_core(core_ir()), parse_implementation(implementation_ir()),
+        )
+    else:
+        messages = build_solution_v2_messages(*context)
+    prompt = messages[0]["content"]
+
+    for phrase in (
+        "每条 acceptance_criteria criterion 必须代表一个可独立执行并得到明确 PASS/FAIL 结果的验收检查",
+        "多个可以分别成功或失败的验收目标必须拆成不同 criterion",
+        "即使属于同一业务场景或同一 phase，也不得合并独立验收目标",
+        "同一检查的输入/前置条件、执行步骤和一个可观测的预期结果可以保留在一条 criterion 中",
+        "不按动词数量拆分，也不禁止所有“和/与/且”句式",
+        "不得为了省预算合并独立检查，也不得为填满上限制造重复检查",
+    ):
+        assert phrase in prompt
+
+
+def test_assurance_acceptance_prompt_demonstrates_separate_business_and_security_checks():
+    analysis = analysis_fixture()
+    prompt = build_solution_v2_assurance_messages(
+        analysis, check_solution_readiness(analysis), (), admission_fixture(),
+        parse_core(core_ir()), parse_implementation(implementation_ir()),
+    )[0]["content"]
+
+    for phrase in (
+        "BAD criterion：以交付案例为查询输入执行企业知识查询，返回结果与所查询交付案例相关，且扫描版 PDF 案例经 OCR 后可被检索到。",
+        "GOOD criterion：以交付案例为查询输入执行企业知识查询，返回结果应与所查询交付案例相关。",
+        "GOOD criterion：扫描版 PDF 案例经 OCR 处理后应能够被企业知识查询检索到。",
+        "BAD criterion：授权用户能够获取受限资料，且未授权用户无法获取受限资料。",
+        "GOOD criterion：使用具有相应权限的身份查询，能够获取该身份获准访问的受限资料。",
+        "GOOD criterion：使用不具有相应权限的身份查询，无法获取受限资料。",
+        "检索相关性与 OCR 可检索性、授权访问与越权阻断、业务结果与引用来源定位",
+        "分别具有独立 PASS/FAIL 结果，应分别验收",
+        "不得使用“端到端集成测试通过”或“阶段验收完成”代替具体检查",
+    ):
+        assert phrase in prompt
+
+
+def test_assurance_acceptance_canonical_example_is_one_observable_check_and_still_parses():
+    analysis = analysis_fixture()
+    implementation = parse_implementation(implementation_ir())
+    prompt = build_solution_v2_assurance_messages(
+        analysis, check_solution_readiness(analysis), (), admission_fixture(),
+        parse_core(core_ir()), implementation,
+    )[0]["content"]
+    example = json.loads(prompt.split("示例仅展示格式，不能照抄示例的技术结论：", 1)[1])
+
+    expected = "通过适配器调用约定接口，响应中的业务标识应与请求对应。"
+    assert example["acceptance"][0]["criterion"][0]["text"] == expected
+    parsed = parse_assurance(example, implementation)
+    criterion = next(p for p in parsed.proposals if p.placement.field.value == "criterion")
+    assert criterion.text == expected
+    assert criterion.citations == ("S1",)
+    assert tuple(field.value for field in criterion.related_requirement_fields) == ("business_goal",)
 
 
 def test_assurance_prompt_requires_prospective_signals_not_unconfirmed_existing_facts():

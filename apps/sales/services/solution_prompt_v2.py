@@ -284,6 +284,8 @@ _SYSTEM_PROMPT = """你是企业售前解决方案助手。你只能生成待验
 
 实施 proposal 应覆盖 objective、tasks、deliverables、dependencies 和 exit criteria，并以顺序和依赖表达计划，不得为填满结构编造时间。风险必须遵循 missing information != technical risk：信息缺失属于 UNRESOLVED；技术风险应分别表达 condition、impact、mitigation、trigger / detection signal。验收 proposal 必须 observable、testable 并关联需求，禁止使用“满足客户需求”“系统稳定运行”等不可验证表述。
 
+每条 acceptance_criteria criterion 必须代表一个可独立执行并得到明确 PASS/FAIL 结果的验收检查。多个可以分别成功或失败的验收目标必须拆成不同 criterion；即使属于同一业务场景或同一 phase，也不得合并独立验收目标。同一检查的输入/前置条件、执行步骤和一个可观测的预期结果可以保留在一条 criterion 中；不按动词数量拆分，也不禁止所有“和/与/且”句式。不得为了省预算合并独立检查，也不得为填满上限制造重复检查。
+
 禁止编造 SLA、QPS/TPS、latency、hardware count、date、person-days、protocol/version、contractual/commercial commitment，以及任何无依据的精确容量、拓扑数量、成本或责任人。若这些信息影响设计，应生成条件性 proposal 或由程序保留为 UNRESOLVED。
 
 placement 只用于把 proposal 放入程序控制的结构，不得在 container_key 中携带业务语义。非 root 的 container_key 必须完整匹配 [a-z][a-z0-9_]{0,63}。section/container_kind/field 必须使用以下封闭组合：
@@ -448,7 +450,7 @@ _ASSURANCE_PASS_EXAMPLE = (
     '"related_requirement_fields":["data_security"]},'
     '{"placement":{"section":"acceptance_criteria","container_kind":"acceptance_criterion",'
     '"container_key":"business_flow","field":"criterion"},'
-    '"text":"授权用户能够完成端到端业务操作。","citations":["S1"],'
+    '"text":"以授权身份查询受限资料，返回结果应仅包含该身份获准访问的资料。","citations":["S1"],'
     '"related_requirement_fields":["business_goal"]}'
     '],"structure_relations":['
     '{"relation_type":"phase_acceptance","source_container_kind":"implementation_phase",'
@@ -660,7 +662,7 @@ def _semantic_pass_prompt(pass_name: str, runtime_budget: int) -> str:
                        "impact": [sample("适配器需要返工。")],
                        "mitigation": [sample("实施前验证接口契约。")],
                        "trigger": [sample("若联调时发现接口字段不一致，则触发接口兼容性风险处置。")]}],
-            "acceptance": [{"ref": "integration_check", "criterion": [sample("端到端集成测试通过。")]}],
+            "acceptance": [{"ref": "integration_check", "criterion": [sample("通过适配器调用约定接口，响应中的业务标识应与请求对应。")]}],
             "out_of_scope": [sample("不替换客户现有身份系统。")],
             "phase_acceptance": [{"from": "discovery", "to": "integration_check"}],
         }
@@ -673,6 +675,16 @@ def _semantic_pass_prompt(pass_name: str, runtime_budget: int) -> str:
             "phase_acceptance 不计入 proposal 总预算，只表达关系；所有上限都不是生成目标。"
             "只生成 risks 的 condition、impact、mitigation、trigger；"
             "acceptance 的 criterion；out_of_scope。"
+            "acceptance[].criterion 对应最终 acceptance_criteria，按独立验收检查而非阶段成果包组织。"
+            "检索相关性与 OCR 可检索性、授权访问与越权阻断、业务结果与引用来源定位，"
+            "分别具有独立 PASS/FAIL 结果，应分别验收。"
+            "不得使用“端到端集成测试通过”或“阶段验收完成”代替具体检查。"
+            "BAD criterion：以交付案例为查询输入执行企业知识查询，返回结果与所查询交付案例相关，且扫描版 PDF 案例经 OCR 后可被检索到。"
+            "GOOD criterion：以交付案例为查询输入执行企业知识查询，返回结果应与所查询交付案例相关。"
+            "GOOD criterion：扫描版 PDF 案例经 OCR 处理后应能够被企业知识查询检索到。"
+            "BAD criterion：授权用户能够获取受限资料，且未授权用户无法获取受限资料。"
+            "GOOD criterion：使用具有相应权限的身份查询，能够获取该身份获准访问的受限资料。"
+            "GOOD criterion：使用不具有相应权限的身份查询，无法获取受限资料。"
             "risks.condition 描述风险发生条件：如果条件本身有明确客户事实或 grounding fact 支持，可以直接陈述；"
             "如果只是潜在风险场景或尚未证实的问题，必须使用明确条件式表达，"
             "例如若……、如果……、当……发生时、在……未满足的情况下。"
