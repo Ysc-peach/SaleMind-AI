@@ -1,253 +1,119 @@
 # SalesMind AI AI Pipeline
 
-## Core principle
+当前合同快照：`1141281c07b2f5f92d51151fc9b2f0803814ef60`。本文解释数据与权限边界；模块视图见 [architecture](architecture.md)。
 
-> Probabilistic components propose. Deterministic program logic or approved human action disposes.
+> 概率组件提出建议；确定性代码或有权限的人工操作决定准入。
 
-Semantic entailment is not business admissibility. A model can judge whether supplied text entails a proposal, but it cannot decide whether an enterprise capability is approved, current, or allowed into a solution.
+## 两条准备链路
 
-## Knowledge preparation lane
+### 企业知识
 
-Knowledge preparation is separate from a Solution Draft request:
+`KnowledgeDocument → validate/parse/chunk → BGE-M3 → pgvector → READY/index-run → fact extraction → PROPOSED → human approve/reject`。
 
-```text
-KnowledgeDocument upload
-        ↓
-validation and parsing
-        ↓
-traceable chunking
-        ↓
-BAAI/bge-m3 embedding
-        ↓
-PostgreSQL + pgvector index
-        ↓
-document READY with completed index-run ID
-        ↓
-fact extraction LLM (outside the indexing transaction)
-        ↓
-EnterpriseGroundingFact PROPOSED
-        ↓
-authorized human approve/reject
-        ↓
-APPROVED facts become candidates for deterministic admission
-```
+检索只使用 READY 且 provider/model/dimension 匹配的索引。事实抽取不在索引长事务内；写入前检查来源快照。重新索引替换 chunks，并使旧 facts stale，而不是覆盖旧审计证据。
 
-The extraction LLM proposes `subject_key`, statement, status, and source mapping. It cannot approve. Persistence rechecks the document run and chunk snapshot in a short transaction before writing proposals.
+### 客户需求
 
-Successful reindexing replaces chunks, marks old facts stale, and preserves the old fact's document reference, chunk-ID snapshot, excerpt, content hash, and index-run ID for audit. New extraction produces new `PROPOSED` facts; admission resumes only after explicit approval.
+`Customer + Opportunity → frozen analysis input → requirement analysis → strict ten-dimension contract → append-only analysis record`。
 
-Primary references: `apps/knowledge/services/indexing.py`, `apps/knowledge/services/grounding_facts.py`, `apps/knowledge/services/grounding_fact_approval.py`, and `apps/knowledge/models.py`.
+known 客户方向用于设计；unknown/unclear/conflict 保留为信息边界。客户希望获得某项能力，不证明企业已经具备该能力。
 
-## Requirement Analysis lane
+## V2 请求链路
 
 ```text
-Customer + Opportunity structured fields + raw requirement
-        ↓
-frozen RequirementAnalysisInput
-        ↓
-DeepSeek requirement analysis
-        ↓
-strict ten-dimension validation
-        ↓
-append-only OpportunityRequirementAnalysis snapshot
+明确的已保存 analysis ID → readiness
+          ↓
+需求派生 retrieval intents → BGE/pgvector → labelled sources
+          ↓
+当前已批准 facts 的 deterministic admission
+          ↓
+Core Semantic IR → strict parser / converter
+          ↓
+Implementation Semantic IR（含 validated core context）→ strict parser / converter
+          ↓
+Assurance Semantic IR（含 validated core + phases）→ strict parser / converter
+          ↓
+AtomicSolutionProposalSetV2 deterministic merge / global structure validation
+          ↓
+citation / requirement / unresolved / precision deterministic guards
+          ↓
+Qwen single-claim proposal admissibility
+          ↓
+return-time admission revalidation → Solution V2 assembly / validation
+          ↓
+短事务 provenance revalidation → Solution + durable provenance
+          ↓
+DRAFT → Presales human review
 ```
 
-The analysis service classifies each dimension as `known`, `unknown`, `unclear`, or `conflict`. It analyzes requirements only; it does not retrieve enterprise knowledge or produce solutions.
+readiness 阻塞或没有检索证据时提前返回；非法输出不送 verifier。三段均不单独保存方案。pipeline 不删除被拒绝的 claim 来制造“可用的剩余方案”。
 
-## Grounded Solution Draft request path
+## 语义与结构的所有权
 
-The read-only generation path is centered on `generate_grounded_solution_draft` in `apps/sales/services/solution_draft.py`. The persisted API path wraps it with `generate_and_persist_solution_draft` in `apps/sales/services/solution_persistence.py`:
+| 内容 | 来源 | 权限边界 |
+| --- | --- | --- |
+| customer_fact | 已保存 analysis 的 known dimensions，由代码构造 | LLM 不改写客户事实 |
+| enterprise_fact | approved/current/provenance-valid facts，由代码构造 | verifier 不能批准事实 |
+| unresolved / 信息缺口 | 需求状态与企业事实准入，由代码构造 | 不能被建议升格为 confirmed |
+| proposal text / citations / related_requirement_fields | generation LLM | 仍需 strict contract、guards、admissibility |
+| component/phase/risk 局部 refs 与关系端点/方向 | generation LLM | 不得引用不存在的对象；代码不猜语义关系 |
+| placement / kind / field / relation enum | deterministic converter | 不生成新建议、citation 或需求关联 |
+| claim/container IDs、稳定排序、V2 references | deterministic parser/assembler | 不靠 first-seen 顺序猜身份，不拼接新语义 |
+| 最终业务审批 | authorized human review | generation / score / Qwen 均不能代替 |
 
-```text
-Opportunity raw requirement
-        ↓
-persisted Requirement Analysis
-        ↓
-frozen analysis snapshot loaded by ID
-        ↓
-deterministic readiness check
-        ↓
-requirement-derived retrieval intents
-        ↓
-BAAI/bge-m3 query embedding
-        ↓
-PostgreSQL + pgvector retrieval
-        ↓
-retrieved, labelled SolutionSource evidence
-        ↓
-EnterpriseGroundingFact currentness/provenance match
-        ↓
-deterministic admission
-        ├── customer_fact
-        ├── enterprise_fact
-        └── unresolved
-        ↓
-allowed customer context + approved supported enterprise evidence
-        ↓
-DeepSeek proposal generation
-        ↓
-strict proposal-only Atomic IR parser
-        ↓
-one proposal per semantic-verifier request
-        ↓
-bounded per-draft concurrency (default 2)
-        ↓
-Qwen semantic verifier
-        ↓
-SUPPORTED + ATOMIC only
-        ↓
-return-time deterministic admission revalidation
-        ↓
-deterministic SolutionDraft assembly
-        ↓
-short persistence transaction
-        ├── final admission/provenance validation
-        ├── lock Opportunity and allocate next version
-        ├── append immutable SolutionDraftRecord
-        └── append durable SolutionDraftProvenance snapshots
-```
+Semantic IR 是 generation-only `semantic_v1`；最终 persisted schema 仍是 Solution V2。每个 semantic claim 包含恰好 `text / citations / related_requirement_fields`；relations 使用恰好 `{from,to}`，不把 citation 或 rationale 塞入 edge。closed objects 拒绝额外 keys，非法类型先校验再去重。
 
-Readiness-blocked and no-evidence paths return before generation and verification. Structurally invalid generated output never reaches the verifier. Zero generated proposals skip the verifier.
+当前 Semantic IR 的 Assurance 仅由模型生成 risks、acceptance、out_of_scope 和 phase_acceptance；最终的 assumptions/open_questions 由确定性内容构建，不由该 pass 自行补写。
 
-## Deterministic admission
+合同与预算以 [solution_generation_contract.py](../apps/sales/services/solution_generation_contract.py) 为唯一源码真源：Core 46、Implementation 18、Assurance 20、global 84、components 4，6,000 output tokens/pass。ceiling 不是 target count。converter 不裁剪超预算内容。
 
-`build_solution_admission` cross-checks retrieved source identities with database grounding facts. `_is_active_approved_fact` enforces approval, stale state, document readiness, current index run, and content-hash equality.
+## 有限重新生成，而不是安全重试
 
-The admission result contains:
+V2 每段第一次 output 被 strict parser/generation contract 拒绝时，最多重新生成一次。新输出完整重新解析，不修补前次 JSON，也不保存部分内容。
 
-- deterministic claims;
-- enterprise decisions by controlled subject;
-- exact enterprise claim-to-Fact provenance;
-- source labels that confirmed-supported enterprise evidence permits proposals to cite.
+该机制不重试 provider error、unsupported precision、unresolved-as-confirmed、Qwen INADMISSIBLE/COMPOUND 或 persistence error。SDK transport retries 是独立 provider 配置；不能与 pass regeneration attempts 混算。
 
-Opposed approved positive/negative facts resolve to `CONFLICT`; absence resolves to `UNCONFIRMED`. Neither creates an enterprise fact.
+统一 evaluation diagnostics 来自正式拒绝分支，记录 category/path/expected/actual，不再用另一套规则猜测原始输出。业务 API 仍使用稳定安全错误，不返回 provider raw JSON。
 
-## Claim ownership
+## Deterministic admission 与 guard
 
-| Claim/output | Creator | Inputs and authority | LLM freedom |
-| --- | --- | --- | --- |
-| `customer_fact` | Deterministic admission | `known` frozen Requirement Analysis fields | None |
-| `enterprise_fact` | Deterministic admission | Current, approved, provenance-valid confirmed Fact | None |
-| `unresolved` | Deterministic admission/schema | Non-known customer dimensions; unconfirmed/conflicting enterprise subjects | None |
-| `proposal` | DeepSeek generation | Known customer direction plus only approved supported enterprise evidence | Wording/recommendation within allowed support |
-| Fixed sections/title/summary/assumptions | Deterministic schema assembly | Verified/admitted claims and analysis gaps | None |
+事实准入校验 approval/status/stale/document readiness/index-run/hash；相互矛盾的 approved 正/负事实不授权正向能力。proposal citation 只能引用允许的 source labels；requirement linkage 必须有效且存在对应上下文。
 
-The LLM output schema is deliberately small: `{"proposals": [{"section", "text", "citations"}]}`. It cannot output statement type, enterprise facts, customer facts, unresolved items, final section envelopes, approval decisions, or source metadata.
+Qwen 前 guard 拒绝把相关 unresolved 需求断言成 confirmed，或使用相关需求/引用依据中未出现的精确承诺。有限条件表达识别不代表通用自然语言理解；条件式也不豁免 precision 校验。
 
-## Proposal-only semantic verification
+自然语义相关性、未支持的能力/厂商、冲突与 atomicity 不能全部靠这些 guards 保证，因此仍有独立 Qwen veto 和人工 review。
 
-`verify_atomic_solution_proposals` receives only generated `proposal` claims. It builds claim-scoped customer context and cited enterprise evidence, then sends every proposal in an independent verifier request. A thread pool bounds concurrent requests within one draft to `VERIFIER_MAX_CONCURRENCY` (default `2`) while preserving original proposal order in the result.
+## Proposal admissibility / atomicity
 
-The Qwen verifier returns exactly one relation and atomicity result per request:
+正式 V2 packet 含 proposal、placement、相关需求、完整已分析客户上下文、被引用的企业 evidence；仅 task/deliverable 加 phase objective，仅 risk mitigation 加 risk condition/impact。这些建议上下文都不能成为新的事实依据。
 
-- relation: `SUPPORTED`, `INSUFFICIENT`, or `CONTRADICTED`;
-- atomicity: `ATOMIC` or `COMPOUND`.
+普通 claim 的 ATOMIC 是“一个可独立批准/拒绝的技术判断”，不是“一句话一个动词”。implementation task 按 coherent work package，deliverable 按同目标可统一验收的成果包，mitigation 按同 risk 的 coherent strategy 判断，均禁止独立技术选型或无依据承诺混入。
 
-Only `SUPPORTED + ATOMIC` passes. The verifier performs semantic entailment, contradiction detection, proposal support checking, and atomicity checking. It does not decide Fact approval, stale/current state, provenance validity, conflict policy, unconfirmed policy, or enterprise admission.
+V2 需要 `decision=ADMISSIBLE`，并通常需要 `atomicity=ATOMIC`。architecture identity 的 atomicity 不单独 hard veto，但其他合法性和 admissibility 检查照常。V1 旧路径独立保留 `SUPPORTED / INSUFFICIENT / CONTRADICTED` 合同，不用 V2 规则解释历史输出。
 
-Any provider error, timeout, malformed response, unsupported result, or compound result fails the whole draft. No partial verified draft is returned. See [TD-001](technical-debt.md#td-001--semantic-verifier-synchronous-latency) for the accepted synchronous-latency debt.
+single claim/request、per-draft concurrency 2、60s timeout、0 SDK retries。支持 Qwen thinking control 的正式 verifier wrapper 发送 `enable_thinking=false`；不向所有 OpenAI-compatible providers 无条件发送此参数。
 
-## Return-time provenance revalidation
+出现 provider error 是 provider availability failure，不是 INADMISSIBLE verdict。401 为 auth_error，403 为 permission_denied；可安全保留 provider code，例如 `AllocationQuota.FreeTierOnly`，但不把全部 403 视为额度错误。
 
-External generation and verification calls happen after the first deterministic admission decision. Before assembly, `generate_grounded_solution_draft` calls `build_solution_admission` again and requires exact equality with the first result.
+## Return-time / transaction-time provenance
 
-If reindexing, stale marking, approval changes, source content, or another provenance condition changes during model calls, the request fails closed. A verifier `SUPPORTED` result cannot override this TOCTOU boundary.
+外部调用之后重新构建 admission 并要求与调用前一致；持久化短事务里再次验证来源。即使 Qwen 全通过，若事实被重建索引、变 stale 或审批状态改变，仍 fail closed。
 
-## Solution persistence and technical review lane
+SolutionDraftRecord 按 Opportunity 分配不可变版本；provenance 保存 Fact/文档、citation/claim 映射及 index/hash/chunk/excerpt 快照。模型调用在事务外，不能用长锁覆盖网络等待。workflow idempotency replay 返回匹配已有版本，不重复调用 provider 或创建 review。
 
-The persistence request always names an existing `OpportunityRequirementAnalysis`; it never silently substitutes the latest analysis. Model calls occur before the short persistence transaction. Inside that transaction, the service locks the Opportunity, revalidates current grounding admission, allocates the next per-Opportunity version, and atomically writes `SolutionDraftRecord` plus its citation provenance. Any failure creates neither a partial record nor orphan provenance.
+## 人工审核与工作流
 
-For a LangGraph workflow, `workflow_run_id` is passed as the nullable UUID `generation_idempotency_key`. A PostgreSQL session advisory lock serializes the key without opening a transaction around external provider calls. If the key already identifies a Solution for the same Opportunity, analysis, and creator, persistence returns that exact record; it does not call generation again or create another version. Reusing the key with different inputs fails closed.
+DRAFT → PENDING_REVIEW → APPROVED 或 NEEDS_REVISION。退回分别为 CUSTOMER_INFO_REQUIRED / TECHNICAL_REVISION_REQUIRED。作者不能自审，stale 与 review 状态独立。
 
-Durable provenance stores the exact admitted `EnterpriseGroundingFact`, source document, citation label and statement path, plus immutable chunk-ID, index-run, content-hash, and excerpt snapshots. It deliberately has no foreign key to replaceable `KnowledgeChunk` rows.
+LangGraph 负责路由、human interrupt 与 resume，PostgresSaver 仅保留稳定 ID/路由状态；Django service 和业务表仍执行权限、有效性与状态转换。当前没有自动 revision loop。
 
-After persistence, technical review is a human workflow over stable database identities:
+## 评估与相关源码
 
-```text
-SolutionDraftRecord DRAFT
-        ↓ submit_solution_draft_for_review
-SolutionReview PENDING + Draft PENDING_REVIEW
-        ↓ human review boundary
-        ├── approve_solution_draft
-        │       ↓
-        │   Review APPROVED + Draft APPROVED
-        │
-        └── request_solution_draft_revision
-                ↓
-            Review RETURNED + Draft NEEDS_REVISION
-                ├── CUSTOMER_INFO_REQUIRED → Sales obtains facts and creates a new analysis
-                └── TECHNICAL_REVISION_REQUIRED → Presales creates a new Solution version
-```
+质量只对真正持久化的最终 V2 评分。provider availability、generation contract、deterministic admission、Qwen admission、assembly/persistence、quality 分层报告；`NOT_REACHED` 不是某层测得失败，`NOT_EVALUATED` 不是零分。
 
-Reviewer assignment is version-scoped. A Presales-authored version requires a different eligible reviewer, and business Admin fallback cannot approve its own authored version. Approval re-evaluates deterministic stale state before committing. Review state and stale state remain separate: a later knowledge or requirement change can make an approved version stale without rewriting review history.
-
-## Durable LangGraph orchestration lane
-
-Phase 6a wraps the persistence and review services without moving their business rules into the graph:
-
-```text
-explicit requirement_analysis_id
-        ↓ generate_solution node
-generate_and_persist_solution_draft(workflow_run_id as idempotency key)
-        ↓ submit_review node
-submit_solution_draft_for_review
-        ↓ wait_for_human node
-official PostgresSaver checkpoint + interrupt
-        ↓ process/checkpointer reconstruction and resume
-        ├── approve node → approve_solution_draft → APPROVED → END
-        └── request_revision node
-                → request_solution_draft_revision
-                ├── CUSTOMER_INFO_REQUIRED → terminal/handoff
-                └── TECHNICAL_REVISION_REQUIRED → terminal/handoff
-```
-
-Graph state contains stable identifiers and routing fields: workflow, Opportunity, selected analysis, requester, Solution, review, reviewer, stage, human action, return reason, and stable error code. It does not retain ORM objects, full Requirement Analysis or Solution payloads, evidence, full provenance, raw provider responses, or credentials. On resume, nodes reload `SolutionDraftRecord`, `SolutionReview`, users, and visibility from PostgreSQL.
-
-The official LangGraph `PostgresSaver` supplies durable checkpoints. Its setup is explicit and idempotent, and the production database contains the standard checkpoint schema. Business authority remains in the SalesMind tables and Django services: a checkpoint cannot approve a Solution, bypass permissions, or rewrite an already committed review decision.
-
-Replay after a committed matching approve/return decision recovers the terminal outcome without creating another decision. A replay whose requested action conflicts with the committed business state returns a typed conflict and leaves history unchanged. There is no automatic revision loop in Phase 6a.
-
-## Provider boundaries
-
-- **Embedding:** OpenAI-compatible embedding provider, configured/default model `BAAI/bge-m3`, 1,024 dimensions.
-- **Generation:** DeepSeek provider, configured/default model `deepseek-v4-flash`.
-- **Verifier:** independently configurable OpenAI-compatible provider; current production-like checkpoint uses Qwen `qwen3.8-max-0902` with 60-second timeout, zero retries, thinking disabled, and per-draft max concurrency `2`.
-
-Provider configuration is environment-driven. API keys, tokens, database credentials, and prompt payloads containing real business data must never be copied into project-memory documents.
-
-## Security and reliability boundaries
-
-- Requirement text, knowledge evidence, generated proposals, and verifier packets are untrusted data at model boundaries.
-- Enterprise evidence given to generation and verification is constrained by deterministic admission and citations.
-- Customer requirements never prove enterprise capability.
-- Explicit-negative approved evidence may produce a negative enterprise fact but cannot authorize a positive capability proposal.
-- The verifier is defense in depth and veto-only.
-- No orchestration retry, rewrite, or second retrieval occurs.
-- LangGraph orchestrates the bounded Solution review flow, but never owns its business decisions. Frontend behavior and automatic revision loops remain deferred.
-
-## Main code and regression references
-
-- `apps/sales/services/requirement_analysis.py`
-- `apps/sales/services/requirement_analysis_history.py`
-- `apps/sales/services/solution_readiness.py`
-- `apps/sales/services/solution_retrieval.py`
-- `apps/sales/services/solution_admission.py`
-- `apps/sales/services/solution_prompt.py`
-- `apps/sales/services/solution_schema.py`
-- `apps/sales/services/solution_grounding.py`
-- `apps/sales/services/solution_grounding_prompt.py`
-- `apps/sales/services/solution_draft.py`
-- `apps/sales/services/solution_persistence.py`
-- `apps/sales/services/solution_review.py`
-- `apps/sales/services/solution_review_workflow.py`
-- `apps/sales/services/solution_workflow_checkpoint.py`
-- `apps/sales/api/solution_draft_views.py`
-- `apps/sales/tests/test_solution_admission.py`
-- `apps/sales/tests/test_solution_provenance_pipeline.py`
-- `apps/sales/tests/test_solution_proposal_only_verification.py`
-- `apps/sales/tests/test_solution_proposal_bounded_concurrency.py`
-- `apps/sales/tests/test_solution_persistence_service.py`
-- `apps/sales/tests/test_solution_review_service.py`
-- `apps/sales/tests/test_solution_review_concurrency.py`
-- `apps/sales/tests/test_solution_review_api.py`
-- `apps/sales/tests/test_solution_review_workflow.py`
+- [正式 Semantic IR converter](../apps/sales/services/solution_semantic_ir_v2.py)
+- [三段 prompt/parser/merge](../apps/sales/services/solution_prompt_v2.py)
+- [guard / verifier / bounded scheduler](../apps/sales/services/solution_grounding.py)
+- [persistence / stale](../apps/sales/services/solution_persistence.py)
+- [review / workflow](../apps/sales/services/solution_review_workflow.py)
+- [分层报告口径](benchmark-layered-evaluation.md) / [真实结果](real-provider-benchmark-summary.md)

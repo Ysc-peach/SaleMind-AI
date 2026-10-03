@@ -1,5 +1,21 @@
 # Technical Debt Register
 
+## Reading this historical register at the frozen delivery baseline
+
+At `1141281c07b2f5f92d51151fc9b2f0803814ef60`, Solution V2 uses three-pass
+Semantic IR and the independent verifier display configuration is
+`qwen3.8-flash`, with thinking explicitly disabled, timeout 60s, retries 0,
+and per-draft concurrency 2. The measurements and Qwen Max model below are
+the earlier Phase 5.5j-B record, not current Flash measurements.
+
+Thinking propagation and bounded in-flight scheduling have since been fixed;
+synchronous generation, per-claim request/token cost and unverified global
+concurrency capacity remain limitations. The old latency diagnosis is not
+reused as proof of today's bottleneck or as a production SLA. See
+[current limitations](known-limitations.md), [current architecture](architecture.md),
+and [versioned real benchmark results](real-provider-benchmark-summary.md).
+Historical values below are preserved, not retrospectively recalculated.
+
 ## TD-001 — Semantic Verifier synchronous latency
 
 ### Status

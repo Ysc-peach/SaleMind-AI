@@ -2,6 +2,10 @@
 
 These rules are stable business and safety invariants. Refactors may change implementation shape but must not silently change these outcomes.
 
+Current behavior is checked against the frozen core baseline
+`1141281c07b2f5f92d51151fc9b2f0803814ef60`. V1 and V2 verifier contracts are
+distinguished below; this documentation update changes no runtime rule.
+
 ## Roles and technical privileges
 
 The fixed business roles are:
@@ -48,7 +52,7 @@ An Opportunity records `customer`, `sales_owner`, optional `presales_owner`, and
 
 The approved business contract separates customer ownership from technical-solution ownership:
 
-- **Sales** owns the Customer, Opportunity, customer requirement facts, and follow-up needed to complete missing customer information.
+- **Sales** maintains shared Customer data, owns its Opportunities, and is responsible for customer requirement facts and follow-up needed to complete missing customer information. Customer itself is not per-Sales-owned master data.
 - The **Presales Owner** owns technical judgment, Solution generation or revision, and the first technical review.
 - A **Solution Reviewer** owns technical approval for a specific Solution version when independent review is required. A Solution Reviewer is another user with business role `presales`; this responsibility does not introduce a new business role.
 
@@ -187,21 +191,33 @@ The program owns claim types, fact identities, provenance, source eligibility, f
 
 ## Semantic verifier
 
-The verifier evaluates only generated proposals for natural semantic support and atomicity. It may veto; it may never grant business admission.
+The verifier evaluates only generated proposals. It may veto; it may never
+grant enterprise fact admission or technical review approval.
 
-- Only `SUPPORTED + ATOMIC` proposals pass.
-- `INSUFFICIENT`, `CONTRADICTED`, or `COMPOUND` rejects the draft under the current whole-draft fail-closed contract.
-- A verifier result of `SUPPORTED` cannot turn proposed, rejected, stale, unconfirmed, conflicting, missing, or provenance-invalid evidence into an enterprise capability.
+- Historical V1 uses `SUPPORTED / INSUFFICIENT / CONTRADICTED` and requires `SUPPORTED + ATOMIC`.
+- Current V2 uses `ADMISSIBLE / INADMISSIBLE` plus `ATOMIC / COMPOUND`. Proposals normally require `ADMISSIBLE + ATOMIC`.
+- Architecture component identity still requires admissibility, but `COMPOUND` alone is not its hard veto. Identity is a semantic naming claim, not a container for responsibilities or technical decisions.
+- Ordinary atomicity means one independently approvable/rejectable technical judgment, not one verb. Implementation tasks use phase-objective work-package coherence; deliverables use phase-objective outcome-package coherence; risk mitigations use same-risk strategy coherence. These still require `ATOMIC`, not a `COMPOUND` exception.
+- The phase objective and risk condition/impact are untrusted proposal context, not confirmed facts or new capability evidence.
+- No verdict can turn proposed, rejected, stale, unconfirmed, conflicting, missing, or provenance-invalid evidence into an enterprise capability.
 - Deterministic claims bypass semantic verification because their authority comes from typed analysis, human approval, and deterministic provenance checks.
 
-Semantic entailment is not business admissibility. The verifier answers the former; program/human boundaries decide the latter.
+Single-claim requests are scheduled with bounded per-draft in-flight work
+(current concurrency 2). Observed vetoes stop new dispatch; already running
+requests may still finish. Provider failure is not an `INADMISSIBLE` verdict.
 
 ## Failure policy
 
 - Invalid model structure, invalid citations, verifier errors/timeouts, malformed verifier output, unsupported proposals, and compound proposals fail closed.
-- Solution orchestration performs no retry, rewrite, second retrieval, or partial-draft recovery.
+- Each V2 Core/Implementation/Assurance pass may regenerate once only after strict output-contract rejection; at most two attempts are allowed. The complete new output is revalidated, never patched or partially retained.
+- This pass regeneration does not retry provider errors, deterministic guard failures, Qwen vetoes, or persistence failures. There is no second retrieval, safety-rule rewrite, or partial-draft recovery. Provider SDK retry settings remain a separate transport concern.
 - No partially verified proposal set is returned.
 - Readiness and no-evidence short circuits avoid unnecessary model calls.
 - Deterministic admission is rebuilt after external model calls. If provenance or approval changed, return fails closed.
 
 Primary safety regressions: `apps/sales/tests/test_solution_admission.py`, `apps/sales/tests/test_solution_provenance_pipeline.py`, `apps/sales/tests/test_solution_proposal_only_verification.py`, and `apps/sales/tests/test_solution_proposal_bounded_concurrency.py`.
+
+Current V2-specific regressions also include
+`apps/sales/tests/test_solution_semantic_ir_v2.py`,
+`apps/sales/tests/test_solution_split_generation_v2.py`, and
+`apps/sales/tests/test_solution_proposal_admissibility_v2.py`.

@@ -2,6 +2,13 @@
 
 This is a compact ADR-style log of decisions already represented by current code, tests, migrations, or approved design. It is not a backlog.
 
+Historical contexts, model names and measurements below retain their original
+meaning. For the frozen `1141281` V2 behavior, including Semantic IR, bounded
+pass regeneration and placement-aware admissibility, use
+[architecture](architecture.md) and [AI pipeline](ai-pipeline.md). The historical
+`SUPPORTED` verdict vocabulary must not be substituted for current V2
+`ADMISSIBLE`, and the former no-regeneration path is not the current pass contract.
+
 ## D-001 — Django and DRF application framework
 
 **Decision.** Build SalesMind AI as a modular Django monolith with Django REST Framework APIs.

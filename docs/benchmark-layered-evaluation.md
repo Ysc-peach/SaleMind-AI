@@ -38,3 +38,9 @@ The current rubric is documented in `docs/solution-quality-rubric.md`.
 Historical scores retain their original version. Offline regression success
 establishes engineering behavior, not live provider availability or a higher
 cross-scenario E2E success rate.
+
+The delivery snapshot is summarized in [real-provider benchmark results](real-provider-benchmark-summary.md).
+It identifies the actual run commit, fixed context preparation, real-provider
+scope and score version for each successful artifact. A scenario key ending in
+`_approved` is not a human approval of a newly generated DRAFT. Historical
+87/100 scores must not be compared directly with `solution-quality-v2.1`.

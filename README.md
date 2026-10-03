@@ -1,318 +1,150 @@
 # SalesMind AI
 
-SalesMind AI is a modular Django monolith with a PostgreSQL-backed identity
-foundation, Django Admin user management, business roles, JWT authentication,
-and the Phase Two Customer/Opportunity sales-domain APIs.
+面向企业销售与售前的需求分析、知识检索和技术方案辅助系统。
 
-## Requirements
+项目不是“把客户需求发给模型生成一段方案”，而是将客户事实、企业能力依据、技术建议和人工审批分开管理：模型负责提出建议，确定性代码负责校验与组织，售前负责最终技术审核。
 
-- Python 3.12.14
-- PostgreSQL 17, or a compatible supported PostgreSQL release
+核心功能冻结基线：`1141281c07b2f5f92d51151fc9b2f0803814ef60`。本文描述该基线，不承诺尚未实现的生产能力。
 
-SQLite is not supported. Keep local credentials in the ignored `.env` file or
-in process environment variables; never commit real passwords or signing keys.
+## 业务流程
 
-## Project layout
-
-- `config/settings/base.py` contains shared Django, PostgreSQL, DRF, and JWT
-  settings.
-- `config/settings/local.py` loads the ignored `.env` for local development.
-- `config/settings/production.py` enables fail-closed production security
-  settings.
-- `config/settings/test.py` requires a PostgreSQL `DATABASE_URL` and supplies
-  deterministic test-only signing keys when the process does not provide them.
-- `apps/accounts/` contains the custom user model, business roles, and Django
-  Admin registration.
-- `apps/accounts/api/` contains authentication, the current-user API, and the
-  Sales-only active Presales option endpoint.
-- `apps/sales/` contains the shared Customer and Opportunity models, migrations,
-  role-filtered API views, explicit serializers, and page-number pagination.
-
-## Local setup
-
-Create a PostgreSQL database and login role. For example, from `psql` as a
-database administrator:
-
-```sql
-CREATE USER salesmind WITH PASSWORD 'choose-a-local-password' CREATEDB;
-CREATE DATABASE salesmind OWNER salesmind;
+```text
+Sales：Customer / Opportunity → 需求输入 → 版本化 Requirement Analysis
+                                                   ↓
+企业知识：文档 → BGE 索引 → Grounding Facts → 有权限人员审批
+                                                   ↓
+技术方案：检索与事实准入 → Core → Implementation → Assurance
+                                                   ↓
+             严格合同 → 确定性 guards → Qwen proposal admissibility
+                                                   ↓
+                    Solution V2 → 版本持久化 + 来源快照
+                                                   ↓
+Presales：技术审核 → 批准 / 补充客户信息 / 技术修订
 ```
 
-`CREATEDB` is required for this local development role because Django's test
-runner creates a temporary PostgreSQL test database. A production application
-role should follow least privilege and must not receive `CREATEDB`.
+Sales 维护商机与客户需求；Presales 负责技术判断和审核。`APPROVED` 表示某个方案版本通过内部技术审核，不表示客户签约或自动达成销售结果。
 
-Create the virtual environment and install the pinned dependencies:
+## 已实现的核心能力
+
+- JWT 登录及 `admin / sales / presales` 业务权限，商机按所有者或指派关系隔离。
+- 十个固定需求维度及 `known / unknown / unclear / conflict` 状态；分析历史不可覆盖。
+- 企业文档解析、分块、BGE-M3 向量索引、pgvector 检索与来源引用。
+- Grounding Facts 的提议、人工审批、索引失效与来源有效性校验。
+- 三段 bounded generation 与 generation-only Minimal Semantic IR，避免让模型生成数据库 ID、最终结构枚举或持久化对象。
+- 原子 claim registry、语义化组件名称、独立的依赖/请求流/数据流、阶段/验收/里程碑关联。
+- 确定性 guards 和 veto-only Qwen 审查；不完整或未通过准入的方案不能部分保存。
+- 不可变 Solution 版本、持久 provenance、stale 判断、版本级技术审核及 LangGraph 人工中断/恢复。
+- Vue 销售/售前工作台和 V2 技术方案阅读界面；历史 V1 保持独立兼容展示。
+
+## 技术栈与架构
+
+| 层 | 当前实现 |
+| --- | --- |
+| 后端 | Python 3.12、Django 5.2、DRF、Simple JWT；模块化单体 |
+| 数据 | PostgreSQL + pgvector；业务表、知识索引与来源快照 |
+| 生成 | DeepSeek，三段 JSON/Semantic IR 输出 |
+| 检索 | OpenAI-compatible BGE-M3，1,024 维 |
+| 审查 | 独立 Qwen `qwen3.8-flash`，显式 `enable_thinking=false` |
+| 工作流 | LangGraph + PostgreSQL checkpointer；规则仍由 Django 服务执行 |
+| 前端 | Vue 3、TypeScript、Vite、Pinia、Vue Router、Element Plus |
+| 测试 | pytest / pytest-django；Vitest / Vue Test Utils |
+
+实际依赖版本以 [后端依赖](requirements/base.txt) 和 [前端依赖](frontend/package.json) 为准。系统没有另设向量数据库或消息队列。
+
+### 四个不能混淆的边界
+
+1. **RAG** 找到相关文档，不代表文档中的能力已获准进入方案。
+2. **Grounding** 检查事实是否经过审批、是否仍属当前索引、来源是否匹配；客户需求不能证明企业能力。
+3. **Proposal Admissibility** 检查建议的相关性、冲突、无依据承诺及 placement-aware atomicity；Qwen 只能否决，不能批准企业事实。
+4. **Human Review** 决定方案能否作为正式技术方案使用。生成成功只产生 `DRAFT`，自动质量评分不替代人工审核。
+
+详见 [架构](docs/architecture.md)、[AI 链路](docs/ai-pipeline.md) 与 [业务规则](docs/business-rules.md)。
+
+## 本地运行
+
+以下命令以 Windows PowerShell、项目根目录为上下文。使用 Python 3.12 和 Node.js 24+。PostgreSQL 及 pgvector 必须已由管理员准备；不要用 SQLite 替代，也不要自动修复或启动已有数据库实例。
+
+### 后端
+
+首次创建虚拟环境后，始终使用项目解释器：
 
 ```powershell
 py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r requirements\dev.txt
-```
-
-Copy the template, then replace every placeholder with local values:
-
-```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements/dev.txt
 Copy-Item .env.example .env
 ```
 
-`.env` selects `config.settings.local` and must provide:
+仅首次复制示例，不要覆盖已有 `.env`。在被 Git 忽略的 `.env` 中填写独立开发 secret、数据库连接和必要 provider 配置；示例不含可用凭据。
 
-- `DJANGO_SECRET_KEY`: a long random Django signing value.
-- `JWT_SIGNING_KEY`: a different long random JWT signing value.
-- `DATABASE_URL`: a PostgreSQL URL such as
-  `postgresql://salesmind:replace-with-local-db-password@127.0.0.1:5432/salesmind`.
-- `DJANGO_ALLOWED_HOSTS`: a comma-separated host list.
-- `DJANGO_CSRF_TRUSTED_ORIGINS`: a comma-separated origin list.
-
-URL-encode reserved characters in the database password. Process environment
-variables take precedence over values in `.env` for local settings.
-
-Apply migrations, create the technical Django Admin account, and start the
-development server:
+在明确允许初始化的本地数据库上执行：
 
 ```powershell
-.\.venv\Scripts\python.exe manage.py migrate
-.\.venv\Scripts\python.exe manage.py createsuperuser
-.\.venv\Scripts\python.exe manage.py runserver
-```
-
-The Django Admin site is available at `http://127.0.0.1:8000/admin/`.
-
-## Users, business roles, and technical privileges
-
-Every user has one business role: `admin`, `sales`, or `presales`. The role is
-application data; it is not a Django permission flag. In particular, assigning
-the business `admin` role does not grant access to Django Admin.
-
-`is_staff` allows a user to sign in to the Django Admin site when its model
-permissions allow it. `is_superuser` grants all Django permissions and also
-requires `is_staff=True`; `createsuperuser` creates this technical privileged
-account. These flags remain independent from the user's business role.
-
-## Authentication API
-
-All API endpoints are under `/api/auth/` and use JSON.
-
-### Login
-
-`POST /api/auth/login/`
-
-```json
-{
-  "username": "alice",
-  "password": "StrongPassword123!"
-}
-```
-
-Successful response (`200 OK`):
-
-```json
-{
-  "access": "<access-token>",
-  "refresh": "<refresh-token>"
-}
-```
-
-### Refresh an access token
-
-`POST /api/auth/refresh/`
-
-```json
-{
-  "refresh": "<refresh-token>"
-}
-```
-
-Successful response (`200 OK`):
-
-```json
-{
-  "access": "<new-access-token>"
-}
-```
-
-### Current user
-
-`GET /api/auth/me/` with `Authorization: Bearer <access-token>`.
-
-Successful response (`200 OK`):
-
-```json
-{
-  "id": 1,
-  "username": "alice",
-  "email": "alice@example.com",
-  "first_name": "Alice",
-  "last_name": "Seller",
-  "role": "sales"
-}
-```
-
-Access tokens last 15 minutes and refresh tokens last 7 days. Refresh-token
-rotation, token blacklisting, and a logout endpoint are not enabled. The API
-performs live user lookups, so deactivating a user rejects existing access and
-refresh tokens.
-
-## Tests and checks
-
-The test settings do not load `.env`; pass the PostgreSQL connection in the
-process environment. The test-only JWT default is used when `JWT_SIGNING_KEY`
-is not set.
-
-```powershell
-$env:DATABASE_URL = "postgresql://salesmind:replace-with-local-db-password@127.0.0.1:5432/salesmind"
-.\.venv\Scripts\python.exe -m pytest -q
-```
-
-With the local `.env` configured, verify migrations and Django configuration:
-
-```powershell
-.\.venv\Scripts\python.exe manage.py makemigrations --check --dry-run
 .\.venv\Scripts\python.exe manage.py migrate
 .\.venv\Scripts\python.exe manage.py check
+.\.venv\Scripts\python.exe manage.py createsuperuser
+.\.venv\Scripts\python.exe manage.py runserver 127.0.0.1:8000
 ```
 
-For a production-settings verification, provide every required value explicitly
-with safe non-production values, then run Django's deployment checks:
+创建管理账号时须填写业务 `role`。`is_staff / is_superuser` 本身不授予业务 Admin 权限；Grounding Facts 审批要求 active + staff + `role=admin`。
+
+### 前端
+
+另开终端：
 
 ```powershell
-$env:DJANGO_SETTINGS_MODULE = "config.settings.production"
-$env:DJANGO_SECRET_KEY = "verification-only-django-secret-key-with-at-least-32-characters"
-$env:JWT_SIGNING_KEY = "verification-only-jwt-signing-key-with-at-least-32-characters"
-$env:DATABASE_URL = "postgresql://salesmind:replace-with-local-db-password@127.0.0.1:5432/salesmind"
-$env:DJANGO_ALLOWED_HOSTS = "verification.example.test"
-$env:DJANGO_CSRF_TRUSTED_ORIGINS = "https://verification.example.test"
-.\.venv\Scripts\python.exe manage.py check --deploy
+Set-Location frontend
+npm ci
+npm run dev
 ```
 
-Also verify the installed interpreter and dependency consistency:
+访问 Vite 显示的本地地址（默认 `http://127.0.0.1:5173`）。开发代理将 `/api` 转发至 `http://127.0.0.1:8000`；Django Admin 位于 `http://127.0.0.1:8000/admin/`。
+
+### 离线产品演示
+
+`seed_demo` 使用 deterministic providers，不消耗真实模型 API 额度；仍经过正式 parser、准入、持久化和 review 服务。它不是真实模型质量证明。需先配置 `LANGGRAPH_CHECKPOINT_DATABASE_URL`，并仅在独立演示数据库运行：命令会显式建立 checkpoint 表和演示数据。
 
 ```powershell
-.\.venv\Scripts\python.exe --version
-.\.venv\Scripts\python.exe -m pip check
-.\.venv\Scripts\python.exe -m pip freeze
+$env:SALESMIND_DEMO_PASSWORD = Read-Host '输入仅供演示的强密码'
+.\.venv\Scripts\python.exe manage.py seed_demo
 ```
 
-Production deployment must terminate HTTPS correctly and pass the original
-HTTPS scheme through the configured proxy header; the verification values above
-are not deployment credentials.
+使用 `salesmind_demo_sales_a` 或 `salesmind_demo_presales_a` 登录，密码为刚输入的演示密码。五个场景覆盖知识平台、零售协同、企业服务、身份信息不足及电商技术修订。
 
-## Phase Two sales domain
+演示结束可运行 `manage.py clear_demo`；它只清理经身份与引用校验的 demo graph，发生冲突会停止，不会模糊删除用户数据。最后执行 `Remove-Item Env:SALESMIND_DEMO_PASSWORD`。离线 Demo 向量与真实 BGE 索引不能混用；通过 UI 发起新的真实生成需要可用的真实 provider、匹配索引和已审批事实。
 
-Phase Two delivers the Customer and Opportunity backend skeleton, minimum
-business-role isolation, safe Customer collision search, and active Presales
-options. API field names, URLs, and stored enum values are English; Chinese
-text is used for model display labels.
+完整配置及测试数据库前置条件见 [本地配置说明](docs/local-configuration.md)。
 
-### Domain model
+## 验证
 
-`Customer` is shared company master data and has no owner in V1. It contains
-`name`, `industry`, `company_size`, `basic_info`, `created_by`, and timestamps.
-Duplicate names are allowed. `created_by` is a required, database-audit-only
-`PROTECT` relation and is never returned by ordinary Customer APIs.
+后端测试设置不读取 `.env`。在已准备好 pgvector 测试模板的独立环境中提供 `DATABASE_URL` 和 `TEST_DATABASE_TEMPLATE` 后运行：
 
-`Customer.basic_info` is reserved for shared, non-sensitive company
-information. Do not put passwords, tokens, private personal data, or other
-secrets in it. Customer and Opportunity deletion relationships are protected;
-users are deactivated (`is_active=false`) instead of deleted so audit and
-ownership relations remain valid.
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe manage.py check
+.\.venv\Scripts\python.exe manage.py makemigrations --check --dry-run
+git diff --check
+```
 
-`Opportunity` represents one sales project for a Customer. It contains
-`project_name`, `customer`, `sales_owner`, optional `presales_owner`,
-`raw_requirement`, `budget`, `stage`, `status`, `expected_launch_date`,
-`created_by`, and timestamps. Its Customer relation and all three ownership or
-audit user relations (`sales_owner`, `presales_owner`, and `created_by`) use
-`PROTECT`; `raw_requirement` may be blank.
+前端在 `frontend/` 中运行 `npm test`、`npm run type-check`、`npm run build`。普通自动化使用 fake/deterministic providers，不应调用真实 API。
 
-Stages are `initial_contact`, `requirement_analysis`, `presales_support`,
-`solution`, `quotation`, and `negotiation`. Statuses are `active`, `won`,
-`lost`, and `closed`. `closed` means manually terminated or archived; it is
-distinct from a won or lost opportunity.
+冻结基线提交前记录的后端验证为 **1,904 passed**。这是一次离线回归结果，不是线上可用性指标；本次文档整理不会重新宣称全套测试已运行。
 
-### API conventions and role matrix
+## 真实 benchmark 证据
 
-All routes below use JSON and Bearer authentication. Customer search and the
-Opportunity list use page-number pagination with 20 records per page.
-Business access checks use `User.role` only; Django `is_staff` and
-`is_superuser` do not grant or bypass business access. An object outside a
-role-filtered Opportunity queryset returns `404`.
+- `manufacturing_knowledge` 已完整通过真实生成链路并持久化 Solution + Provenance，运行基线为 `33157ed`。
+- `enterprise_service_approved` 在 `1141281` 完整通过；71/71 verifier claims 为 `ADMISSIBLE + ATOMIC`，写入 317 条 provenance，`solution-quality-v2.1 = 91/100`，四项自动 hard gates 全 PASS。
+- 企业服务 Core 首次输出违反局部数量合同，现有 bounded regeneration 自动恢复一次；没有放宽 parser 或手工修改输出。
 
-| Resource/action | Admin | Sales | Presales |
-| --- | --- | --- | --- |
-| Customer create, search, detail | yes | yes | `403` |
-| Ordinary Customer list | `405` | `405` | `403` |
-| Customer PATCH/PUT/DELETE | `405` | `405` | `403` |
-| Opportunity list/detail | all Opportunities | own Opportunities | assigned Opportunities |
-| Opportunity create | `403` | yes | `403` |
-| Opportunity PATCH | `403` | own Opportunities only | `403` |
-| Opportunity PUT/DELETE | `405` | `405` | `405` |
-| Presales options | `403` | yes | `403` |
+这是两个已观察到的成功运行，不代表五场景稳定通过。benchmark 使用固定需求与事实 fixture 准备上下文；真实调用范围及各层指标见 [真实 benchmark 总结](docs/real-provider-benchmark-summary.md)。历史 87 分使用旧 rubric，不能直接与 91 分比较。
 
-Thus Admin and Presales have read-only Opportunity access. Sales can update
-only Opportunities they own.
+## 交付阅读入口
 
-### Customer APIs
+- [核心架构](docs/architecture.md) / [AI pipeline](docs/ai-pipeline.md)
+- [业务权限与安全规则](docs/business-rules.md)
+- [真实 benchmark 总结](docs/real-provider-benchmark-summary.md) / [分层评估口径](docs/benchmark-layered-evaluation.md)
+- [自动质量 rubric v2.1](docs/solution-quality-rubric.md)
+- [Known Limitations](docs/known-limitations.md)
+- [面试技术复盘](docs/interview-retrospective.md)
+- [设计决策](docs/decisions.md) / [历史技术债](docs/technical-debt.md)
 
-- `POST /api/customers/` creates a Customer for an Admin or Sales user. The
-  server stores the authenticated user as `created_by`; clients cannot use
-  this API to set or change it.
-- `GET /api/customers/{id}/` retrieves the safe Customer shape.
-- `GET /api/customers/search/?q=...` performs a case-insensitive
-  `name__icontains` collision search. A non-empty `q` is required, and results
-  are ordered by `name`, then `id`, with 20 results per page.
-
-Customer search/detail responses contain only shared Customer fields and an
-active-Opportunity summary. Each summary is exactly:
-`id`, `project_name`, `stage`, `status`, `is_mine`, and
-`is_followed_by_other_sales`. Won, lost, and closed Opportunities are excluded.
-The summary never exposes `raw_requirement`, `budget`, ownership objects,
-`created_by`, or other sensitive Opportunity fields. Customer `created_by` is
-also absent from create, search, and detail responses. The ordinary Customer
-collection is intentionally not exposed; Customer PATCH, PUT, and DELETE all
-return `405`.
-
-The search uses `name__icontains` without a normal B-Tree name index. A future
-PostgreSQL `pg_trgm`/GIN optimization is not part of the current delivery.
-
-### Opportunity APIs
-
-- `GET /api/opportunities/` lists Opportunities visible to the caller.
-- `POST /api/opportunities/` lets Sales create an Opportunity.
-- `GET /api/opportunities/{id}/` retrieves an authorized Opportunity.
-- `PATCH /api/opportunities/{id}/` lets the owning Sales user update an
-  Opportunity.
-
-Opportunity lists always order by `-updated_at`, then `-id`, including across
-  20-record pages. A Sales create accepts the project, Customer, optional
-  active Presales assignment, raw requirement, budget, and expected launch
-  date. The server sets `sales_owner` and `created_by` to the authenticated
-  Sales user and leaves stage/status at their model defaults
-  (`initial_contact`/`active`). A Presales assignment must reference an active
-  user whose business role is `presales`.
-
-Create payloads containing `sales_owner`, `created_by`, `stage`, or `status`
-are explicitly rejected with `400`; they are not silently ignored. PATCH
-writes only `project_name`, `presales_owner`, `raw_requirement`, `budget`,
-`stage`, `status`, and `expected_launch_date`. PATCH payloads containing
-`customer`, `sales_owner`, `created_by`, `created_at`, or `updated_at` are
-explicitly rejected with `400`, including when the value is `null`.
-`Opportunity.customer` is immutable through ordinary PATCH. PUT and DELETE
-remain disabled and return `405`.
-
-### Active Presales options
-
-`GET /api/users/presales-options/` is available only to Sales users. It returns
-active users with business role `presales`, ordered by `username`, then `id`,
-and exposes only `id`, `username`, `first_name`, and `last_name`.
-
-## Out of scope
-
-The following remain deliberately unimplemented: AI, RAG, LLM integrations,
-pgvector, LangGraph, frontend code, background jobs, Redis, Celery, Kafka,
-Docker, microservices, complex or runtime-configurable RBAC, ownership
-transfer, customer merge, and speculative service/selector layers. There are
-no editable Customer or Opportunity Django Admin screens; Django Admin is
-still for User management only. PostgreSQL `pg_trgm`/GIN search optimization
-is future work, not an implemented index. JWT rotation, JWT blacklisting,
-logout, and related token lifecycle features also remain out of scope.
+当前定位是可验证的求职展示项目，不是已证明具备高并发、生产 SLA 或自动售前审批能力的系统。
