@@ -45,6 +45,7 @@ from apps.sales.services.solution_schema import (
     SolutionStatementType,
 )
 from apps.sales.services.solution_schema_v2 import (
+    ArchitectureFlowTypeV2,
     SolutionClaimTypeV2,
     V2AssemblyResult,
     assemble_solution_draft_v2,
@@ -52,6 +53,7 @@ from apps.sales.services.solution_schema_v2 import (
 )
 
 
+QUALITY_RUBRIC_VERSION = "solution-quality-v2.1"
 _ENTERPRISE_CAPABILITY_BASIS_ID = "enterprise_capability_basis"
 _ENTERPRISE_CAPABILITY_GAPS_ID = "enterprise_capability_gaps"
 _PRECISE_COMMITMENT = re.compile(
@@ -86,6 +88,7 @@ class QualityEvaluation:
     fact_repeat_count: int
     summary_proposal_ratio: float
     proposed_solution_proposal_ratio: float
+    rubric_version: str = QUALITY_RUBRIC_VERSION
 
     @property
     def score(self) -> int:
@@ -388,13 +391,16 @@ def evaluate_solution_quality(
         "rationale": all(item.rationale_claim_ids for item in draft.architecture.components),
         "interface": all(item.interface_claim_ids for item in draft.architecture.components),
     }
+    flow_types = {flow.flow_type for flow in draft.architecture.flows}
     architecture_score = (
         (3 if draft.architecture.overview_claim_ids else 0)
-        + (5 if component_count >= 5 else 3 if component_count >= 3 else 2 if component_count >= 2 else 1 if component_count else 0)
+        + (5 if component_count >= 3 else 2 if component_count >= 2 else 1 if component_count else 0)
         + (3 if component_count >= 3 and complete_component_fields["responsibility"] else 1 if complete_component_fields["responsibility"] and component_count else 0)
         + (3 if component_count >= 3 and complete_component_fields["rationale"] else 1 if complete_component_fields["rationale"] and component_count else 0)
         + (3 if component_count >= 3 and complete_component_fields["interface"] else 1 if complete_component_fields["interface"] and component_count else 0)
-        + (3 if any(item.dependency_component_ids for item in draft.architecture.components) else 0)
+        + (1 if any(item.dependency_component_ids for item in draft.architecture.components) else 0)
+        + (1 if ArchitectureFlowTypeV2.REQUEST in flow_types else 0)
+        + (1 if ArchitectureFlowTypeV2.DATA in flow_types else 0)
     )
     topic_names = {block.topic.value for block in draft.deployment_and_integration}
     deployment_claims = [claims[item] for item in sections["deployment_and_integration"]]

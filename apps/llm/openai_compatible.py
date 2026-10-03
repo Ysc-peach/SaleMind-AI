@@ -126,8 +126,10 @@ def _safe_provider_error(error: OpenAIError) -> LLMProviderError:
             if _provider_error_code(error) in _QUOTA_CODES
             else LLMProviderFailureKind.RATE_LIMITED
         )
-    elif isinstance(error, (AuthenticationError, PermissionDeniedError)):
+    elif isinstance(error, AuthenticationError):
         kind = LLMProviderFailureKind.AUTH_ERROR
+    elif isinstance(error, PermissionDeniedError):
+        kind = LLMProviderFailureKind.PERMISSION_DENIED
     elif isinstance(error, APIResponseValidationError):
         kind = LLMProviderFailureKind.INVALID_RESPONSE
     elif isinstance(error, APIConnectionError):

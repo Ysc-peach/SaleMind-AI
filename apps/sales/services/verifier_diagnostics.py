@@ -17,6 +17,7 @@ class QwenFailureCategory(StrEnum):
     CONNECTION_ERROR = "qwen_connection_error"
     SERVER_ERROR = "qwen_server_error"
     AUTH_ERROR = "qwen_auth_error"
+    PERMISSION_DENIED = "qwen_permission_denied"
     QUOTA_ERROR = "qwen_quota_error"
     INVALID_RESPONSE = "qwen_invalid_response"
     RESPONSE_PARSE_ERROR = "qwen_response_parse_error"
@@ -47,6 +48,7 @@ _CATEGORY_BY_KIND = {
     LLMProviderFailureKind.CONNECTION_ERROR: QwenFailureCategory.CONNECTION_ERROR,
     LLMProviderFailureKind.SERVER_ERROR: QwenFailureCategory.SERVER_ERROR,
     LLMProviderFailureKind.AUTH_ERROR: QwenFailureCategory.AUTH_ERROR,
+    LLMProviderFailureKind.PERMISSION_DENIED: QwenFailureCategory.PERMISSION_DENIED,
     LLMProviderFailureKind.QUOTA_ERROR: QwenFailureCategory.QUOTA_ERROR,
     LLMProviderFailureKind.INVALID_RESPONSE: QwenFailureCategory.INVALID_RESPONSE,
     LLMProviderFailureKind.RESPONSE_PARSE_ERROR: QwenFailureCategory.RESPONSE_PARSE_ERROR,

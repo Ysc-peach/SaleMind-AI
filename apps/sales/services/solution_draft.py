@@ -10,11 +10,13 @@ from apps.knowledge.embeddings.base import EmbeddingProvider
 from apps.knowledge.services.search import search_knowledge
 from apps.llm.base import LLMMessage, LLMProvider
 from apps.llm.factory import get_llm_provider
+from apps.llm.exceptions import LLMProviderError
 from apps.llm.verifier_factory import get_verifier_provider
 from apps.sales.models import OpportunityRequirementAnalysis as AnalysisRecord
 from apps.sales.services.requirement_analysis_history import analysis_record_to_domain
 from apps.sales.services.solution_admission import GroundingAdmission, build_solution_admission
 from apps.sales.services.solution_errors import SolutionDraftError, SolutionDraftErrorCode
+from apps.sales.services.solution_evaluation import emit_evaluation
 from apps.sales.services.solution_grounding import (
     verify_atomic_solution_proposals,
     verify_atomic_solution_v2_proposals,
@@ -75,22 +77,37 @@ def _generate_and_parse_v2_pass(
     provider: LLMProvider,
     messages: Sequence[LLMMessage],
     parse: Callable[[str], AtomicSolutionProposalSetV2],
+    *,
+    pass_name: str | None = None,
 ) -> AtomicSolutionProposalSetV2:
     """Regenerate once only when strict parsing rejects provider output."""
 
     for attempt in range(2):
-        generation = provider.generate_json(
-            messages,
-            max_output_tokens=settings.SOLUTION_DRAFT_MAX_OUTPUT_TOKENS,
-        )
         try:
-            return parse(generation.content)
+            generation = provider.generate_json(
+                messages,
+                max_output_tokens=settings.SOLUTION_DRAFT_MAX_OUTPUT_TOKENS,
+            )
+        except LLMProviderError as error:
+            emit_evaluation("generation_provider", phase=pass_name, success=False,
+                            category=error.failure_kind.value if error.failure_kind else None)
+            raise
+        emit_evaluation("generation_provider", phase=pass_name, success=True)
+        try:
+            result = parse(generation.content)
         except SolutionDraftError as error:
+            failure = getattr(error, "contract_failure", None)
+            emit_evaluation("generation_parser", phase=pass_name, success=False,
+                            category=failure.category if failure else "unknown_contract_failure")
             if (
                 attempt == 1
                 or error.code != SolutionDraftErrorCode.INVALID_RESPONSE.value
             ):
                 raise
+        else:
+            emit_evaluation("generation_parser", phase=pass_name, success=True,
+                            count=len(result.proposals))
+            return result
     raise AssertionError("unreachable after two generation attempts")
 
 
@@ -137,7 +154,11 @@ def generate_grounded_solution_draft(
             analysis_id, readiness, SolutionGenerationStatus.INSUFFICIENT_EVIDENCE,
             None, (), unresolved_items, None, schema_version=schema_version,
         )
-    admission = build_solution_admission(typed, sources)
+    try:
+        admission = build_solution_admission(typed, sources)
+    except Exception:
+        emit_evaluation("deterministic_admission", success=False)
+        raise
     provider = llm_provider if llm_provider is not None else get_llm_provider()
     if schema_version == 1:
         generation = provider.generate(
@@ -157,6 +178,7 @@ def generate_grounded_solution_draft(
                 content,
                 allowed_source_labels=admission.allowed_proposal_source_labels,
             ),
+            pass_name="core",
         )
         implementation_budget = implementation_runtime_proposal_budget(
             len(core.proposals)
@@ -171,6 +193,7 @@ def generate_grounded_solution_draft(
                 allowed_source_labels=admission.allowed_proposal_source_labels,
                 max_proposals=implementation_budget,
             ),
+            pass_name="implementation",
         )
         assurance_budget = assurance_runtime_proposal_budget(
             len(core.proposals), len(implementation.proposals)
@@ -186,10 +209,16 @@ def generate_grounded_solution_draft(
                 implementation=implementation,
                 max_proposals=assurance_budget,
             ),
+            pass_name="assurance",
         )
-        proposals = merge_solution_v2_proposal_passes(
-            core, implementation, assurance
-        )
+        try:
+            proposals = merge_solution_v2_proposal_passes(
+                core, implementation, assurance
+            )
+        except SolutionDraftError:
+            emit_evaluation("global_structure", success=False)
+            raise
+        emit_evaluation("global_structure", success=True, count=len(proposals.proposals))
         has_proposals = bool(proposals.proposals)
     if has_proposals:
         active_verifier = verifier_provider
@@ -218,19 +247,28 @@ def generate_grounded_solution_draft(
     # External model calls must stay outside database transactions. Rebuild the
     # deterministic admission afterward so a concurrent reindex/approval change
     # cannot return claims whose provenance is no longer current.
-    if build_solution_admission(typed, sources) != admission:
+    try:
+        current_admission = build_solution_admission(typed, sources)
+    except Exception:
+        emit_evaluation("deterministic_admission", success=False)
+        raise
+    if current_admission != admission:
+        emit_evaluation("deterministic_admission", success=False)
         raise SolutionDraftError(SolutionDraftErrorCode.INVALID_INPUT)
+    emit_evaluation("deterministic_admission", success=True)
     if schema_version == 1:
         claims = AtomicSolutionClaimSet(admission.claims.claims + proposals.claims)
         draft = assemble_solution_draft(claims, typed)
         bindings = ()
     else:
+        emit_evaluation("assembly_started")
         assembly = assemble_solution_draft_v2(
             build_v2_deterministic_items(typed, admission),
             proposals,
         )
         draft = assembly.draft
         bindings = assembly.provenance_bindings
+        emit_evaluation("assembly", success=True)
     return GroundedSolutionDraftResult(
         analysis_id, readiness, SolutionGenerationStatus.GENERATED,
         draft, sources, unresolved_items, admission,

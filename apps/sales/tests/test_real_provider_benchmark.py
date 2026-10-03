@@ -211,6 +211,52 @@ def test_preflight_failure_happens_before_solution_persistence(benchmark_admin):
     assert SolutionDraftRecord.objects.count() == before
 
 
+def test_embedding_transport_failure_is_reported_without_calling_generation(benchmark_admin):
+    from apps.knowledge.exceptions import KnowledgeDocumentError, KnowledgeDocumentErrorCode
+    from apps.sales.services.solution_evaluation import BenchmarkEvaluationReport
+    from apps.knowledge.services.indexing import index_document
+    subject = _benchmark_module()
+    document = _pending_document(benchmark_admin)
+    index_document(document.pk, provider=ProductionSpaceFake())
+    class FailedQuery(ProductionSpaceFake):
+        def embed_query(self, text):
+            raise KnowledgeDocumentError(KnowledgeDocumentErrorCode.EMBEDDING_PROVIDER_ERROR)
+    measured = BenchmarkEvaluationReport()
+    with pytest.raises(KnowledgeDocumentError):
+        subject.run_real_provider_benchmark_gate(
+            opportunity=None, analysis=None, created_by=None,
+            ownership=subject.RealBenchmarkKnowledgeOwnership(uuid4(), (document.pk,), ()),
+            query="private deployment", embedding_provider=FailedQuery(), llm_provider=None,
+            verifier_provider=None, idempotency_key=uuid4(), evaluation_report=measured,
+        )
+    result = measured.to_dict()
+    assert result["provider_availability"]["embedding"]["status"] == "FAIL"
+    assert result["provider_availability"]["generation"]["status"] == "NOT_REACHED"
+    assert result["persistence"]["solution_persisted"] is False
+
+
+def test_committed_persistence_is_observed_without_a_diagnostic_database_query(monkeypatch):
+    from apps.sales.services.solution_evaluation import emit_evaluation
+    subject = _benchmark_module()
+    preflight, solution = object(), object()
+    monkeypatch.setattr(subject, "preflight_real_benchmark_retrieval", lambda *args, **kwargs: preflight)
+    def persisted(*args, **kwargs):
+        emit_evaluation("persistence", success=True, provenance=True)
+        return solution
+    monkeypatch.setattr(subject, "generate_and_persist_solution_draft", persisted)
+    monkeypatch.setattr(subject.SolutionDraftProvenance.objects, "filter",
+                        lambda *args, **kwargs: pytest.fail("Diagnostic-only query must not be added"))
+    result = subject.run_real_provider_benchmark_gate(
+        opportunity=None, analysis=None, created_by=None, ownership=None,
+        query="fixed input", embedding_provider=None, llm_provider=None,
+        verifier_provider=None, idempotency_key=uuid4(),
+    )
+    assert result.solution is solution
+    assert result.evaluation["persistence"] == {
+        "status": "PASS", "solution_persisted": True, "provenance_persisted": True,
+    }
+
+
 def test_cleanup_removes_only_run_owned_knowledge(benchmark_admin):
     subject = _benchmark_module()
     unrelated = _pending_document(

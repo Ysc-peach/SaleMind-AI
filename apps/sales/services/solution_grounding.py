@@ -2,15 +2,17 @@
 
 import json
 import re
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from contextvars import copy_context
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import NoReturn, TYPE_CHECKING
+from typing import Callable, NoReturn, TYPE_CHECKING, TypeVar
 
 from django.conf import settings
 
 from apps.llm.base import LLMProvider
 from apps.llm.factory import get_llm_provider
+from apps.sales.services.solution_evaluation import emit_evaluation
 from apps.sales.services.requirement_analysis import (
     ClarifyingQuestion,
     OpportunityRequirementAnalysis,
@@ -211,20 +213,12 @@ def verify_atomic_solution_proposals(
         raise SolutionDraftGroundingError(SolutionGroundingErrorCode.INVALID_INPUT)
     packets = build_atomic_grounding_claim_packets(analysis, proposals, sources)
     provider = llm_provider if llm_provider is not None else get_llm_provider()
-    with ThreadPoolExecutor(
-        max_workers=min(max_concurrency, len(packets)),
+    verifications = _verify_bounded_packets(
+        packets,
+        lambda _index, packet: _verify_packets((packet,), provider),
+        max_concurrency=max_concurrency,
         thread_name_prefix="solution-proposal-verifier",
-    ) as executor:
-        futures = tuple(
-            executor.submit(_verify_packets, (packet,), provider)
-            for packet in packets
-        )
-        try:
-            verifications = tuple(future.result() for future in futures)
-        except BaseException:
-            for future in futures:
-                future.cancel()
-            raise
+    )
     return SolutionGroundingVerification(
         passed=True,
         results=tuple(
@@ -287,6 +281,7 @@ def verify_atomic_solution_v2_proposals(
             elif placement.field is SolutionV2PlacementField.IMPACT:
                 risk_impacts.setdefault(placement.container_key, []).append(proposal.text)
 
+    emit_evaluation("deterministic_admission_started")
     packets = []
     for index, proposal in enumerate(proposals.proposals):
         related_fields = proposal.related_requirement_fields
@@ -309,6 +304,7 @@ def verify_atomic_solution_v2_proposals(
             matched_category: str | None = None,
             matched_value: str | None = None,
         ) -> None:
+            emit_evaluation("deterministic_admission", success=False)
             if diagnostics is None:
                 return
             diagnostics.deterministic_rejection(
@@ -429,27 +425,69 @@ def verify_atomic_solution_v2_proposals(
     ):
         raise SolutionDraftGroundingError(SolutionGroundingErrorCode.INVALID_INPUT)
     provider = llm_provider if llm_provider is not None else get_llm_provider()
-    with ThreadPoolExecutor(
-        max_workers=min(max_concurrency, len(packets)),
+    emit_evaluation("deterministic_admission", success=True)
+    _verify_bounded_packets(
+        tuple(packets),
+        lambda index, packet: _verify_proposal_admissibility_packet(
+            packet,
+            provider,
+            call_index=index + 1,
+            diagnostics=diagnostics,
+        ),
+        max_concurrency=max_concurrency,
         thread_name_prefix="solution-proposal-admissibility",
+    )
+    emit_evaluation("verifier_admission", success=True)
+    return proposals
+
+
+_Packet = TypeVar("_Packet")
+_Verification = TypeVar("_Verification")
+
+
+def _verify_bounded_packets(
+    packets: tuple[_Packet, ...],
+    verify_packet: Callable[[int, _Packet], _Verification],
+    *,
+    max_concurrency: int,
+    thread_name_prefix: str,
+) -> tuple[_Verification, ...]:
+    """Bound running/queued claims and observe completed failures before refilling.
+
+    Result order stays tied to the input. On rejection, cancel unstarted work;
+    executor shutdown drains requests already running under provider timeouts.
+    """
+    window = min(max_concurrency, len(packets))
+    with ThreadPoolExecutor(
+        max_workers=window,
+        thread_name_prefix=thread_name_prefix,
     ) as executor:
-        futures = tuple(
-            executor.submit(
-                _verify_proposal_admissibility_packet,
-                packet,
-                provider,
-                call_index=index,
-                diagnostics=diagnostics,
-            )
-            for index, packet in enumerate(packets, start=1)
-        )
+        pending = {}
+        results = {}
+        next_index = 0
         try:
-            tuple(future.result() for future in futures)
+            for _ in range(window):
+                future = executor.submit(copy_context().run, verify_packet, next_index, packets[next_index])
+                pending[future] = next_index
+                next_index += 1
+            while pending:
+                completed, _ = wait(pending, return_when=FIRST_COMPLETED)
+                # Include work that finished as wait returned, especially vetoes.
+                completed.update(future for future in pending if future.done())
+                for future in sorted(completed, key=pending.__getitem__):
+                    index = pending.pop(future)
+                    results[index] = future.result()
+                while next_index < len(packets) and len(pending) < window:
+                    if any(future.done() for future in pending):
+                        break  # Consume newly completed results before dispatch.
+                    future = executor.submit(copy_context().run, verify_packet, next_index, packets[next_index])
+                    pending[future] = next_index
+                    next_index += 1
         except BaseException:
-            for future in futures:
+            for future in pending:
                 future.cancel()
             raise
-    return proposals
+    return tuple(results[index] for index in range(len(packets)))
 
 
 _CONDITIONAL_BOUNDARY_MARKERS = (
@@ -611,6 +649,8 @@ def _verify_proposal_admissibility_packet(
             build_proposal_admissibility_messages((packet,))
         )
     except LLMProviderError as error:
+        emit_evaluation("verifier_provider", success=False,
+                        category=error.failure_kind.value if error.failure_kind else None)
         if diagnostics is not None and started is not None:
             diagnostics.failure(
                 started,
@@ -619,12 +659,14 @@ def _verify_proposal_admissibility_packet(
                 provider_request_id=error.request_id,
             )
         raise
+    emit_evaluation("verifier_provider", success=True)
     try:
         result = _parse_proposal_admissibility_results(
             generation.content,
             packets=(packet,),
         )[0]
     except SolutionDraftGroundingError as error:
+        emit_evaluation("verifier_admission", success=False)
         if (
             diagnostics is not None
             and started is not None
@@ -641,13 +683,16 @@ def _verify_proposal_admissibility_packet(
             started,
             provider_request_id=generation.provider_request_id,
         )
-    if (
+    veto = (
         result.decision is not ProposalAdmissibilityDecision.ADMISSIBLE
         or (
             packet.atomicity_required
             and result.atomicity is not GroundingAtomicity.ATOMIC
         )
-    ):
+    )
+    emit_evaluation("verifier_verdict", decision=result.decision.value,
+                    atomicity=result.atomicity.value, veto=veto)
+    if veto:
         _proposal_not_admissible(packet.location)
     return result
 

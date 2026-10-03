@@ -19,6 +19,7 @@ class LLMProviderFailureKind(StrEnum):
     CONNECTION_ERROR = "connection_error"
     SERVER_ERROR = "server_error"
     AUTH_ERROR = "auth_error"
+    PERMISSION_DENIED = "permission_denied"
     QUOTA_ERROR = "quota_error"
     INVALID_RESPONSE = "invalid_response"
     RESPONSE_PARSE_ERROR = "response_parse_error"

@@ -19,70 +19,39 @@ from apps.sales.services.solution_readiness import SolutionReadiness
 from apps.sales.services.solution_retrieval import SolutionSource
 
 
-MAX_ARCHITECTURE_COMPONENTS = 4
-CORE_PROPOSED_SOLUTION_LIMIT = 5
-CORE_ARCHITECTURE_OVERVIEW_LIMIT = 2
-CORE_COMPONENT_FIELD_LIMITS = {
-    "responsibilities": 2,
-    "rationale": 1,
-    "interfaces": 2,
-}
-CORE_DEPLOYMENT_TOPIC_LIMITS = {
-    "deployment": 4,
-    "integration": 3,
-    "data_security": 2,
-    "environment": 2,
-}
-CORE_CAPABILITY_GROUP_LIMIT = 2
-CORE_CAPABILITY_GROUP_ITEMS_LIMIT = 2
-MAX_CORE_PROPOSALS = (
-    CORE_PROPOSED_SOLUTION_LIMIT
-    + CORE_ARCHITECTURE_OVERVIEW_LIMIT
-    + MAX_ARCHITECTURE_COMPONENTS * (1 + sum(CORE_COMPONENT_FIELD_LIMITS.values()))
-    + sum(CORE_DEPLOYMENT_TOPIC_LIMITS.values())
-    + CORE_CAPABILITY_GROUP_LIMIT * CORE_CAPABILITY_GROUP_ITEMS_LIMIT
+from apps.sales.services.solution_generation_contract import (
+    MAX_ARCHITECTURE_COMPONENTS,
+    CORE_PROPOSED_SOLUTION_LIMIT,
+    CORE_ARCHITECTURE_OVERVIEW_LIMIT,
+    CORE_COMPONENT_FIELD_LIMITS,
+    CORE_DEPLOYMENT_TOPIC_LIMITS,
+    CORE_CAPABILITY_GROUP_LIMIT,
+    CORE_CAPABILITY_GROUP_ITEMS_LIMIT,
+    MAX_CORE_PROPOSALS,
+    MAX_IMPLEMENTATION_PROPOSALS,
+    MAX_ASSURANCE_PROPOSALS,
+    MAX_ASSURANCE_RISKS,
+    ASSURANCE_RISK_FIELDS,
+    MAX_ASSURANCE_ACCEPTANCE,
+    MAX_ASSURANCE_OUT_OF_SCOPE,
+    MAX_ASSURANCE_PHASE_ACCEPTANCE,
+    MAX_SOLUTION_V2_PROPOSALS,
+    MAX_IMPLEMENTATION_PHASES,
+    IMPLEMENTATION_PHASE_FIELD_LIMITS,
+    MAX_IMPLEMENTATION_MILESTONES,
+    IMPLEMENTATION_MILESTONE_FIELD_LIMITS,
+    IMPLEMENTATION_SECTION_PROPOSAL_LIMITS,
+    ASSURANCE_SECTION_PROPOSAL_LIMITS,
+    LOCAL_REF,
+    SEMANTIC_IR_VERSION,
+    SEMANTIC_ROOT_KEYS,
+    validate_claim_fields,
+    validate_citation_allowlist,
+    closed_object,
+    reject_contract,
 )
-MAX_IMPLEMENTATION_PROPOSALS = 18
-MAX_ASSURANCE_PROPOSALS = 20
-MAX_ASSURANCE_RISKS = 3
-ASSURANCE_RISK_FIELDS = ("condition", "impact", "mitigation", "trigger")
-MAX_ASSURANCE_ACCEPTANCE = 6
-MAX_ASSURANCE_OUT_OF_SCOPE = 2
-MAX_ASSURANCE_PHASE_ACCEPTANCE = 6
-MAX_SOLUTION_V2_PROPOSALS = (
-    MAX_CORE_PROPOSALS + MAX_IMPLEMENTATION_PROPOSALS + MAX_ASSURANCE_PROPOSALS
-)
+
 _MAX_LEGACY_SINGLE_PASS_PROPOSALS = 38
-
-MAX_IMPLEMENTATION_PHASES = 4
-IMPLEMENTATION_PHASE_FIELD_LIMITS = {
-    "objective": (1, 1),
-    "tasks": (1, 2),
-    "deliverables": (1, 1),
-    "timing": (0, 1),
-}
-MAX_IMPLEMENTATION_TASKS_AND_TIMING = 6
-MAX_IMPLEMENTATION_MILESTONES = 2
-IMPLEMENTATION_MILESTONE_FIELD_LIMITS = {
-    "outcome": (1, 1),
-    "timing": (0, 1),
-}
-
-IMPLEMENTATION_SECTION_PROPOSAL_LIMITS = {
-    "implementation_plan": 16,
-    "milestones": MAX_IMPLEMENTATION_MILESTONES * (
-        IMPLEMENTATION_MILESTONE_FIELD_LIMITS["outcome"][1]
-        + IMPLEMENTATION_MILESTONE_FIELD_LIMITS["timing"][1]
-    ),
-}
-ASSURANCE_SECTION_PROPOSAL_LIMITS = {
-    "risks": MAX_ASSURANCE_RISKS * len(ASSURANCE_RISK_FIELDS),
-    "acceptance_criteria": MAX_ASSURANCE_ACCEPTANCE,
-    "assumptions": 2,
-    "open_questions": 2,
-    "out_of_scope": MAX_ASSURANCE_OUT_OF_SCOPE,
-}
-
 
 class SolutionV2Section(StrEnum):
     PROPOSED_SOLUTION = "proposed_solution"
@@ -299,8 +268,7 @@ _ASSURANCE_RELATIONS = frozenset({
     SolutionV2StructureRelationType.PHASE_ACCEPTANCE,
 })
 
-_CONTAINER_KEY = re.compile(r"[a-z][a-z0-9_]{0,63}")
-_SOURCE_TOKEN = re.compile(r"(?<![A-Za-z0-9_])S[0-9]+(?![A-Za-z0-9_])")
+_CONTAINER_KEY = LOCAL_REF
 
 _SYSTEM_PROMPT = """你是企业售前解决方案助手。你只能生成待验证的原子 proposal，不能生成或重分类客户事实、企业事实、假设、待确认事项。
 程序负责事实准入、业务权限、最终结构和来源持久化；模型没有这些权限。所有 proposal 必须引用允许的企业证据，并且 one proposal = one independently approvable/rejectable technical judgment。
@@ -552,7 +520,7 @@ def _semantic_pass_prompt(pass_name: str, runtime_budget: int) -> str:
         return {**claim, "text": text}
     if pass_name == "core":
         example = {
-            "ir_version": "semantic_v1", "proposed_solution": [sample("设置受控的企业应用入口。")],
+            "ir_version": SEMANTIC_IR_VERSION, "proposed_solution": [sample("设置受控的企业应用入口。")],
             "capability_groups": [{
                 "ref": "capability_basis",
                 "items": [sample("已批准能力可支撑受控的企业应用入口。")],
@@ -650,7 +618,7 @@ def _semantic_pass_prompt(pass_name: str, runtime_budget: int) -> str:
         )
     elif pass_name == "implementation":
         example = {
-            "ir_version": "semantic_v1",
+            "ir_version": SEMANTIC_IR_VERSION,
             "phases": [{"ref": "discovery", "objective": [sample("确认集成接口边界。")],
                         "tasks": [sample("核对目标系统接口能力。")],
                         "deliverables": [sample("形成接口清单。")]}],
@@ -687,7 +655,7 @@ def _semantic_pass_prompt(pass_name: str, runtime_budget: int) -> str:
         )
     elif pass_name == "assurance":
         example = {
-            "ir_version": "semantic_v1",
+            "ir_version": SEMANTIC_IR_VERSION,
             "risks": [{"ref": "integration_change", "condition": [sample("若接口契约后续发生变化。")],
                        "impact": [sample("适配器需要返工。")],
                        "mitigation": [sample("实施前验证接口契约。")],
@@ -728,7 +696,7 @@ def _semantic_pass_prompt(pass_name: str, runtime_budget: int) -> str:
     return (
         semantics + "\n" + contract + "\n"
         "只返回紧凑 JSON，不含 Markdown 或 JSON 之外的文字。"
-        "顶层必须使用示例中的 ir_version=semantic_v1 和本 pass 专用字段，不得输出旧版 proposals 列表。"
+        f"顶层必须使用示例中的 ir_version={SEMANTIC_IR_VERSION} 和本 pass 专用字段，不得输出旧版 proposals 列表。"
         "每条 claim 恰好只有 text、citations、related_requirement_fields。"
         "citations 至少一项且只使用输入允许的 S1...Sn；不可编造或自动补引用。"
         "related_requirement_fields 只允许当前分析中确实存在、且直接相关的维度；"
@@ -996,6 +964,7 @@ def _validate_section_budgets(
     *,
     limits: dict[str, int],
     max_proposals: int,
+    section_paths: dict[str, str] | None = None,
 ) -> None:
     maximum_ceiling = (
         MAX_IMPLEMENTATION_PROPOSALS
@@ -1007,14 +976,23 @@ def _validate_section_budgets(
         if limits is IMPLEMENTATION_SECTION_PROPOSAL_LIMITS
         else SolutionV2OutputDiagnosticCategory.ASSURANCE_TOTAL_BUDGET_EXCEEDED
     )
-    if _section_budget_failure_category(
-        _section_counts(value, limits=limits),
+    counts = _section_counts(value, limits=limits)
+    category = _section_budget_failure_category(
+        counts,
         limits=limits,
         max_proposals=max_proposals,
         maximum_ceiling=maximum_ceiling,
         total_category=total_category,
-    ) is not None:
-        _invalid()
+    )
+    if category is not None:
+        for section, maximum in limits.items():
+            if counts[section] > maximum:
+                indices = [index for index, proposal in enumerate(value.proposals)
+                           if proposal.placement.section.value == section]
+                index = indices[maximum]
+                path = (section_paths or {}).get(section, f"$.proposals[{index}]")
+                reject_contract(category.value, path, f"at most {maximum} {section} claims", f"{counts[section]} claims")
+        reject_contract(category.value, "$.proposals", f"at most {max_proposals} proposals", str(sum(counts.values())))
 
 
 def parse_atomic_solution_v2_proposals(
@@ -1023,6 +1001,8 @@ def parse_atomic_solution_v2_proposals(
     allowed_source_labels: tuple[str, ...],
     _max_proposals: int = _MAX_LEGACY_SINGLE_PASS_PROPOSALS,
     _external_containers: frozenset[tuple[SolutionV2ContainerKind, str]] = frozenset(),
+    _proposal_paths: tuple[str, ...] = (),
+    _relation_paths: tuple[str, ...] = (),
 ) -> AtomicSolutionProposalSetV2:
     """Strictly parse the closed V2 proposal-placement IR without repairs."""
 
@@ -1037,49 +1017,33 @@ def parse_atomic_solution_v2_proposals(
             parse_constant=_reject_constant,
         )
     except (ValueError, RecursionError):
-        _invalid()
-    if not isinstance(payload, dict) or set(payload) not in {
-        frozenset({"proposals"}),
-        frozenset({"proposals", "structure_relations"}),
-    }:
-        _invalid()
+        reject_contract("malformed_json", "$", "complete unique-key JSON", "malformed JSON")
+    closed_object(payload, {"proposals"}, {"structure_relations"})
     items = payload["proposals"]
     if (
         not isinstance(_max_proposals, int)
         or isinstance(_max_proposals, bool)
         or _max_proposals < 0
-        or not isinstance(items, list)
-        or len(items) > _max_proposals
     ):
         _invalid()
-    if (
-        not isinstance(allowed_source_labels, tuple)
-        or len(set(allowed_source_labels)) != len(allowed_source_labels)
-        or any(not isinstance(label, str) for label in allowed_source_labels)
-    ):
-        _invalid(SolutionDraftErrorCode.INVALID_INPUT)
-    allowed_labels = frozenset(allowed_source_labels)
+    if not isinstance(items, list):
+        reject_contract("wrong_type", "$.proposals", "array", type(items).__name__)
+    if len(items) > _max_proposals:
+        reject_contract("proposal_count_exceeded", "$.proposals", f"at most {_max_proposals} proposals", str(len(items)))
+    validate_citation_allowlist(allowed_source_labels)
 
     proposals: list[AtomicSolutionProposalV2] = []
-    for item in items:
-        if not isinstance(item, dict) or set(item) not in {
-            frozenset({"placement", "text", "citations"}),
-            frozenset({
-                "placement",
-                "text",
-                "citations",
-                "related_requirement_fields",
-            }),
-        }:
-            _invalid()
+    for index, item in enumerate(items):
+        path = _proposal_paths[index] if index < len(_proposal_paths) else f"$.proposals[{index}]"
+        closed_object(item, {"placement", "text", "citations"}, {"related_requirement_fields"}, path=path)
         placement_data = item["placement"]
-        _object(placement_data, {"section", "container_kind", "container_key", "field"})
+        closed_object(placement_data, {"section", "container_kind", "container_key", "field"}, path=path + ".placement")
         try:
             section = SolutionV2Section(placement_data["section"])
             container_kind = SolutionV2ContainerKind(placement_data["container_kind"])
             field = SolutionV2PlacementField(placement_data["field"])
         except (TypeError, ValueError):
-            _invalid()
+            reject_contract("invalid_enum", path + ".placement", "allowed placement enums", "unknown enum or wrong type")
         if field not in _ALLOWED_PLACEMENTS.get((section, container_kind), set()):
             _invalid()
         container_key = placement_data["container_key"]
@@ -1088,54 +1052,35 @@ def parse_atomic_solution_v2_proposals(
                 _invalid()
         elif not isinstance(container_key, str) or _CONTAINER_KEY.fullmatch(container_key) is None:
             _invalid()
-        citations = item["citations"]
-        if (
-            not isinstance(citations, list)
-            or not citations
-            or len(set(citations)) != len(citations)
-            or any(
-                not isinstance(label, str) or label not in allowed_labels
-                for label in citations
-            )
-        ):
-            _invalid()
-        related_fields_data = item.get("related_requirement_fields", [])
-        if (
-            not isinstance(related_fields_data, list)
-            or any(not isinstance(value, str) for value in related_fields_data)
-            or len(set(related_fields_data)) != len(related_fields_data)
-        ):
-            _invalid()
-        try:
-            related_requirement_fields = tuple(
-                RequirementDimension(value) for value in related_fields_data
-            )
-        except ValueError:
-            _invalid()
+        claim_text, citations, related_requirement_fields = validate_claim_fields(
+            {key: value for key, value in item.items() if key != "placement"},
+            allowed_source_labels=allowed_source_labels, path=path, require_linkage=False,
+        )
         proposals.append(AtomicSolutionProposalV2(
             placement=SolutionV2Placement(section, container_kind, container_key, field),
-            text=_prose(item["text"]),
-            citations=tuple(citations),
+            text=claim_text,
+            citations=citations,
             related_requirement_fields=related_requirement_fields,
         ))
     relations_data = payload.get("structure_relations", [])
     if not isinstance(relations_data, list):
-        _invalid()
+        reject_contract("wrong_type", "$.structure_relations", "array", type(relations_data).__name__)
     relations: list[SolutionV2StructureRelation] = []
-    for item in relations_data:
-        _object(item, {
+    for index, item in enumerate(relations_data):
+        path = _relation_paths[index] if index < len(_relation_paths) else f"$.structure_relations[{index}]"
+        closed_object(item, {
             "relation_type",
             "source_container_kind",
             "source_container_key",
             "target_container_kind",
             "target_container_key",
-        })
+        }, path=path)
         try:
             relation_type = SolutionV2StructureRelationType(item["relation_type"])
             source_kind = SolutionV2ContainerKind(item["source_container_kind"])
             target_kind = SolutionV2ContainerKind(item["target_container_kind"])
         except (TypeError, ValueError):
-            _invalid()
+            reject_contract("invalid_relation", path, "allowed relation type and endpoint kinds", "unknown enum or wrong type")
         source_key = item["source_container_key"]
         target_key = item["target_container_key"]
         if (
@@ -1160,6 +1105,7 @@ def parse_atomic_solution_v2_proposals(
         result,
         max_proposals=_max_proposals,
         external_containers=_external_containers,
+        relation_paths=_relation_paths,
     )
     return result
 
@@ -1279,13 +1225,13 @@ def _parse_generation_output(
         payload = json.loads(candidate, object_pairs_hook=_unique_object,
                              parse_constant=_reject_constant)
     except (ValueError, RecursionError):
-        _invalid()
-    if isinstance(payload, dict) and "ir_version" in payload:
+        reject_contract("malformed_json", "$", "complete unique-key JSON", "malformed JSON")
+    if isinstance(payload, dict) and ("ir_version" in payload or ("proposals" not in payload and SEMANTIC_ROOT_KEYS & payload.keys())):
         from apps.sales.services.solution_semantic_ir_v2 import (
             convert_semantic_solution_v2_output,
         )
 
-        return convert_semantic_solution_v2_output(
+        result = convert_semantic_solution_v2_output(
             candidate, pass_name=pass_name,
             allowed_source_labels=allowed_source_labels, max_proposals=max_proposals,
             external_phases=tuple(
@@ -1293,6 +1239,16 @@ def _parse_generation_output(
                 if kind is SolutionV2ContainerKind.IMPLEMENTATION_PHASE
             ),
         )
+        if pass_name in {"implementation", "assurance"}:
+            _validate_section_budgets(
+                result, max_proposals=max_proposals,
+                limits=(IMPLEMENTATION_SECTION_PROPOSAL_LIMITS if pass_name == "implementation"
+                        else ASSURANCE_SECTION_PROPOSAL_LIMITS),
+                section_paths={"implementation_plan": "$.phases", "milestones": "$.milestones",
+                               "risks": "$.risks", "acceptance_criteria": "$.acceptance",
+                               "out_of_scope": "$.out_of_scope"},
+            )
+        return result
     return parse_atomic_solution_v2_proposals(
         content, allowed_source_labels=allowed_source_labels,
         _max_proposals=max_proposals, _external_containers=external_containers,
@@ -1306,19 +1262,18 @@ def _validate_pass_contract(
     allowed_sections: frozenset[SolutionV2Section],
     allowed_relations: frozenset[SolutionV2StructureRelationType],
 ) -> None:
-    if (
-        not isinstance(value, AtomicSolutionProposalSetV2)
-        or len(value.proposals) > max_proposals
-        or any(
-            proposal.placement.section not in allowed_sections
-            for proposal in value.proposals
-        )
-        or any(
-            relation.relation_type not in allowed_relations
-            for relation in value.structure_relations
-        )
-    ):
-        _invalid()
+    if not isinstance(value, AtomicSolutionProposalSetV2):
+        reject_contract("wrong_type", "$", "AtomicSolutionProposalSetV2", type(value).__name__)
+    if len(value.proposals) > max_proposals:
+        reject_contract("proposal_count_exceeded", "$.proposals", f"at most {max_proposals} proposals", str(len(value.proposals)))
+    for index, proposal in enumerate(value.proposals):
+        if proposal.placement.section not in allowed_sections:
+            reject_contract("invalid_placement", f"$.proposals[{index}].placement.section",
+                            "current pass allowed section", proposal.placement.section.value)
+    for index, relation in enumerate(value.structure_relations):
+        if relation.relation_type not in allowed_relations:
+            reject_contract("invalid_relation", f"$.structure_relations[{index}].relation_type",
+                            "current pass allowed relation", relation.relation_type.value)
 
 
 def _proposal_sort_key(proposal: AtomicSolutionProposalV2) -> tuple:
@@ -1422,206 +1377,21 @@ def diagnose_solution_v2_output(
     *,
     allowed_source_labels: tuple[str, ...],
 ) -> SolutionV2OutputDiagnosticCategory | None:
-    """Classify a rejected provider response without weakening runtime parsing.
-
-    This helper is for controlled evaluation only.  The production parser keeps
-    returning the stable, detail-free ``SolutionDraftError`` contract.
-    """
-
+    """Compatibility adapter over the executing parser, never a second validator."""
     try:
-        parse_atomic_solution_v2_proposals(
-            content,
-            allowed_source_labels=allowed_source_labels,
+        parse_atomic_solution_v2_proposals(content, allowed_source_labels=allowed_source_labels)
+    except SolutionDraftError as error:
+        failure = getattr(error, "contract_failure", None)
+        category = failure.category if failure else "unclassified_contract_failure"
+        category = {
+            "wrong_type": "wrong_value_type",
+            "invalid_requirement_link": "malformed_requirement_linkage",
+            "invalid_local_ref": "dangling_relation",
+        }.get(category, category)
+        return SolutionV2OutputDiagnosticCategory._value2member_map_.get(
+            category, SolutionV2OutputDiagnosticCategory.UNCLASSIFIED_CONTRACT_FAILURE,
         )
-    except SolutionDraftError:
-        pass
-    else:
-        return None
-
-    if not isinstance(content, str) or not content.strip():
-        return SolutionV2OutputDiagnosticCategory.MALFORMED_JSON
-    text = content.strip()
-    fence = re.fullmatch(r"```json[ \t]*\r?\n(.*)\r?\n```", text, flags=re.DOTALL)
-    if fence is not None:
-        text = fence.group(1)
-    try:
-        payload = json.loads(
-            text,
-            object_pairs_hook=_unique_object,
-            parse_constant=_reject_constant,
-        )
-    except (ValueError, RecursionError):
-        return SolutionV2OutputDiagnosticCategory.MALFORMED_JSON
-    if not isinstance(payload, dict):
-        return SolutionV2OutputDiagnosticCategory.WRONG_VALUE_TYPE
-    if not {"proposals"} <= set(payload) or not set(payload) <= {
-        "proposals",
-        "structure_relations",
-    }:
-        return SolutionV2OutputDiagnosticCategory.UNKNOWN_KEY
-
-    items = payload["proposals"]
-    if not isinstance(items, list):
-        return SolutionV2OutputDiagnosticCategory.WRONG_VALUE_TYPE
-    if len(items) > _MAX_LEGACY_SINGLE_PASS_PROPOSALS:
-        return SolutionV2OutputDiagnosticCategory.PROPOSAL_COUNT_EXCEEDED
-    allowed_labels = frozenset(allowed_source_labels)
-    if (
-        not isinstance(allowed_source_labels, tuple)
-        or len(allowed_labels) != len(allowed_source_labels)
-        or any(not isinstance(label, str) for label in allowed_source_labels)
-    ):
-        return SolutionV2OutputDiagnosticCategory.WRONG_VALUE_TYPE
-
-    containers: set[tuple[SolutionV2ContainerKind, str]] = set()
-    component_fields: dict[str, dict[SolutionV2PlacementField, int]] = {}
-    for item in items:
-        if not isinstance(item, dict):
-            return SolutionV2OutputDiagnosticCategory.WRONG_VALUE_TYPE
-        allowed_item_keys = {
-            "placement", "text", "citations", "related_requirement_fields",
-        }
-        if not {"placement", "text", "citations"} <= set(item):
-            return SolutionV2OutputDiagnosticCategory.UNKNOWN_KEY
-        if not set(item) <= allowed_item_keys:
-            return SolutionV2OutputDiagnosticCategory.UNKNOWN_KEY
-        placement = item["placement"]
-        if not isinstance(placement, dict):
-            return SolutionV2OutputDiagnosticCategory.WRONG_VALUE_TYPE
-        placement_keys = {"section", "container_kind", "container_key", "field"}
-        if set(placement) != placement_keys:
-            return SolutionV2OutputDiagnosticCategory.UNKNOWN_KEY
-        try:
-            section = SolutionV2Section(placement["section"])
-            kind = SolutionV2ContainerKind(placement["container_kind"])
-            field = SolutionV2PlacementField(placement["field"])
-        except (TypeError, ValueError):
-            return SolutionV2OutputDiagnosticCategory.INVALID_PLACEMENT
-        if field not in _ALLOWED_PLACEMENTS.get((section, kind), set()):
-            return SolutionV2OutputDiagnosticCategory.INVALID_PLACEMENT
-        key = placement["container_key"]
-        if kind is SolutionV2ContainerKind.ROOT:
-            if key is not None:
-                return SolutionV2OutputDiagnosticCategory.INVALID_PLACEMENT
-        elif not isinstance(key, str) or _CONTAINER_KEY.fullmatch(key) is None:
-            return SolutionV2OutputDiagnosticCategory.INVALID_PLACEMENT
-        else:
-            containers.add((kind, key))
-        if not isinstance(item["text"], str) or not item["text"].strip():
-            return SolutionV2OutputDiagnosticCategory.WRONG_VALUE_TYPE
-        citations = item["citations"]
-        if (
-            not isinstance(citations, list)
-            or not citations
-            or len(set(citations)) != len(citations)
-            or any(not isinstance(label, str) or label not in allowed_labels for label in citations)
-        ):
-            return SolutionV2OutputDiagnosticCategory.INVALID_CITATION
-        related = item.get("related_requirement_fields", [])
-        if (
-            not isinstance(related, list)
-            or any(not isinstance(value, str) for value in related)
-            or len(set(related)) != len(related)
-            or any(value not in RequirementDimension._value2member_map_ for value in related)
-        ):
-            return SolutionV2OutputDiagnosticCategory.MALFORMED_REQUIREMENT_LINKAGE
-        if kind is SolutionV2ContainerKind.ARCHITECTURE_COMPONENT:
-            counts = component_fields.setdefault(
-                key,
-                {
-                    SolutionV2PlacementField.IDENTITY: 0,
-                    SolutionV2PlacementField.RESPONSIBILITIES: 0,
-                    SolutionV2PlacementField.RATIONALE: 0,
-                    SolutionV2PlacementField.INTERFACES: 0,
-                },
-            )
-            counts[field] += 1
-
-    if len(component_fields) > MAX_ARCHITECTURE_COMPONENTS:
-        return SolutionV2OutputDiagnosticCategory.COMPONENT_COUNT_EXCEEDED
-    completeness = (
-        (SolutionV2PlacementField.IDENTITY, 1, SolutionV2OutputDiagnosticCategory.MISSING_COMPONENT_IDENTITY),
-        (SolutionV2PlacementField.RESPONSIBILITIES, 1, SolutionV2OutputDiagnosticCategory.MISSING_COMPONENT_RESPONSIBILITY),
-        (SolutionV2PlacementField.RATIONALE, 1, SolutionV2OutputDiagnosticCategory.MISSING_COMPONENT_RATIONALE),
-        (SolutionV2PlacementField.INTERFACES, 1, SolutionV2OutputDiagnosticCategory.MISSING_COMPONENT_INTERFACE),
-    )
-    for field, minimum, category in completeness:
-        if any(
-            counts[field] < minimum
-            or (field is SolutionV2PlacementField.IDENTITY and counts[field] != 1)
-            for counts in component_fields.values()
-        ):
-            return category
-
-    relations = payload.get("structure_relations", [])
-    if not isinstance(relations, list):
-        return SolutionV2OutputDiagnosticCategory.WRONG_VALUE_TYPE
-    seen: set[tuple[object, ...]] = set()
-    dependency_edges: dict[SolutionV2StructureRelationType, list[tuple[str, str]]] = {
-        SolutionV2StructureRelationType.COMPONENT_DEPENDENCY: [],
-        SolutionV2StructureRelationType.PHASE_DEPENDENCY: [],
-    }
-    request_flow_count = 0
-    for item in relations:
-        if not isinstance(item, dict):
-            return SolutionV2OutputDiagnosticCategory.WRONG_VALUE_TYPE
-        relation_keys = {
-            "relation_type", "source_container_kind", "source_container_key",
-            "target_container_kind", "target_container_key",
-        }
-        if set(item) != relation_keys:
-            return SolutionV2OutputDiagnosticCategory.UNKNOWN_KEY
-        try:
-            relation_type = SolutionV2StructureRelationType(item["relation_type"])
-            source_kind = SolutionV2ContainerKind(item["source_container_kind"])
-            target_kind = SolutionV2ContainerKind(item["target_container_kind"])
-        except (TypeError, ValueError):
-            return SolutionV2OutputDiagnosticCategory.INVALID_RELATION_TYPE
-        if (source_kind, target_kind) != _RELATION_KINDS[relation_type]:
-            return SolutionV2OutputDiagnosticCategory.INVALID_RELATION_TYPE
-        source = item["source_container_key"]
-        target = item["target_container_key"]
-        if (
-            not isinstance(source, str)
-            or _CONTAINER_KEY.fullmatch(source) is None
-            or not isinstance(target, str)
-            or _CONTAINER_KEY.fullmatch(target) is None
-        ):
-            return SolutionV2OutputDiagnosticCategory.WRONG_VALUE_TYPE
-        signature = (relation_type, source_kind, source, target_kind, target)
-        if signature in seen:
-            return SolutionV2OutputDiagnosticCategory.DUPLICATE_RELATION
-        seen.add(signature)
-        if (source_kind, source) not in containers or (target_kind, target) not in containers:
-            return SolutionV2OutputDiagnosticCategory.DANGLING_RELATION
-        if source == target:
-            return SolutionV2OutputDiagnosticCategory.SELF_RELATION
-        if relation_type in dependency_edges:
-            dependency_edges[relation_type].append((source, target))
-        if relation_type is SolutionV2StructureRelationType.COMPONENT_REQUEST_FLOW:
-            request_flow_count += 1
-    if len(component_fields) >= 2 and request_flow_count == 0:
-        return SolutionV2OutputDiagnosticCategory.MISSING_REQUEST_FLOW
-    if any(_dependency_has_cycle(edges) for edges in dependency_edges.values()):
-        return SolutionV2OutputDiagnosticCategory.DEPENDENCY_CYCLE
-    return SolutionV2OutputDiagnosticCategory.UNCLASSIFIED_CONTRACT_FAILURE
-
-
-def _dependency_has_cycle(edges: list[tuple[str, str]]) -> bool:
-    dependencies: dict[str, set[str]] = {}
-    nodes: set[str] = set()
-    for source, target in edges:
-        nodes.update((source, target))
-        dependencies.setdefault(source, set()).add(target)
-    resolved: set[str] = set()
-    remaining = set(nodes)
-    while remaining:
-        ready = {node for node in remaining if dependencies.get(node, set()) <= resolved}
-        if not ready:
-            return True
-        resolved.update(ready)
-        remaining -= ready
-    return False
+    return None
 
 
 def validate_solution_v2_structure_relations(
@@ -1631,6 +1401,7 @@ def validate_solution_v2_structure_relations(
     external_containers: frozenset[
         tuple[SolutionV2ContainerKind, str]
     ] = frozenset(),
+    relation_paths: tuple[str, ...] = (),
 ) -> None:
     """Validate the closed transient relation graph without inferring edges."""
 
@@ -1668,7 +1439,8 @@ def validate_solution_v2_structure_relations(
         is SolutionV2ContainerKind.ARCHITECTURE_COMPONENT
     }
     if len(architecture_components) > MAX_ARCHITECTURE_COMPONENTS:
-        _invalid()
+        reject_contract("component_count_exceeded", "$.architecture.components",
+                        f"at most {MAX_ARCHITECTURE_COMPONENTS} components", str(len(architecture_components)))
     component_field_counts = {
         key: {
             SolutionV2PlacementField.IDENTITY: 0,
@@ -1683,21 +1455,23 @@ def validate_solution_v2_structure_relations(
             component_field_counts[proposal.placement.container_key][
                 proposal.placement.field
             ] += 1
-    if any(
-        counts[SolutionV2PlacementField.IDENTITY] != 1
-        or counts[SolutionV2PlacementField.RESPONSIBILITIES] < 1
-        or counts[SolutionV2PlacementField.RATIONALE] < 1
-        or counts[SolutionV2PlacementField.INTERFACES] < 1
-        for counts in component_field_counts.values()
-    ):
-        _invalid()
+    for key, counts in sorted(component_field_counts.items()):
+        for field, category in (
+            (SolutionV2PlacementField.IDENTITY, "missing_component_identity"),
+            (SolutionV2PlacementField.RESPONSIBILITIES, "missing_component_responsibility"),
+            (SolutionV2PlacementField.RATIONALE, "missing_component_rationale"),
+            (SolutionV2PlacementField.INTERFACES, "missing_component_interface"),
+        ):
+            if counts[field] < 1 or (field is SolutionV2PlacementField.IDENTITY and counts[field] != 1):
+                reject_contract(category, "$.architecture.components", "complete component fields", str(counts[field]))
     seen = set()
     dependency_edges = {
         SolutionV2StructureRelationType.COMPONENT_DEPENDENCY: [],
         SolutionV2StructureRelationType.PHASE_DEPENDENCY: [],
     }
     request_flow_count = 0
-    for relation in value.structure_relations:
+    for index, relation in enumerate(value.structure_relations):
+        path = relation_paths[index] if index < len(relation_paths) else f"$.structure_relations[{index}]"
         if not isinstance(relation, SolutionV2StructureRelation):
             _invalid()
         expected_kinds = _RELATION_KINDS.get(relation.relation_type)
@@ -1714,7 +1488,7 @@ def validate_solution_v2_structure_relations(
             relation.target_container_key,
         )
         if signature in seen:
-            _invalid()
+            reject_contract("duplicate_identifier", path, "unique relation", "duplicate edge")
         seen.add(signature)
         if (
             (relation.source_container_kind, relation.source_container_key)
@@ -1722,10 +1496,10 @@ def validate_solution_v2_structure_relations(
             or (relation.target_container_kind, relation.target_container_key)
             not in containers
         ):
-            _invalid()
+            reject_contract("invalid_local_ref", path, "existing relation endpoints", "dangling endpoint")
         if relation.relation_type in dependency_edges:
             if relation.source_container_key == relation.target_container_key:
-                _invalid()
+                reject_contract("invalid_relation", path, "distinct dependency endpoints", "self-loop")
             dependency_edges[relation.relation_type].append(
                 (relation.source_container_key, relation.target_container_key)
             )
@@ -1734,11 +1508,11 @@ def validate_solution_v2_structure_relations(
             SolutionV2StructureRelationType.COMPONENT_DATA_FLOW,
         }:
             if relation.source_container_key == relation.target_container_key:
-                _invalid()
+                reject_contract("invalid_relation", path, "distinct flow endpoints", "self-loop")
             if relation.relation_type is SolutionV2StructureRelationType.COMPONENT_REQUEST_FLOW:
                 request_flow_count += 1
     if len(architecture_components) >= 2 and request_flow_count == 0:
-        _invalid()
+        reject_contract("invalid_relation", "$.architecture.request_flows", "at least one request flow for multiple components", "0 flows")
     for edges in dependency_edges.values():
         _reject_dependency_cycle(edges)
 
@@ -1756,27 +1530,15 @@ def _reject_dependency_cycle(edges: list[tuple[str, str]]) -> None:
             node for node in remaining if dependencies.get(node, set()) <= resolved
         }
         if not ready:
-            _invalid()
+            reject_contract("invalid_relation", "$", "acyclic dependency graph", "dependency cycle")
         resolved.update(ready)
         remaining -= ready
-
-
-def _object(value: object, keys: set[str]) -> None:
-    if not isinstance(value, dict) or set(value) != keys:
-        _invalid()
 
 
 def _text(value: object) -> str:
     if not isinstance(value, str) or not value.strip():
         _invalid()
     return value.strip()
-
-
-def _prose(value: object) -> str:
-    text = _text(value)
-    if _SOURCE_TOKEN.search(text):
-        _invalid()
-    return text
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict:
@@ -1795,4 +1557,6 @@ def _reject_constant(value: str) -> NoReturn:
 def _invalid(
     code: SolutionDraftErrorCode = SolutionDraftErrorCode.INVALID_RESPONSE,
 ) -> NoReturn:
+    if code is SolutionDraftErrorCode.INVALID_RESPONSE:
+        reject_contract("other_contract_failure", "$", "valid solution generation contract", "contract rejected")
     raise SolutionDraftError(code)

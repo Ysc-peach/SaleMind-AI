@@ -54,6 +54,7 @@ from apps.sales.services.solution_payloads import (
     solution_draft_v1_to_payload,
 )
 from apps.sales.services.solution_schema_v2 import SolutionDraftV2
+from apps.sales.services.solution_evaluation import emit_evaluation
 
 
 class SolutionPersistenceError(Exception):
@@ -186,6 +187,7 @@ def _generate_and_persist_solution_draft(
         or result.schema_version != schema_version
     ):
         raise SolutionPersistenceError("No validated Solution Draft was generated.")
+    emit_evaluation("persistence_started")
     try:
         serialized = serialize_solution_domain(result.draft)
     except SolutionPayloadError as exc:
@@ -200,11 +202,16 @@ def _generate_and_persist_solution_draft(
             opportunity_id=opportunity_id,
         )
         _lock_admission_rows(result.admission)
-        current_admission = build_solution_admission(
-            analysis_record_to_domain(locked_analysis),
-            result.sources,
-        )
+        try:
+            current_admission = build_solution_admission(
+                analysis_record_to_domain(locked_analysis),
+                result.sources,
+            )
+        except Exception:
+            emit_evaluation("deterministic_admission", success=False)
+            raise
         if current_admission != result.admission:
+            emit_evaluation("deterministic_admission", success=False)
             raise SolutionPersistenceError("Grounding provenance changed before persistence.")
 
         current_version = (
@@ -235,7 +242,9 @@ def _generate_and_persist_solution_draft(
         )
         entries = _build_provenance_entries(record, result)
         SolutionDraftProvenance.objects.bulk_create(entries)
-        return record
+    # Observe only after the transaction's successful exit, without an extra DB query.
+    emit_evaluation("persistence", success=True, provenance=bool(entries))
+    return record
 
 
 @contextmanager

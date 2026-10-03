@@ -99,7 +99,7 @@ def _status_error(error_class, status, *, code=None, request_id="req-safe-123"):
         ),
         (
             _status_error(openai.PermissionDeniedError, 403),
-            LLMProviderFailureKind.AUTH_ERROR,
+            "permission_denied",
             403,
         ),
         (
@@ -121,7 +121,7 @@ def test_openai_compatible_failure_preserves_safe_underlying_category(
         provider.generate([{"role": "user", "content": "safe probe"}])
 
     assert caught.value.code == LLMErrorCode.LLM_PROVIDER_ERROR.value
-    assert caught.value.failure_kind is expected_kind
+    assert caught.value.failure_kind == expected_kind
     assert caught.value.http_status == expected_status
     assert caught.value.request_id == (
         "req-safe-123" if expected_status is not None else None
@@ -129,6 +129,43 @@ def test_openai_compatible_failure_preserves_safe_underlying_category(
     rendered = repr(caught.value) + str(caught.value)
     assert "QWEN_API_KEY_MUST_NOT_LEAK" not in rendered
     assert "safe probe" not in rendered
+
+
+@pytest.mark.parametrize("code", [
+    "AllocationQuota.FreeTierOnly", "ModelAccessDenied", "AccessDenied",
+])
+def test_permission_denied_is_not_quota_and_is_not_retried(code):
+    from apps.llm.openai_compatible import OpenAICompatibleLLMProvider
+
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        return httpx2.Response(403, json={
+            "error": {"code": code, "message": "Access denied."},
+        }, headers={"x-request-id": "req-safe-403"})
+
+    provider = OpenAICompatibleLLMProvider(LLMProviderConfig(
+        provider_name="openai_compatible", model_name="qwen-test-model",
+        api_key="OFFLINE_TEST_KEY", base_url="https://qwen.invalid/v1",
+        timeout_seconds=60, max_retries=2, max_output_tokens=1500,
+        thinking_enabled=False,
+    ))
+    provider._client.close()
+    with openai.OpenAI(
+        api_key="OFFLINE_TEST_KEY", base_url="https://qwen.invalid/v1",
+        max_retries=2,
+        http_client=httpx2.Client(transport=httpx2.MockTransport(respond)),
+    ) as client:
+        provider._client = client
+        with pytest.raises(LLMProviderError) as caught:
+            provider.generate([{"role": "user", "content": "safe probe"}])
+
+    assert caught.value.failure_kind.value == "permission_denied"
+    assert caught.value.http_status == 403
+    assert caught.value.request_id == "req-safe-403"
+    assert isinstance(caught.value.__context__, openai.PermissionDeniedError)
+    assert len(calls) == 1
 
 
 def test_openai_compatible_invalid_response_has_distinct_safe_category(monkeypatch):

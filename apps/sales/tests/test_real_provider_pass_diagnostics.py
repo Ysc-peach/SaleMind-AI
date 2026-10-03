@@ -9,7 +9,9 @@ import pytest
 from apps.llm.base import LLMGeneration
 from apps.sales.models import SolutionDraftRecord
 from apps.sales.services.solution_errors import SolutionDraftError, SolutionDraftErrorCode
-from apps.sales.services.solution_prompt_v2 import parse_solution_v2_core_output
+from apps.sales.services.solution_prompt_v2 import (
+    parse_atomic_solution_v2_proposals, parse_solution_v2_core_output,
+)
 from apps.sales.tests.test_solution_semantic_ir_v2 import core_ir
 
 
@@ -18,7 +20,8 @@ def _subject():
 
 
 def _reject(_content):
-    raise SolutionDraftError(SolutionDraftErrorCode.INVALID_RESPONSE)
+    # Attribution must come from a real rejection, not a mirror of fake errors.
+    return parse_atomic_solution_v2_proposals(_content, allowed_source_labels=("S1",))
 
 
 def _diagnose_core_ir(payload):

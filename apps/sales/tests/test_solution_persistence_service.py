@@ -162,11 +162,17 @@ def test_successful_generation_persists_one_version_and_exact_analysis(
 
     _patch_generation(monkeypatch, result, assertion=outside_transaction)
 
-    record = generate_and_persist_solution_draft(
-        opportunity,
-        analysis,
-        created_by=owner,
-    )
+    from apps.sales.services.solution_evaluation import BenchmarkEvaluationReport, evaluation_scope
+    measured = BenchmarkEvaluationReport()
+    with evaluation_scope(measured):
+        record = generate_and_persist_solution_draft(
+            opportunity,
+            analysis,
+            created_by=owner,
+        )
+    assert measured.to_dict()["persistence"] == {
+        "status": "PASS", "solution_persisted": True, "provenance_persisted": True,
+    }
 
     assert SolutionDraftRecord.objects.count() == 1
     assert record.opportunity_id == opportunity.pk
@@ -505,13 +511,19 @@ def test_provenance_insert_failure_rolls_back_solution_record(
 
     monkeypatch.setattr(SolutionDraftProvenance.objects, "bulk_create", fail)
 
-    with pytest.raises(RuntimeError, match="controlled persistence failure"):
+    from apps.sales.services.solution_evaluation import BenchmarkEvaluationReport, evaluation_scope
+    measured = BenchmarkEvaluationReport()
+    with evaluation_scope(measured), pytest.raises(RuntimeError, match="controlled persistence failure"):
         solution_persistence.generate_and_persist_solution_draft(
             opportunity, analysis, created_by=owner
         )
 
     assert SolutionDraftRecord.objects.count() == 0
     assert SolutionDraftProvenance.objects.count() == 0
+    measured.finish_failure()
+    assert measured.to_dict()["persistence"] == {
+        "status": "FAIL", "solution_persisted": False, "provenance_persisted": False,
+    }
 
 
 def test_generation_or_verifier_provider_failure_creates_no_records(

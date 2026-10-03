@@ -81,6 +81,24 @@ def test_verifier_call_records_safe_provider_failure(kind, expected):
     assert customer_text not in rendered
 
 
+def test_permission_denied_remains_distinct_in_verifier_call_diagnostics():
+    import openai
+    from apps.llm.openai_compatible import _safe_provider_error
+    from apps.llm.tests.test_qwen_provider_diagnostics import _status_error
+
+    diagnostics = VerifierEvaluationDiagnostics()
+    error = _safe_provider_error(_status_error(openai.PermissionDeniedError, 403))
+
+    with pytest.raises(LLMProviderError) as caught:
+        _verify(_proposal("safe fixed claim"), _FailingVerifier(error), diagnostics=diagnostics)
+
+    assert caught.value is error
+    assert len(diagnostics.calls) == 1
+    assert diagnostics.calls[0].failure_category.value == "qwen_permission_denied"
+    assert diagnostics.calls[0].http_status == 403
+    assert diagnostics.calls[0].attempt_number == 1
+
+
 def test_malformed_qwen_content_is_classified_as_response_parse_error():
     class MalformedVerifier(DeterministicFakeLLM):
         def generate(self, messages, *, max_output_tokens=None):

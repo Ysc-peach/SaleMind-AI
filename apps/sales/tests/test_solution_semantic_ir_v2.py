@@ -371,13 +371,13 @@ def test_implementation_dynamic_shared_budget_plus_one_rejected_before_claims(
     phase = next(p for p in payload["phases"] if not p["timing"])
     phase["timing"] = [claim("Additional timing.")]
     added_claims = []
-    original_claim = semantic_ir._claim
+    original_claim = semantic_ir.validate_claim_fields
 
-    def record_claim(value):
+    def record_claim(value, **kwargs):
         added_claims.append(value)
-        return original_claim(value)
+        return original_claim(value, **kwargs)
 
-    monkeypatch.setattr(semantic_ir, "_claim", record_claim)
+    monkeypatch.setattr(semantic_ir, "validate_claim_fields", record_claim)
     with pytest.raises(SolutionDraftError) as caught:
         parse_implementation(payload)
     assert added_claims == []
@@ -419,13 +419,13 @@ def test_implementation_shared_limit_rejects_before_any_atomic_claim_is_added(
         payload["milestones"][0]["timing"] = [claim("Confirmed milestone timing.")]
 
     added_claims = []
-    original_claim = semantic_ir._claim
+    original_claim = semantic_ir.validate_claim_fields
 
-    def record_claim(value):
+    def record_claim(value, **kwargs):
         added_claims.append(value)
-        return original_claim(value)
+        return original_claim(value, **kwargs)
 
-    monkeypatch.setattr(semantic_ir, "_claim", record_claim)
+    monkeypatch.setattr(semantic_ir, "validate_claim_fields", record_claim)
     with pytest.raises(SolutionDraftError) as caught:
         parse_implementation(payload)
     assert added_claims == []
@@ -1047,15 +1047,29 @@ def test_semantic_ir_uses_existing_generation_and_verifier_pipeline(monkeypatch)
     monkeypatch.setattr(service, "build_solution_admission", lambda *args: admission)
     provider = SemanticProvider()
     verifier = _VerifierProvider()
-    result = service.generate_grounded_solution_draft(
-        analysis_record(), llm_provider=provider,
-        verifier_provider=verifier, schema_version=2,
-    )
+    from apps.sales.services.solution_evaluation import BenchmarkEvaluationReport, evaluation_scope
+    report = BenchmarkEvaluationReport()
+    with evaluation_scope(report):
+        result = service.generate_grounded_solution_draft(
+            analysis_record(), llm_provider=provider,
+            verifier_provider=verifier, schema_version=2,
+        )
     assert provider.calls == 3
     assert verifier.calls
     assert result.schema_version == 2
     assert result.draft.architecture.flows
     assert result.v2_provenance_bindings
+    measured = report.to_dict()
+    assert all(item["status"] == "PASS" for item in measured["generation_contract_validity"].values())
+    assert measured["provider_availability"]["generation"]["success"] == 3
+    assert measured["provider_availability"]["verifier"]["success"] == len(verifier.calls)
+    assert measured["deterministic_admission"]["status"] == "PASS"
+    assert measured["global_structure"]["status"] == "PASS"
+    assert measured["global_structure"]["count"] == len(verifier.calls)
+    assert measured["qwen_admission"]["status"] == "PASS"
+    assert measured["qwen_admission"]["ADMISSIBLE"] == len(verifier.calls)
+    assert measured["assembly"]["status"] == "PASS"
+    assert measured["persistence"]["status"] == "NOT_REACHED"
 
 
 def test_explicit_legacy_demo_envelope_retains_existing_fenced_json_compatibility():

@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 import hashlib
-import ast
-import inspect
 import json
 import re
-import sys
-import textwrap
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import TypeVar
+from urllib.parse import parse_qsl, unquote, urlsplit
 from uuid import UUID
+
+from openai import OpenAIError
 
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
@@ -22,6 +20,7 @@ from django.db import transaction
 
 from apps.knowledge.embeddings import get_embedding_provider
 from apps.knowledge.embeddings.base import EmbeddingProvider
+from apps.knowledge.exceptions import KnowledgeDocumentError, KnowledgeDocumentErrorCode
 from apps.knowledge.models import (
     EnterpriseGroundingFact,
     EnterpriseGroundingFactApprovalStatus,
@@ -36,6 +35,7 @@ from apps.knowledge.services.indexing import index_document
 from apps.knowledge.services.search import search_knowledge
 from apps.llm.base import LLMProvider
 from apps.llm.base import LLMGeneration
+from apps.llm.exceptions import LLMProviderError
 from apps.sales.demo_fixtures import (
     DEMO_KNOWLEDGE,
     DemoGroundingExtractionProvider,
@@ -44,23 +44,112 @@ from apps.sales.demo_fixtures import (
 from apps.sales.models import SolutionDraftProvenance
 from apps.sales.services.solution_persistence import generate_and_persist_solution_draft
 from apps.sales.services.solution_errors import SolutionDraftError
-from apps.sales.services import solution_prompt_v2
-from apps.sales.services.solution_prompt_v2 import (
-    AtomicSolutionProposalSetV2,
-    ASSURANCE_SECTION_PROPOSAL_LIMITS,
-    IMPLEMENTATION_SECTION_PROPOSAL_LIMITS,
-    SolutionV2ContainerKind,
-    SolutionV2PlacementField,
-    SolutionV2Section,
-    SolutionV2StructureRelationType,
-    SolutionV2OutputDiagnosticCategory,
-    assurance_budget_failure_category,
-    diagnose_solution_v2_output,
-    implementation_budget_failure_category,
-)
+from apps.sales.services.solution_evaluation import BenchmarkEvaluationReport, evaluation_scope
+from apps.sales.services.solution_prompt_v2 import AtomicSolutionProposalSetV2
 
 
 _TITLE_PREFIX = "SalesMind Stage 8 real-provider benchmark"
+
+
+def _evaluation_provider_metadata(provider: LLMProvider) -> tuple[dict, tuple[str, ...]]:
+    """Read configuration only; never make a request or expose credentials."""
+
+    config = getattr(provider, "_config", None)
+    url = urlsplit(getattr(config, "base_url", ""))
+    secrets = tuple(value for value in (
+        getattr(config, "api_key", None),
+        unquote(url.username or ""), unquote(url.password or ""),
+        *(value for _, value in parse_qsl(url.query)),
+    ) if isinstance(value, str) and value)
+
+    def safe(value):
+        if not isinstance(value, str) or any(secret in value for secret in secrets):
+            return None
+        return value
+
+    return {
+        "provider": safe(provider.provider_name),
+        "model": safe(provider.model_name),
+        "base_url": {"host": safe(url.hostname), "path": safe(url.path)},
+    }, secrets
+
+
+def evaluation_verifier_config_snapshot(
+    provider: LLMProvider, *, max_concurrency: int,
+) -> dict[str, object]:
+    """Evaluation-only snapshot of actual wrapper configuration, without secrets."""
+
+    metadata, _ = _evaluation_provider_metadata(provider)
+    config = getattr(provider, "_config", None)
+    # The wrapper currently sends only false, and only with capability support.
+    explicit_off = (
+        getattr(provider, "_supports_enable_thinking", False)
+        and getattr(config, "thinking_enabled", None) is False
+    )
+    return {
+        **metadata,
+        "enable_thinking": False if explicit_off else None,
+        "timeout": getattr(config, "timeout_seconds", None),
+        "concurrency": max_concurrency,
+    }
+
+
+def evaluation_llm_provider_error(
+    error: LLMProviderError, *, provider: LLMProvider,
+) -> dict[str, object]:
+    """Observe existing exceptions without reclassification or raw error logging.
+
+    ``raise ... from None`` hides a traceback but may retain the SDK exception
+    in ``__context__``. Never stringify it: that can include credentials or
+    request content. Unknown/untrusted messages are omitted; recognized messages
+    are reduced to fixed safe summaries, not copied from provider text.
+    """
+
+    metadata, secrets = _evaluation_provider_metadata(provider)
+    candidate = error.__cause__ or error.__context__
+    sdk_error = None
+    for _ in range(4):
+        if isinstance(candidate, OpenAIError):
+            sdk_error = candidate
+            break
+        if candidate is None:
+            break
+        candidate = candidate.__cause__ or candidate.__context__
+    body = getattr(sdk_error, "body", None)
+    detail = body.get("error", body) if isinstance(body, Mapping) else None
+    code = getattr(sdk_error, "code", None)
+    if not isinstance(code, str) and isinstance(detail, Mapping):
+        code = detail.get("code")
+    if (
+        not isinstance(code, str)
+        or re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", code) is None
+        or any(secret in code for secret in secrets)
+    ):
+        code = None
+    message = detail.get("message") if isinstance(detail, Mapping) else None
+    safe_message = None
+    if isinstance(message, str):
+        normalized = message.casefold()
+        for terms, summary in (
+            (("inappropriate content", "content policy", "content-policy"),
+             "Provider reported a content-policy rejection."),
+            (("invalid api key", "incorrect api key"),
+             "Provider reported an invalid API key."),
+            (("permission denied", "access denied", "insufficient permissions"),
+             "Provider reported an access-permission rejection."),
+        ):
+            if any(term in normalized for term in terms):
+                safe_message = summary
+                break
+    return {
+        "mapped_category": error.failure_kind.value if error.failure_kind else None,
+        "exception_class": type(error).__name__,
+        "sdk_exception_class": type(sdk_error).__name__ if sdk_error else None,
+        "http_status": error.http_status,
+        **metadata,
+        "provider_error_code": code,
+        "sanitized_provider_message": safe_message,
+    }
 
 
 class RealBenchmarkRetrievalError(Exception):
@@ -93,6 +182,7 @@ class RealBenchmarkRetrievalPreflight:
 class RealBenchmarkGateResult:
     preflight: RealBenchmarkRetrievalPreflight
     solution: object
+    evaluation: dict | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,15 +233,11 @@ class EvaluationPassResult:
 
 
 def diagnose_generation_pass(
-    *,
-    pass_name: str,
-    generate: Callable[[], LLMGeneration],
-    parse: Callable[[str], _PassValue],
-    allowed_source_labels: tuple[str, ...],
+    *, pass_name: str, generate: Callable[[], LLMGeneration],
+    parse: Callable[[str], _PassValue], allowed_source_labels: tuple[str, ...],
     max_proposals: int,
 ) -> EvaluationPassResult:
-    """Run one real pass once, then attribute rejection without persisting text."""
-
+    """Consume formal rejection evidence; never inspect frames or guess validity."""
     if pass_name not in {"core", "implementation", "assurance"}:
         raise ValueError("Unknown evaluation pass.")
     started = time.perf_counter()
@@ -166,452 +252,39 @@ def diagnose_generation_pass(
     finish_reason = getattr(generation, "finish_reason", None)
     prompt_tokens = getattr(generation, "prompt_tokens", None)
     completion_tokens = getattr(generation, "completion_tokens", None)
+    # Syntax and count observations only; the supplied formal parser decides.
     try:
         payload = json.loads(generation.content)
         json_ok = True
     except (TypeError, ValueError, RecursionError):
-        payload = None
-        json_ok = False
+        payload, json_ok = None, False
     items = payload.get("proposals") if isinstance(payload, dict) else None
     count = len(items) if isinstance(items, list) else None
-    citation_observer = _CitationRejectionObserver()
-    core_observer = _CoreSemanticRejectionObserver() if pass_name == "core" else None
-    previous_profile = sys.getprofile()
-    def observe(frame, event, arg):
-        citation_observer.observe(frame, event, arg)
-        if core_observer is not None:
-            core_observer.observe(frame, event, arg)
-
-    sys.setprofile(observe)
     try:
-        try:
-            value = parse(generation.content)
-        finally:
-            sys.setprofile(previous_profile)
-    except SolutionDraftError:
-        citation_failure = citation_observer.failure
-        core_failure = core_observer.failure if core_observer is not None else None
-        semantic_core = isinstance(payload, dict) and bool(
-            {"ir_version", "architecture", "proposed_solution", "deployment_and_integration"}
-            & payload.keys()
+        value = parse(generation.content)
+    except SolutionDraftError as error:
+        failure = getattr(error, "contract_failure", None)
+        category = failure.category if failure else "unknown_contract_failure"
+        if category == "malformed_json" and finish_reason == "length":
+            category = "truncation_or_length_finish"
+        citation = (
+            EvaluationCitationFailure(failure.allowed_ids, failure.offending_ids, failure.citation_subtype)
+            if failure is not None and failure.citation_subtype else None
         )
-        if citation_failure is not None:
-            category = "invalid_citation"
-        elif core_failure is not None:
-            category = core_failure.category
-        elif pass_name == "core" and semantic_core:
-            category = "other_contract_failure"
-        else:
-            category = _pass_failure_category(
-                pass_name, generation.content, allowed_source_labels,
-                max_proposals, payload, count, finish_reason,
-            )
-        if not json_ok:
-            category = "truncation_or_length_finish" if finish_reason == "length" else "malformed_json"
         raise EvaluationPassFailure(EvaluationPassDiagnostic(
             pass_name, True, True, elapsed,
             finish_reason, prompt_tokens, completion_tokens,
-            json_ok, False, count, category, citation_failure,
-            core_failure.json_path if core_failure else ("$" if not json_ok else None),
-            core_failure.expected if core_failure else None,
-            core_failure.actual if core_failure else None,
+            json_ok, False, count, category, citation,
+            failure.json_path if failure else None,
+            failure.expected if failure else None,
+            failure.actual if failure else None,
         )) from None
-    diagnostic = EvaluationPassDiagnostic(
-        pass_name, True, True, elapsed,
-        finish_reason, prompt_tokens, completion_tokens,
+    return EvaluationPassResult(value, EvaluationPassDiagnostic(
+        pass_name, True, True, elapsed, finish_reason, prompt_tokens, completion_tokens,
         json_ok, True,
         len(value.proposals) if isinstance(value, AtomicSolutionProposalSetV2) else count,
         None,
-    )
-    return EvaluationPassResult(value, diagnostic)
-
-
-@dataclass(frozen=True, slots=True)
-class _SafeCoreRejection:
-    category: str
-    json_path: str
-    expected: str
-    actual: str
-
-
-_SAFE_JSON_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
-
-
-def _semantic_ir_paths(payload: object) -> dict[int, str]:
-    """Locate parser-owned values; never copy claim text into diagnostics."""
-
-    paths: dict[int, str] = {}
-
-    def visit(value: object, path: str) -> None:
-        paths.setdefault(id(value), path)
-        if isinstance(value, dict):
-            for key, child in value.items():
-                safe_key = key if isinstance(key, str) and _SAFE_JSON_KEY.fullmatch(key) else "<key>"
-                visit(child, f"{path}.{safe_key}")
-        elif isinstance(value, list):
-            for index, child in enumerate(value):
-                visit(child, f"{path}[{index}]")
-
-    visit(payload, "$")
-    return paths
-
-
-def _convert_frame(frame):
-    from apps.sales.services import solution_semantic_ir_v2
-
-    while frame is not None:
-        if frame.f_code is solution_semantic_ir_v2._convert.__code__:
-            return frame
-        frame = frame.f_back
-    return None
-
-
-@lru_cache(maxsize=1)
-def _core_cardinality_rejection_lines() -> frozenset[int]:
-    """Anchor attribution to actual validator branches, not a mirror validator."""
-
-    lines, first = inspect.getsourcelines(solution_prompt_v2.validate_solution_v2_structure_relations)
-    tree = ast.parse(textwrap.dedent("".join(lines)))
-    result = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.If):
-            continue
-        condition = ast.unparse(node.test)
-        if "architecture_components" not in condition and "component_field_counts" not in condition:
-            continue
-        for child in node.body:
-            if (isinstance(child, ast.Expr) and isinstance(child.value, ast.Call)
-                and isinstance(child.value.func, ast.Name) and child.value.func.id == "_invalid"):
-                result.add(first + child.lineno - 1)
-    return frozenset(result)
-
-
-@lru_cache(maxsize=1)
-def _requirement_rejection_lines() -> frozenset[int]:
-    lines, first = inspect.getsourcelines(solution_prompt_v2.parse_atomic_solution_v2_proposals)
-    start = next(i for i, line in enumerate(lines) if "related_fields_data =" in line)
-    end = next(i for i, line in enumerate(lines[start:], start) if "proposals.append(" in line)
-    return frozenset(range(first + start, first + end))
-
-
-class _CoreSemanticRejectionObserver:
-    """Observe the production parser's _invalid call site, without re-parsing."""
-
-    def __init__(self):
-        self.failure: _SafeCoreRejection | None = None
-        self.claim_paths: list[str] = []
-
-    def observe(self, frame, event, _arg):
-        if event != "call":
-            return
-        if frame.f_code.co_name == "add":
-            convert = _convert_frame(frame)
-            if convert is not None and "value" in frame.f_locals:
-                paths = _semantic_ir_paths(convert.f_locals["payload"])
-                self.claim_paths.append(paths.get(id(frame.f_locals["value"]), "$"))
-            return
-        if frame.f_code is not solution_prompt_v2._invalid.__code__:
-            return
-        caller = frame.f_back
-        if caller is None or self.failure is not None:
-            return
-        convert = _convert_frame(caller)
-        paths = _semantic_ir_paths(convert.f_locals["payload"]) if convert is not None else {}
-        from apps.sales.services import solution_semantic_ir_v2 as ir
-
-        code = caller.f_code
-        values = caller.f_locals
-        path = lambda value: paths.get(id(value), "$")
-        if code is ir._object.__code__:
-            value = values["value"]
-            location = path(value)
-            if not isinstance(value, dict):
-                self.failure = _SafeCoreRejection("wrong_type", location, "object", type(value).__name__)
-                return
-            missing = set(values["required"]) - value.keys()
-            if missing:
-                key = sorted(missing)[0]
-                self.failure = _SafeCoreRejection("missing_required_key", f"{location}.{key}", "required key present", "missing")
-                return
-            unknown = value.keys() - (set(values["required"]) | set(values["optional"]))
-            if unknown:
-                key = sorted(unknown)[0]
-                safe = key if isinstance(key, str) and _SAFE_JSON_KEY.fullmatch(key) else "<key>"
-                self.failure = _SafeCoreRejection("unknown_key", f"{location}.{safe}", "allowed key", "unknown key")
-                return
-        if code is ir._array.__code__:
-            value = values["value"]
-            self.failure = _SafeCoreRejection("wrong_type", path(value), "array", type(value).__name__)
-            return
-        if code is ir._bounded_array.__code__:
-            value = values["items"]
-            self.failure = _SafeCoreRejection(
-                "local_cardinality", path(value),
-                f"at most {values['maximum']} items", f"{len(value)} items",
-            )
-            return
-        if code is ir._ref.__code__:
-            parent = caller.f_back
-            location = "$"
-            if parent is not None:
-                container = parent.f_locals.get("component") or parent.f_locals.get("group")
-                if isinstance(container, dict) and container.get("ref") is values["value"]:
-                    location = path(container) + ".ref"
-                elif parent.f_code is ir._edge.__code__:
-                    edge = parent.f_locals["value"]
-                    direction = "from" if edge.get("from") is values["value"] else "to"
-                    location = path(edge) + f".{direction}"
-            self.failure = _SafeCoreRejection("invalid_local_ref", location, "lowercase local ref", type(values["value"]).__name__)
-            return
-        if code is ir._edge.__code__:
-            edge = values["value"]
-            direction = "from" if values["source"] not in values["sources"] else "to"
-            location = path(edge) + f".{direction}"
-            prefix = path(edge)
-            category = (
-                "dangling_request_flow" if ".request_flows[" in prefix else
-                "dangling_data_flow" if ".data_flows[" in prefix else
-                "dangling_dependency" if ".dependencies[" in prefix else
-                "invalid_local_ref"
-            )
-            self.failure = _SafeCoreRejection(category, location, "existing architecture component ref", "unknown local ref")
-            return
-        if code.co_name == "add" and convert is not None and "proposals" in values:
-            self.failure = _SafeCoreRejection(
-                "proposal_budget", path(values["item"]),
-                f"at most {values['max_proposals']} proposal claims",
-                f"{len(values['proposals'])} claims",
-            )
-            return
-        if code is solution_prompt_v2.parse_atomic_solution_v2_proposals.__code__:
-            index = len(values.get("proposals", ()))
-            claim_path = self.claim_paths[index] if index < len(self.claim_paths) else "$"
-            if caller.f_lineno == _parser_citation_rejection_line():
-                self.failure = _SafeCoreRejection(
-                    "invalid_citation", claim_path + ".citations",
-                    "non-empty unique allowed citation IDs", "rejected citations",
-                )
-                return
-            if caller.f_lineno in _requirement_rejection_lines():
-                self.failure = _SafeCoreRejection(
-                    "invalid_requirement_link", claim_path + ".related_requirement_fields",
-                    "unique RequirementDimension values", "rejected requirement linkage",
-                )
-                return
-        if (code is solution_prompt_v2.validate_solution_v2_structure_relations.__code__
-            and caller.f_lineno in _core_cardinality_rejection_lines()):
-            components = convert.f_locals["payload"]["architecture"]["components"] if convert is not None else []
-            counts = values.get("component_field_counts", {})
-            for index, component in enumerate(components):
-                fields = counts.get(component.get("ref"), {})
-                for field, member in (("identity", solution_prompt_v2.SolutionV2PlacementField.IDENTITY),
-                                      ("responsibilities", solution_prompt_v2.SolutionV2PlacementField.RESPONSIBILITIES),
-                                      ("rationale", solution_prompt_v2.SolutionV2PlacementField.RATIONALE),
-                                      ("interfaces", solution_prompt_v2.SolutionV2PlacementField.INTERFACES)):
-                    if fields.get(member, 0) < 1 or (field == "identity" and fields.get(member, 0) != 1):
-                        self.failure = _SafeCoreRejection("component_cardinality", f"$.architecture.components[{index}].{field}", "required component claim", "missing or duplicate")
-                        return
-            self.failure = _SafeCoreRejection("component_cardinality", "$.architecture.components", "at most 4 components", "component count exceeded")
-            return
-        if code is solution_prompt_v2.parse_atomic_solution_v2_proposals.__code__ and convert is None:
-            rejected_payload = values.get("payload")
-            if isinstance(rejected_payload, dict) and (
-                {"architecture", "proposed_solution", "deployment_and_integration"}
-                & rejected_payload.keys()
-            ):
-                self.failure = _SafeCoreRejection("missing_required_key", "$.ir_version", "required key present", "missing")
-                return
-        if code is solution_prompt_v2._parse_generation_output.__code__:
-            self.failure = _SafeCoreRejection("malformed_json", "$", "valid JSON", "malformed")
-            return
-        self.failure = _SafeCoreRejection("other_contract_failure", "$", "valid Core Semantic IR", "rejected at parser branch")
-
-
-@lru_cache(maxsize=1)
-def _parser_citation_rejection_line() -> int:
-    """Locate the real parser branch, failing closed if its shape changes."""
-
-    lines, first_line = inspect.getsourcelines(
-        solution_prompt_v2.parse_atomic_solution_v2_proposals
-    )
-    source = textwrap.dedent("".join(lines))
-    tree = ast.parse(source)
-    candidates = [
-        first_line + node.body[0].lineno - 1
-        for node in ast.walk(tree)
-        if isinstance(node, ast.If)
-        and any(
-            isinstance(child, ast.Name) and child.id == "citations"
-            for child in ast.walk(node.test)
-        )
-        and len(node.body) == 1
-        and isinstance(node.body[0], ast.Expr)
-        and isinstance(node.body[0].value, ast.Call)
-        and isinstance(node.body[0].value.func, ast.Name)
-        and node.body[0].value.func.id == "_invalid"
-    ]
-    if len(candidates) != 1:
-        raise RuntimeError("Citation parser branch could not be identified.")
-    return candidates[0]
-
-
-class _CitationRejectionObserver:
-    """Observe _invalid at the citation branch; never decide parser validity."""
-
-    def __init__(self):
-        self.failure: EvaluationCitationFailure | None = None
-
-    def observe(self, frame, event, _arg):
-        if event != "call" or frame.f_code is not solution_prompt_v2._invalid.__code__:
-            return
-        caller = frame.f_back
-        if (
-            caller is None
-            or caller.f_code is not solution_prompt_v2.parse_atomic_solution_v2_proposals.__code__
-            or caller.f_lineno != _parser_citation_rejection_line()
-        ):
-            return
-        self.failure = _describe_rejected_citations(
-            caller.f_locals["citations"],
-            caller.f_locals["allowed_source_labels"],
-        )
-
-
-_SAFE_SOURCE_ID = re.compile(r"S[1-9][0-9]*\Z")
-
-
-def _describe_rejected_citations(
-    citations: object, allowed_ids: tuple[str, ...],
-) -> EvaluationCitationFailure:
-    """Classify an already-rejected value; never re-evaluate acceptance."""
-
-    if not isinstance(citations, list):
-        subtype = "wrong_type"
-        offending = (f"<{type(citations).__name__}>",)
-    elif not citations:
-        subtype = "empty"
-        offending = ()
-    elif len(set(citations)) != len(citations):
-        subtype = "duplicate"
-        seen: set[object] = set()
-        duplicates = []
-        for value in citations:
-            if value in seen:
-                duplicates.append(value)
-            seen.add(value)
-        offending = tuple(_safe_source_id(value) for value in duplicates)
-    elif any(not isinstance(value, str) for value in citations):
-        subtype = "wrong_type"
-        offending = tuple(
-            f"<{type(value).__name__}>"
-            for value in citations if not isinstance(value, str)
-        )
-    elif any(_SAFE_SOURCE_ID.fullmatch(value) is None for value in citations):
-        subtype = "malformed"
-        offending = tuple(
-            _safe_source_id(value)
-            for value in citations if _SAFE_SOURCE_ID.fullmatch(value) is None
-        )
-    else:
-        subtype = "not_in_allowlist"
-        offending = tuple(value for value in citations if value not in allowed_ids)
-    return EvaluationCitationFailure(allowed_ids, offending, subtype)
-
-
-def _safe_source_id(value: object) -> str:
-    return value if isinstance(value, str) and _SAFE_SOURCE_ID.fullmatch(value) else "<redacted>"
-
-
-def _pass_failure_category(
-    pass_name: str,
-    content: str,
-    allowed_source_labels: tuple[str, ...],
-    max_proposals: int,
-    payload: object,
-    count: int | None,
-    finish_reason: str | None,
-) -> str:
-    if not isinstance(payload, dict):
-        return (
-            "truncation_or_length_finish"
-            if finish_reason == "length" else "malformed_json"
-        )
-    if "proposals" not in payload:
-        return "missing_required_key"
-    if count is not None and count > max_proposals:
-        return (
-            "proposal_count_exceeded" if pass_name == "core"
-            else f"{pass_name}_total_budget_exceeded"
-        )
-    items = payload.get("proposals")
-    if isinstance(items, list):
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            if not {"placement", "text", "citations"} <= item.keys():
-                return "missing_required_key"
-            placement = item.get("placement")
-            if not isinstance(placement, dict):
-                continue
-            if not {"section", "container_kind", "container_key", "field"} <= placement.keys():
-                return "missing_required_key"
-            enum_fields = (
-                ("section", SolutionV2Section),
-                ("container_kind", SolutionV2ContainerKind),
-                ("field", SolutionV2PlacementField),
-            )
-            if any(
-                isinstance(placement[name], str)
-                and placement[name] not in enum_type._value2member_map_
-                for name, enum_type in enum_fields
-            ):
-                return "invalid_enum"
-    relations = payload.get("structure_relations")
-    if isinstance(relations, list):
-        for relation in relations:
-            if not isinstance(relation, dict):
-                continue
-            if "relation_type" not in relation:
-                return "missing_required_key"
-            value = relation["relation_type"]
-            if (
-                isinstance(value, str)
-                and value not in SolutionV2StructureRelationType._value2member_map_
-            ):
-                return "invalid_enum"
-    if isinstance(items, list) and pass_name in {"implementation", "assurance"}:
-        section_counts: dict[str, int] = {}
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            placement = item.get("placement")
-            if not isinstance(placement, dict):
-                continue
-            section = placement.get("section")
-            if isinstance(section, str):
-                section_counts[section] = section_counts.get(section, 0) + 1
-        limits = (
-            IMPLEMENTATION_SECTION_PROPOSAL_LIMITS
-            if pass_name == "implementation"
-            else ASSURANCE_SECTION_PROPOSAL_LIMITS
-        )
-        if set(section_counts) <= set(limits):
-            classify = (
-                implementation_budget_failure_category
-                if pass_name == "implementation"
-                else assurance_budget_failure_category
-            )
-            budget_category = classify(section_counts, max_proposals=max_proposals)
-            if budget_category is not None:
-                return budget_category.value
-    category = diagnose_solution_v2_output(
-        content, allowed_source_labels=allowed_source_labels,
-    )
-    if category is SolutionV2OutputDiagnosticCategory.INVALID_CITATION:
-        # Citation attribution is only valid when the actual parser branch was
-        # observed. A mirror scan must not invent a citation failure reason.
-        return "unknown_contract_failure"
-    return category.value if category is not None else "unknown_contract_failure"
+    ))
 
 
 def create_real_benchmark_reviewer(*, run_id: UUID):
@@ -769,25 +442,40 @@ def run_real_provider_benchmark_gate(
     llm_provider: LLMProvider | None,
     verifier_provider: LLMProvider | None,
     idempotency_key: UUID,
+    evaluation_report: BenchmarkEvaluationReport | None = None,
 ) -> RealBenchmarkGateResult:
     """Run production persistence only after the isolated retrieval preflight."""
 
-    preflight = preflight_real_benchmark_retrieval(
-        ownership,
-        query=query,
-        embedding_provider=embedding_provider,
-    )
-    solution = generate_and_persist_solution_draft(
-        opportunity,
-        analysis,
-        created_by=created_by,
-        embedding_provider=embedding_provider,
-        llm_provider=llm_provider,
-        verifier_provider=verifier_provider,
-        idempotency_key=idempotency_key,
-        schema_version=2,
-    )
-    return RealBenchmarkGateResult(preflight=preflight, solution=solution)
+    report = evaluation_report if evaluation_report is not None else BenchmarkEvaluationReport()
+    with evaluation_scope(report):
+        try:
+            preflight = preflight_real_benchmark_retrieval(
+                ownership, query=query, embedding_provider=embedding_provider,
+            )
+            report.observe("embedding_provider", success=True)
+            solution = generate_and_persist_solution_draft(
+                opportunity, analysis, created_by=created_by,
+                embedding_provider=embedding_provider, llm_provider=llm_provider,
+                verifier_provider=verifier_provider, idempotency_key=idempotency_key,
+                schema_version=2,
+            )
+        except Exception as error:
+            # Original exception/behavior survives; only safe counters are attached.
+            # Setup/retrieval failure is not automatically a provider outage.
+            if isinstance(error, KnowledgeDocumentError) and error.code in {
+                KnowledgeDocumentErrorCode.EMBEDDING_PROVIDER_ERROR.value,
+                KnowledgeDocumentErrorCode.EMBEDDING_INVALID_RESPONSE.value,
+            }:
+                report.observe("embedding_provider", success=False, category=error.code)
+            report.finish_failure()
+            error.evaluation_report = report.to_dict()
+            raise
+        if report.to_dict()["persistence"]["status"] != "PASS":
+            # Idempotency replay / externally supplied persistence adapter:
+            # the return proves the record, not an unobserved provenance count.
+            report.observe("persistence", success=True, provenance=None)
+    return RealBenchmarkGateResult(preflight=preflight, solution=solution,
+                                   evaluation=report.to_dict())
 
 
 def clear_real_benchmark_knowledge(
