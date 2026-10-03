@@ -92,7 +92,7 @@ def test_qwen_capability_sends_explicit_disabled_thinking_without_changing_reque
     provider = openai_compatible.OpenAICompatibleLLMProvider(
         LLMProviderConfig(
             provider_name="openai_compatible",
-            model_name="qwen3.8-max-0902",
+            model_name="qwen3.8-flash",
             api_key="secret",
             base_url="https://dashscope-compatible.invalid/v1",
             timeout_seconds=60,
@@ -110,7 +110,7 @@ def test_qwen_capability_sends_explicit_disabled_thinking_without_changing_reque
 
     assert result.content == "verified"
     assert endpoint.calls == [{
-        "model": "qwen3.8-max-0902",
+        "model": "qwen3.8-flash",
         "messages": [
             {"role": "system", "content": "verifier contract"},
             {"role": "user", "content": "synthetic packet"},
@@ -132,7 +132,7 @@ def test_qwen_capability_preserves_provider_default_when_thinking_is_unspecified
     provider = openai_compatible.OpenAICompatibleLLMProvider(
         LLMProviderConfig(
             provider_name="openai_compatible",
-            model_name="qwen3.8-max-0902",
+            model_name="qwen3.8-flash",
             api_key="secret",
             base_url="https://dashscope-compatible.invalid/v1",
             timeout_seconds=60,
@@ -146,7 +146,7 @@ def test_qwen_capability_preserves_provider_default_when_thinking_is_unspecified
     provider.generate([{"role": "user", "content": "packet"}])
 
     assert endpoint.calls == [{
-        "model": "qwen3.8-max-0902",
+        "model": "qwen3.8-flash",
         "messages": [{"role": "user", "content": "packet"}],
         "max_tokens": 1500,
     }]

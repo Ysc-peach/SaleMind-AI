@@ -659,7 +659,7 @@ def _semantic_pass_prompt(pass_name: str, runtime_budget: int) -> str:
             "risks": [{"ref": "integration_change", "condition": [sample("若接口契约后续发生变化。")],
                        "impact": [sample("适配器需要返工。")],
                        "mitigation": [sample("实施前验证接口契约。")],
-                       "trigger": [sample("联调时发现接口字段不一致。")]}],
+                       "trigger": [sample("若联调时发现接口字段不一致，则触发接口兼容性风险处置。")]}],
             "acceptance": [{"ref": "integration_check", "criterion": [sample("端到端集成测试通过。")]}],
             "out_of_scope": [sample("不替换客户现有身份系统。")],
             "phase_acceptance": [{"from": "discovery", "to": "integration_check"}],
@@ -685,6 +685,14 @@ def _semantic_pass_prompt(pass_name: str, runtime_budget: int) -> str:
             "BAD：当前权限模型存在遗漏。"
             "GOOD：如果权限模型未覆盖新增知识分类……"
             "条件式表达只说明风险触发条件，不能借此引入没有依据的精确数值、能力或承诺。"
+            "risks.trigger 表示未来可观测的风险触发/检测信号，不默认表示客户当前已经出现该问题。"
+            "尚未证实的风险信号必须使用条件式或事件式表达，例如："
+            "若权限核验发现某类知识文档未映射到任何访问控制维度，则将其视为风险触发信号。"
+            "当联调发现接口字段不一致时，触发接口兼容性风险处置。"
+            "只有当客户需求或 grounding fact 明确证明问题已经发生时，才允许直接写成既有事实。"
+            "条件式表达不能用于包装无依据的数字、能力或承诺。"
+            "BAD/AMBIGUOUS trigger：联调时发现接口字段不一致。"
+            "GOOD trigger：若联调时发现接口字段不一致，则触发接口兼容性风险处置。"
             "phase_acceptance.from 必须引用 <validated_implementation_plan> 中真实 phase ref，"
             "to 必须引用本次 acceptance.ref。"
             "已确认的 Core/Implementation 不得重写；assumptions 和 open_questions 由程序保留，不生成。"

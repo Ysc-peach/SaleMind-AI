@@ -268,6 +268,43 @@ def test_assurance_prompt_distinguishes_supported_conditions_from_hypothetical_r
         assert f"GOOD：{good}" in prompt
 
 
+def test_assurance_prompt_requires_prospective_signals_not_unconfirmed_existing_facts():
+    analysis = analysis_fixture()
+    prompt = build_solution_v2_assurance_messages(
+        analysis, check_solution_readiness(analysis), (), admission_fixture(),
+        parse_core(core_ir()), parse_implementation(implementation_ir()),
+    )[0]["content"]
+
+    for phrase in (
+        "risks.trigger 表示未来可观测的风险触发/检测信号",
+        "不默认表示客户当前已经出现该问题",
+        "尚未证实的风险信号必须使用条件式或事件式表达",
+        "只有当客户需求或 grounding fact 明确证明问题已经发生时，才允许直接写成既有事实",
+        "条件式表达不能用于包装无依据的数字、能力或承诺",
+        "若权限核验发现某类知识文档未映射到任何访问控制维度，则将其视为风险触发信号。",
+        "当联调发现接口字段不一致时，触发接口兼容性风险处置。",
+        "BAD/AMBIGUOUS trigger：联调时发现接口字段不一致。",
+        "GOOD trigger：若联调时发现接口字段不一致，则触发接口兼容性风险处置。",
+    ):
+        assert phrase in prompt
+
+
+def test_assurance_format_example_uses_a_conditional_trigger_and_still_parses():
+    analysis = analysis_fixture()
+    implementation = parse_implementation(implementation_ir())
+    prompt = build_solution_v2_assurance_messages(
+        analysis, check_solution_readiness(analysis), (), admission_fixture(),
+        parse_core(core_ir()), implementation,
+    )[0]["content"]
+    example = json.loads(prompt.split("示例仅展示格式，不能照抄示例的技术结论：", 1)[1])
+
+    expected = "若联调时发现接口字段不一致，则触发接口兼容性风险处置。"
+    assert example["risks"][0]["trigger"][0]["text"] == expected
+    parsed = parse_assurance(example, implementation)
+    trigger = next(p for p in parsed.proposals if p.placement.field.value == "trigger")
+    assert trigger.text == expected
+
+
 def test_assurance_format_example_uses_a_conditional_risk_and_still_parses():
     analysis = analysis_fixture()
     implementation = parse_implementation(implementation_ir())

@@ -71,7 +71,7 @@ def test_verifier_settings_do_not_replace_generation_settings():
 
 @override_settings(**{
     **VERIFIER_SETTINGS,
-    "VERIFIER_MODEL": "qwen3.8-max-0902",
+    "VERIFIER_MODEL": "qwen3.8-flash",
     "VERIFIER_TIMEOUT_SECONDS": 60,
     "VERIFIER_MAX_RETRIES": 0,
     "VERIFIER_MAX_CONCURRENCY": 2,
@@ -112,7 +112,7 @@ def test_qwen_verifier_factory_propagates_disabled_thinking_only_to_supported_re
     }
     assert settings.VERIFIER_MAX_CONCURRENCY == 2
     assert endpoint_calls == [{
-        "model": "qwen3.8-max-0902",
+        "model": "qwen3.8-flash",
         "messages": [{"role": "user", "content": "packet"}],
         "max_tokens": 1500,
         "extra_body": {"enable_thinking": False},
