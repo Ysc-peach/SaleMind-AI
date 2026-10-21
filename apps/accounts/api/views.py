@@ -2,12 +2,30 @@
 
 from django.contrib.auth import get_user_model
 from rest_framework.generics import ListAPIView, RetrieveAPIView
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.throttling import ScopedRateThrottle
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from apps.accounts.models import UserRole
 
 from .permissions import IsSales
 from .serializers import CurrentUserSerializer, PresalesOptionSerializer
+
+
+class LoginView(TokenObtainPairView):
+    """Password login is anonymous and must not be brute-forceable."""
+
+    permission_classes = (AllowAny,)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = "login"
+
+
+class RefreshView(TokenRefreshView):
+    """Refresh has its own budget so login brute force cannot lock out renewal."""
+
+    permission_classes = (AllowAny,)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = "token_refresh"
 
 
 class CurrentUserView(RetrieveAPIView):

@@ -178,6 +178,171 @@ def _resume(context, workflow_id, payload, *, user=None):
     )
 
 
+@pytest.mark.parametrize("statuses,code", [
+    ({"business_goal": "unknown", "use_scenario": "unknown"},
+     "solution_needs_sales_clarification"),
+    ({"budget": "conflict"}, "solution_needs_sales_clarification"),
+    ({"deployment_requirement": "conflict"}, "solution_needs_presales_involvement"),
+])
+def test_readiness_failure_keeps_its_actionable_code_on_http_and_replay(
+    workflow_api_context, monkeypatch, statuses, code,
+):
+    from apps.sales.models import SolutionDraftProvenance
+    from apps.sales.services import solution_draft, solution_review_workflow
+    from apps.sales.services.solution_persistence import generate_and_persist_solution_draft
+
+    context = dict(workflow_api_context)
+    payload = analysis_payload(**statuses)
+    context["analysis"] = OpportunityRequirementAnalysis.objects.create(
+        opportunity=context["opportunity"], created_by=context["sales"],
+        **payload, source_raw_requirement="synthetic workflow HTTP input",
+        source_context={}, analysis_version="v1", llm_provider="fake", llm_model="fake-model",
+    )
+    monkeypatch.setattr(solution_review_workflow, "generate_and_persist_solution_draft",
+                        generate_and_persist_solution_draft)
+    def unexpected_provider_call(*args, **kwargs):
+        pytest.fail("Readiness must stop before retrieval or model calls")
+    monkeypatch.setattr(solution_draft, "search_knowledge", unexpected_provider_call)
+    monkeypatch.setattr(solution_draft, "get_llm_provider", unexpected_provider_call)
+
+    key = uuid4()
+    response = _start(context, key=key)
+    assert response.status_code == 422
+    assert response.data["code"] == code
+    replay = _start(context, key=key)
+    assert replay.status_code == 200
+    assert replay.data["status"] == "FAILED"
+    assert replay.data["error_code"] == code
+    assert replay.data["solution_draft_id"] is None
+    assert replay.data["allowed_actions"] == []
+    assert "synthetic workflow HTTP input" not in repr(response.data) + repr(replay.data)
+    assert not SolutionDraftRecord.objects.exists()
+    assert not SolutionDraftProvenance.objects.exists()
+    assert not SolutionReview.objects.exists()
+
+
+def test_unknown_user_scale_is_not_reclassified_as_a_readiness_block(
+    workflow_api_context, monkeypatch,
+):
+    from apps.sales.services import solution_draft, solution_review_workflow
+    from apps.sales.services.solution_persistence import generate_and_persist_solution_draft
+
+    context = dict(workflow_api_context)
+    context["analysis"] = OpportunityRequirementAnalysis.objects.create(
+        opportunity=context["opportunity"], created_by=context["sales"],
+        **analysis_payload(user_scale="unknown"), source_raw_requirement="offline gap input",
+        source_context={}, analysis_version="v1", llm_provider="fake", llm_model="fake-model",
+    )
+    monkeypatch.setattr(solution_review_workflow, "generate_and_persist_solution_draft",
+                        generate_and_persist_solution_draft)
+    searches = []
+    def no_documents(**kwargs):
+        searches.append(kwargs["query"])
+        return []
+    monkeypatch.setattr(solution_draft, "search_knowledge", no_documents)
+    monkeypatch.setattr(solution_draft, "get_llm_provider",
+                        lambda: pytest.fail("Missing evidence must stop before generation"))
+    response = _start(context)
+    assert searches  # The formal readiness check allowed retrieval.
+    assert response.status_code == 422
+    assert response.data["code"] == "solution_draft_insufficient_approved_evidence"
+    assert not SolutionDraftRecord.objects.exists()
+
+
+def test_start_returns_actionable_evidence_code_without_model_calls_or_partial_rows(
+    workflow_api_context, monkeypatch,
+):
+    from apps.rag.tests.test_answering import search_result
+    from apps.sales.models import SolutionDraftProvenance
+    from apps.sales.services import solution_draft, solution_review_workflow
+    from apps.sales.services.solution_persistence import generate_and_persist_solution_draft
+
+    monkeypatch.setattr(solution_review_workflow, "generate_and_persist_solution_draft",
+                        generate_and_persist_solution_draft)
+    searches = []
+    def search(**kwargs):
+        searches.append(kwargs)
+        return [search_result()]
+    monkeypatch.setattr(solution_draft, "search_knowledge", search)
+    monkeypatch.setattr(solution_draft, "get_llm_provider",
+                        lambda: pytest.fail("An evidence failure must not construct a generator"))
+    key = uuid4()
+    response = _start(workflow_api_context, key=key)
+    assert response.status_code == 422
+    assert response.json()["code"] == "solution_draft_insufficient_approved_evidence"
+    assert set(response.json()) == {"code", "message"}
+    initial_search_count = len(searches)
+    assert initial_search_count > 0
+    repeated = _start(workflow_api_context, key=key)
+    # An idempotent replay returns the existing terminal projection, not a new
+    # generation request or a rewritten HTTP outcome.
+    assert repeated.status_code == 200
+    assert repeated.json()["status"] == "FAILED"
+    assert repeated.json()["error_code"] == "solution_draft_insufficient_approved_evidence"
+    assert repeated.json()["allowed_actions"] == []
+    assert len(searches) == initial_search_count
+    assert not SolutionDraftRecord.objects.exists()
+    assert not SolutionDraftProvenance.objects.exists()
+    assert not SolutionReview.objects.exists()
+
+
+@pytest.mark.parametrize("code", (
+    "solution_draft_not_grounded", "invalid_solution_grounding_input",
+    "solution_grounding_invalid_response",
+    "solution_draft_unconfirmed_assertion", "solution_draft_unqualified_precondition",
+    "solution_draft_expression_unclassified",
+    "solution_draft_invalid_response", "llm_provider_error", "llm_invalid_response",
+    "llm_not_configured", "unsupported_llm_provider",
+))
+def test_grounding_rejection_returns_422_and_terminal_replay_without_partial_rows(
+    workflow_api_context, monkeypatch, caplog, code,
+):
+    import logging
+    from apps.sales.models import SolutionDraftProvenance
+    from apps.sales.services import solution_review_workflow
+    from apps.sales.services.solution_grounding import (
+        SolutionDraftGroundingError, SolutionGroundingErrorCode,
+    )
+
+    calls = []
+    from apps.llm.exceptions import LLMErrorCode, LLMProviderError
+    from apps.sales.services.solution_errors import SolutionDraftError, SolutionDraftErrorCode
+    if code in {item.value for item in LLMErrorCode}:
+        error = LLMProviderError(LLMErrorCode(code))
+    elif code == "solution_draft_invalid_response":
+        error = SolutionDraftError(SolutionDraftErrorCode.INVALID_RESPONSE)
+    else:
+        error = SolutionDraftGroundingError(SolutionGroundingErrorCode(code))
+    error.__cause__ = RuntimeError("private raw output and Authorization secret")
+    def reject(*args, **kwargs):
+        calls.append(1)
+        raise error
+    monkeypatch.setattr(solution_review_workflow, "generate_and_persist_solution_draft", reject)
+    key = uuid4()
+    with caplog.at_level(logging.WARNING):
+        response = _start(workflow_api_context, key=key)
+    assert response.status_code == 422
+    assert response.json()["code"] == code
+    assert set(response.json()) == {"code", "message"}
+    repeated = _start(workflow_api_context, key=key)
+    assert repeated.status_code == 200
+    assert repeated.json()["status"] == "FAILED"
+    assert repeated.json()["error_code"] == code
+    assert repeated.json()["allowed_actions"] == []
+    assert len(calls) == 1
+    assert not SolutionDraftRecord.objects.exists()
+    assert not SolutionDraftProvenance.objects.exists()
+    assert not SolutionReview.objects.exists()
+    diagnostic = next(r.solution_workflow_failure for r in caplog.records
+                      if hasattr(r, "solution_workflow_failure"))
+    assert diagnostic["exception_class"] == type(error).__name__
+    if isinstance(error, SolutionDraftGroundingError):
+        assert diagnostic["category"] == "grounding_rejection"
+    assert "private raw" not in caplog.text + response.content.decode() + repr(repeated.json())
+    assert "Authorization secret" not in caplog.text
+    assert all(r.exc_info is None for r in caplog.records)
+
+
 @pytest.mark.parametrize("payload", [{}, {"analysis_id": 1, "actor_id": 999}])
 def test_start_requires_only_explicit_analysis_id(workflow_api_context, payload):
     response = _start(workflow_api_context, payload=payload)

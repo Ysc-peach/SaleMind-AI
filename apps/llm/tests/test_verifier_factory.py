@@ -16,6 +16,15 @@ VERIFIER_SETTINGS = {
     "VERIFIER_MAX_OUTPUT_TOKENS": 1500,
 }
 
+DEEPSEEK_VERIFIER_SETTINGS = {
+    **VERIFIER_SETTINGS,
+    "VERIFIER_PROVIDER": "deepseek",
+    "VERIFIER_MODEL": "deepseek-flash",
+    "VERIFIER_BASE_URL": "https://api.deepseek.com",
+    "VERIFIER_TIMEOUT_SECONDS": 60,
+    "VERIFIER_MAX_CONCURRENCY": 2,
+}
+
 
 @override_settings(**VERIFIER_SETTINGS)
 def test_factory_builds_independent_openai_compatible_verifier():
@@ -117,3 +126,58 @@ def test_qwen_verifier_factory_propagates_disabled_thinking_only_to_supported_re
         "max_tokens": 1500,
         "extra_body": {"enable_thinking": False},
     }]
+
+
+@override_settings(**DEEPSEEK_VERIFIER_SETTINGS, LLM_THINKING_ENABLED=True)
+def test_deepseek_verifier_sends_disabled_thinking_with_independent_limits(monkeypatch):
+    from apps.llm import deepseek
+    from apps.llm.verifier_factory import get_verifier_provider
+    from django.conf import settings
+
+    calls, clients = [], []
+
+    def client_factory(**kwargs):
+        clients.append(kwargs)
+
+        def create(**request):
+            calls.append(request)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content='{"admissibility":"ADMISSIBLE"}'), finish_reason="stop")],
+                usage=SimpleNamespace(prompt_tokens=120, completion_tokens=35),
+            )
+
+        return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+
+    monkeypatch.setattr(deepseek, "OpenAI", client_factory)
+    provider = get_verifier_provider()
+    result = provider.generate([{"role": "user", "content": "verifier packet"}])
+
+    assert clients == [{
+        "api_key": "verifier-factory-secret", "base_url": "https://api.deepseek.com",
+        "timeout": 60, "max_retries": 0,
+    }]
+    assert calls == [{
+        "model": "deepseek-flash", "messages": [{"role": "user", "content": "verifier packet"}],
+        "max_tokens": 1500, "extra_body": {"thinking": {"type": "disabled"}},
+    }]
+    assert result.prompt_tokens == 120
+    assert result.completion_tokens == 35
+    assert provider.thinking_enabled is False
+    assert settings.VERIFIER_MAX_CONCURRENCY == 2
+    assert settings.LLM_THINKING_ENABLED is True
+    assert settings.LLM_MODEL == "deepseek-v4-flash"
+    assert "verifier-factory-secret" not in repr(provider._config)
+
+
+@pytest.mark.parametrize("name", ["VERIFIER_MODEL", "VERIFIER_API_KEY", "VERIFIER_BASE_URL"])
+def test_deepseek_verifier_does_not_fall_back_to_generation_configuration(settings, name):
+    from apps.llm.exceptions import LLMProviderError
+    from apps.llm.verifier_factory import get_verifier_provider
+
+    for key, value in DEEPSEEK_VERIFIER_SETTINGS.items():
+        setattr(settings, key, value)
+    settings.LLM_API_KEY = "synthetic-generation-only-key"
+    setattr(settings, name, "")
+    with pytest.raises(LLMProviderError) as exc:
+        get_verifier_provider()
+    assert exc.value.code == "llm_not_configured"

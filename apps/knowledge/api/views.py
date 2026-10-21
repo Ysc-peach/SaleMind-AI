@@ -5,6 +5,7 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from config.throttling import ScopedActionThrottleMixin
 from apps.knowledge.exceptions import (
     KnowledgeDocumentError,
     KnowledgeDocumentErrorCode,
@@ -39,6 +40,7 @@ _EMBEDDING_CONFIGURATION_CODES = {
 
 
 class KnowledgeDocumentViewSet(
+    ScopedActionThrottleMixin,
     mixins.ListModelMixin,
     mixins.CreateModelMixin,
     mixins.RetrieveModelMixin,
@@ -51,6 +53,10 @@ class KnowledgeDocumentViewSet(
     parser_classes = (MultiPartParser, FormParser)
     pagination_class = KnowledgeDocumentPagination
     http_method_names = ["get", "post", "head", "options"]
+    scoped_throttle_actions = {
+        "create": "knowledge_write",
+        "reindex": "knowledge_write",
+    }
 
     def get_serializer_class(self):
         if getattr(self, "action", None) == "create":

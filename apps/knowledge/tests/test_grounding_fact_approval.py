@@ -140,13 +140,13 @@ def test_stale_fact_cannot_be_approved(fact_fixture, django_user_model):
     assert fact.approval_status == EnterpriseGroundingFactApprovalStatus.PROPOSED
 
 
-def test_admin_registers_only_fact_review_model(fact_fixture, django_user_model):
+def test_admin_registers_fact_review_and_read_only_documents(fact_fixture, django_user_model):
     from django.contrib import admin
 
     from apps.knowledge.models import KnowledgeChunk
 
     assert admin.site.is_registered(EnterpriseGroundingFact)
-    assert not admin.site.is_registered(KnowledgeDocument)
+    assert admin.site.is_registered(KnowledgeDocument)
     assert not admin.site.is_registered(KnowledgeChunk)
 
     model_admin = admin.site._registry[EnterpriseGroundingFact]

@@ -55,6 +55,7 @@ from apps.sales.services.solution_payloads import (
 )
 from apps.sales.services.solution_schema_v2 import SolutionDraftV2
 from apps.sales.services.solution_evaluation import emit_evaluation
+from apps.sales.services.solution_readiness import SolutionReadiness, SolutionReadinessStatus
 
 
 class SolutionPersistenceError(Exception):
@@ -63,6 +64,20 @@ class SolutionPersistenceError(Exception):
     def __init__(self, message: str = "The Solution Draft could not be persisted."):
         self.safe_message = message
         super().__init__(message)
+
+
+class SolutionReadinessBlockedError(SolutionPersistenceError):
+    """Preserve the formal pre-generation reason without customer payloads."""
+
+    def __init__(self, status: SolutionReadinessStatus):
+        codes = {
+            SolutionReadinessStatus.NEEDS_SALES_CLARIFICATION: "solution_needs_sales_clarification",
+            SolutionReadinessStatus.NEEDS_PRESALES_INVOLVEMENT: "solution_needs_presales_involvement",
+        }
+        if status not in codes:
+            raise SolutionPersistenceError("Invalid readiness failure status.")
+        self.code = codes[status]
+        super().__init__("Requirement clarification is needed before solution generation.")
 
 
 def solution_draft_to_payload(draft: SolutionDraft) -> dict:
@@ -178,6 +193,20 @@ def _generate_and_persist_solution_draft(
         verifier_provider=verifier_provider,
         schema_version=schema_version,
     )
+    if (
+        isinstance(result, GroundedSolutionDraftResult)
+        and result.analysis_id == analysis_id
+        and result.schema_version == schema_version
+        and result.generation_status is SolutionGenerationStatus.BLOCKED_BY_READINESS
+        and isinstance(result.readiness, SolutionReadiness)
+        and result.readiness.status in {
+            SolutionReadinessStatus.NEEDS_SALES_CLARIFICATION,
+            SolutionReadinessStatus.NEEDS_PRESALES_INVOLVEMENT,
+        }
+        and result.draft is None
+        and result.admission is None
+    ):
+        raise SolutionReadinessBlockedError(result.readiness.status)
     if (
         not isinstance(result, GroundedSolutionDraftResult)
         or result.analysis_id != analysis_id
@@ -325,32 +354,95 @@ def evaluate_solution_draft_stale_reasons(
     return tuple(reasons)
 
 
-def refresh_solution_draft_staleness(record: SolutionDraftRecord) -> SolutionDraftRecord:
-    """Persist only derived stale metadata; content and review status stay unchanged."""
+def project_solution_draft_staleness(record: SolutionDraftRecord) -> SolutionDraftRecord:
+    """Read-only projection; an invalidated immutable version stays invalidated."""
 
     reasons = evaluate_solution_draft_stale_reasons(record)
-    is_stale = bool(reasons)
-    record.is_stale = is_stale
-    record.stale_at = record.stale_at or timezone.now() if is_stale else None
-    record.stale_reasons = [reason.value for reason in reasons]
-    record.save(update_fields=["is_stale", "stale_at", "stale_reasons"])
+    record.stale_reasons = list(dict.fromkeys([
+        *record.stale_reasons, *(reason.value for reason in reasons),
+    ]))
+    record.is_stale = record.is_stale or bool(record.stale_reasons)
+    if record.is_stale and record.stale_at is None:
+        record.stale_at = timezone.now()
+    return record
+
+
+def _lock_staleness_source_rows(record: SolutionDraftRecord) -> None:
+    """Lock the rows a staleness decision reads, in document -> fact order.
+
+    A reindex takes the document lock before replacing chunks and marking facts
+    stale. Holding the same order while reasons are derived stops an old
+    provenance read from being combined with a new chunk read, which would
+    manufacture a permanent ``GROUNDING_PROVENANCE_INVALID`` verdict.
+    """
+
+    sources = tuple(
+        record.provenance_entries.values_list(
+            "source_document_id", "enterprise_grounding_fact_id",
+        ).order_by("source_document_id", "enterprise_grounding_fact_id")
+    )
+    document_ids = sorted({document_id for document_id, _ in sources})
+    fact_ids = sorted({fact_id for _, fact_id in sources})
+    if document_ids:
+        list(
+            KnowledgeDocument.objects.select_for_update()
+            .filter(pk__in=document_ids)
+            .order_by("pk")
+        )
+    if fact_ids:
+        list(
+            EnterpriseGroundingFact.objects.select_for_update()
+            .filter(pk__in=fact_ids)
+            .order_by("pk")
+        )
+
+
+def refresh_solution_draft_staleness(record: SolutionDraftRecord) -> SolutionDraftRecord:
+    """Persist derived metadata under a row lock, never trusting an old instance."""
+
+    record_id = _saved_pk(record, SolutionDraftRecord)
+    with transaction.atomic():
+        current = SolutionDraftRecord.objects.select_for_update().get(pk=record_id)
+        _lock_staleness_source_rows(current)
+        before = (current.is_stale, current.stale_at, current.stale_reasons)
+        project_solution_draft_staleness(current)
+        if before != (current.is_stale, current.stale_at, current.stale_reasons):
+            current.save(update_fields=["is_stale", "stale_at", "stale_reasons"])
+        record.is_stale = current.is_stale
+        record.stale_at = current.stale_at
+        record.stale_reasons = current.stale_reasons
     return record
 
 
 def _lock_admission_rows(admission: GroundingAdmission) -> None:
     fact_ids = {item.fact_id for item in admission.enterprise_provenance}
+    if not fact_ids:
+        return
+    # Rebuilding an index locks the document row before its facts, so locking
+    # facts first would deadlock against it. The caller re-builds and compares the
+    # whole admission after these rows are locked; that check authorizes saving.
+    provenance = list(
+        EnterpriseGroundingFact.objects.filter(pk__in=fact_ids)
+        .values_list("pk", "source_document_id")
+    )
+    if {fact_id for fact_id, _ in provenance} != fact_ids:
+        raise SolutionPersistenceError("Grounding Fact provenance is incomplete.")
+    document_ids = {document_id for _, document_id in provenance}
+    documents = tuple(
+        KnowledgeDocument.objects.select_for_update()
+        .filter(pk__in=document_ids)
+        .order_by("pk")
+    )
+    if {document.pk for document in documents} != document_ids:
+        raise SolutionPersistenceError("Knowledge document provenance is incomplete.")
     facts = tuple(
         EnterpriseGroundingFact.objects.select_for_update()
-        .select_related("source_document")
         .filter(pk__in=fact_ids)
+        .order_by("pk")
     )
     if {fact.pk for fact in facts} != fact_ids:
         raise SolutionPersistenceError("Grounding Fact provenance is incomplete.")
-    document_ids = {fact.source_document_id for fact in facts}
-    documents = tuple(
-        KnowledgeDocument.objects.select_for_update().filter(pk__in=document_ids)
-    )
-    if {document.pk for document in documents} != document_ids:
+    if {fact.source_document_id for fact in facts} != document_ids:
         raise SolutionPersistenceError("Knowledge document provenance is incomplete.")
 
 

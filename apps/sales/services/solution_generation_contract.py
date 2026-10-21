@@ -49,6 +49,20 @@ ASSURANCE_SECTION_PROPOSAL_LIMITS = {
 }
 SEMANTIC_IR_VERSION = "semantic_v1"
 CLAIM_KEYS = frozenset({"text", "citations", "related_requirement_fields"})
+# Placements whose claims are judged by the unresolved policy. They must cite at
+# least one requirement dimension, otherwise an empty linkage would silently
+# bypass the deterministic unresolved-as-confirmed guard. Kept in the contract
+# layer so the Semantic IR parser rejects it before any policy or guard runs.
+MANAGED_LINKAGE_PLACEMENTS = frozenset({
+    ("implementation_plan", "implementation_phase", "objective"),
+    ("implementation_plan", "implementation_phase", "tasks"),
+    ("implementation_plan", "implementation_phase", "deliverables"),
+    ("implementation_plan", "implementation_phase", "timing"),
+    ("risks", "risk", "condition"),
+    ("risks", "risk", "impact"),
+    ("risks", "risk", "mitigation"),
+    ("milestones", "milestone", "outcome"),
+})
 COMPONENT_KEYS = frozenset({"ref", "identity", "responsibilities", "rationale", "interfaces"})
 EDGE_KEYS = frozenset({"from", "to"})
 PASS_ROOT_KEYS = {
@@ -78,10 +92,12 @@ def closed_object(value, required, optional=(), *, path="$"):
         reject_contract("wrong_type", path, "object", type(value).__name__)
     missing = set(required) - value.keys()
     if missing:
-        reject_contract("missing_required_key", key_path(path, sorted(missing)[0]), "required key present", "missing")
+        reject_contract("missing_required_key", key_path(path, sorted(missing)[0]), "required key present", "missing",
+                        allowed_keys=tuple(sorted(set(required) | set(optional))))
     unknown = value.keys() - (set(required) | set(optional))
     if unknown:
-        reject_contract("unknown_key", key_path(path, sorted(unknown)[0]), "allowed key", "unknown key")
+        reject_contract("unknown_key", key_path(path, sorted(unknown)[0]), "allowed key", "unknown key",
+                        allowed_keys=tuple(sorted(set(required) | set(optional))))
     return value
 
 

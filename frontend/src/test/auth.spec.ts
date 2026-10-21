@@ -95,4 +95,34 @@ describe('authentication', () => {
     expect((await pending).message).toBe('session_changed')
     expect(calls.filter(path=>path==='/protected/conflict')).toHaveLength(0)
   })
+  it('starts a fresh refresh after a new login instead of reusing the old promise',async()=>{
+    const auth=useAuthStore()
+    sessionStorage.setItem('salesmind.refresh','old-refresh')
+    let release:()=>void=()=>{}
+    const gate=new Promise<void>(r=>{release=r})
+    let refreshCalls=0
+    const patched:AxiosAdapter=async config=>{
+      if(config.url!.replace(/^\/api/,'')==='/auth/refresh/'){
+        refreshCalls++
+        if(refreshCalls===1){
+          await gate
+          throw new AxiosError('old-refresh-failed','ERR_BAD_REQUEST',config,null,{data:{},status:401,statusText:'',headers:{},config})
+        }
+        return { data:{access:'newer-access'}, status:200, statusText:'OK', headers:{}, config }
+      }
+      return adapter(config)
+    }
+    axios.defaults.adapter=patched; http.defaults.adapter=patched
+    const stale=auth.refresh()
+    await new Promise(r=>setTimeout(r,0))
+    auth.logout()
+    await auth.login('sales','synthetic')
+    const fresh=auth.refresh()
+    expect(refreshCalls).toBe(2)
+    release()
+    await stale.catch(()=>null)
+    await fresh
+    expect(auth.accessToken).toBe('newer-access')
+    expect(auth.user).toEqual(user)
+  })
 })

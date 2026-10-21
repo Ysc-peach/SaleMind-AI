@@ -8,7 +8,7 @@ from apps.llm.exceptions import LLMProviderError
 from apps.llm.tests.test_deepseek_provider import _build_provider, _response
 from apps.rag.tests.test_answering import search_result
 from apps.sales.models import Customer, Opportunity
-from apps.sales.tests.requirement_fakes import valid_analysis_payload
+from apps.sales.tests.requirement_fakes import valid_analysis_generation_payload
 from apps.sales.tests.solution_fakes import analysis_record, SolutionFakeLLM
 
 
@@ -97,7 +97,7 @@ def test_short_circuits_never_request_output_budget(monkeypatch, statuses):
 def test_requirement_analysis_still_uses_original_provider_default(monkeypatch):
     from apps.sales.services.requirement_analysis import analyze_opportunity_requirement
 
-    provider, endpoint, _ = _build_provider(monkeypatch, _response(json.dumps(valid_analysis_payload())))
+    provider, endpoint, _ = _build_provider(monkeypatch, _response(json.dumps(valid_analysis_generation_payload())))
     opportunity = Opportunity(customer=Customer(name="测试客户"), project_name="测试项目", raw_requirement="测试需求")
     result = analyze_opportunity_requirement(opportunity, llm_provider=provider)
     assert result.requirements.budget.status == "conflict"

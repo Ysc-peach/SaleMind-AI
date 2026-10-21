@@ -121,10 +121,98 @@ def _initial(context, *, workflow_run_id=None):
     }
 
 
+def test_workflow_logs_safe_original_failure_without_changing_failure_state(
+    workflow_context, monkeypatch, caplog,
+):
+    import logging
+    from apps.llm.exceptions import LLMErrorCode, LLMProviderError, LLMProviderFailureKind
+    from apps.sales.services import solution_review_workflow
+
+    error = LLMProviderError(LLMErrorCode.LLM_PROVIDER_ERROR,
+                            failure_kind=LLMProviderFailureKind.PERMISSION_DENIED, http_status=403)
+    error.__cause__ = RuntimeError("Authorization: private-provider-secret")
+
+    def reject(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(solution_review_workflow, "generate_and_persist_solution_draft", reject)
+    with caplog.at_level(logging.WARNING):
+        result = _compiled().invoke(_initial(workflow_context), _config())
+    diagnostic = next(r.solution_workflow_failure for r in caplog.records
+                      if hasattr(r, "solution_workflow_failure"))
+    assert diagnostic["exception_class"] == "LLMProviderError"
+    assert diagnostic["code"] == "llm_provider_error"
+    assert diagnostic["category"] == "permission_denied"
+    assert diagnostic["http_status"] == 403
+    assert diagnostic["opportunity_id"] == workflow_context["opportunity"].pk
+    assert diagnostic["analysis_id"] == workflow_context["analysis"].pk
+    assert result["error_code"] == "llm_provider_error"
+    assert result["workflow_outcome"] == "failed"
+    assert SolutionDraftRecord.objects.count() == 0
+    assert "private-provider-secret" not in caplog.text + repr(diagnostic) + repr(result)
+    assert all(r.exc_info is None for r in caplog.records)
+
+
 def _compiled():
     from apps.sales.services.solution_review_workflow import build_solution_review_graph
 
     return build_solution_review_graph(InMemorySaver())
+
+
+def test_workflow_empty_generation_stops_without_draft_provenance_or_review(workflow_context, monkeypatch):
+    from apps.rag.tests.test_answering import search_result
+    from apps.sales.models import SolutionDraftProvenance
+    from apps.sales.services import solution_draft, solution_review_workflow
+    from apps.sales.services.solution_persistence import generate_and_persist_solution_draft
+    from apps.sales.tests.test_solution_split_generation_v2 import _ThreePassProvider
+    from apps.sales.tests.test_solution_v2_pipeline import admission_fixture
+
+    empty = {"proposals": [], "structure_relations": []}
+    provider = _ThreePassProvider(empty, empty, empty)
+    monkeypatch.setattr(solution_review_workflow, "generate_and_persist_solution_draft",
+                        generate_and_persist_solution_draft)
+    monkeypatch.setattr(solution_draft, "search_knowledge", lambda **kw: [search_result()])
+    monkeypatch.setattr(solution_draft, "build_solution_admission", lambda *args: admission_fixture())
+    monkeypatch.setattr(solution_draft, "get_llm_provider", lambda: provider)
+    monkeypatch.setattr(solution_draft, "get_verifier_provider",
+                        lambda: pytest.fail("Empty suggestions must stop before verification"))
+
+    graph = _compiled()
+    config = _config()
+    result = graph.invoke(_initial(workflow_context), config)
+
+    assert result["workflow_outcome"] == "failed"
+    assert result["error_code"] == "solution_draft_no_proposals"
+    assert not result.get("solution_draft_id")
+    assert "__interrupt__" not in result
+    assert len(provider.calls) == 3
+    assert not SolutionDraftRecord.objects.exists()
+    assert not SolutionDraftProvenance.objects.exists()
+    assert not SolutionReview.objects.exists()
+    checkpoint = graph.get_state(config)
+    assert checkpoint.next == ()
+    assert checkpoint.values["error_code"] == "solution_draft_no_proposals"
+
+
+def test_workflow_surfaces_missing_approved_evidence_without_partial_persistence(
+    workflow_context, monkeypatch,
+):
+    from apps.rag.tests.test_answering import search_result
+    from apps.sales.models import SolutionDraftProvenance
+    from apps.sales.services import solution_draft, solution_review_workflow
+    from apps.sales.services.solution_persistence import generate_and_persist_solution_draft
+
+    monkeypatch.setattr(solution_review_workflow, "generate_and_persist_solution_draft",
+                        generate_and_persist_solution_draft)
+    monkeypatch.setattr(solution_draft, "search_knowledge", lambda **kw: [search_result()])
+    monkeypatch.setattr(solution_draft, "get_llm_provider",
+                        lambda: pytest.fail("Missing approved evidence must not call providers"))
+    result = _compiled().invoke(_initial(workflow_context), _config())
+    assert result["workflow_outcome"] == "failed"
+    assert result["error_code"] == "solution_draft_insufficient_approved_evidence"
+    assert not SolutionDraftRecord.objects.exists()
+    assert not SolutionDraftProvenance.objects.exists()
+    assert not SolutionReview.objects.exists()
 
 
 def _config(thread_id=None):

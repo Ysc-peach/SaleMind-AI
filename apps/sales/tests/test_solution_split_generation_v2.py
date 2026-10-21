@@ -1,6 +1,7 @@
 """Three bounded provider passes feeding one unchanged Solution V2 draft."""
 
 import json
+from xml.etree import ElementTree
 
 import pytest
 
@@ -373,6 +374,41 @@ def _run_pipeline(monkeypatch, core, implementation, assurance, *, verifier=None
     )
 
 
+@pytest.mark.parametrize("format_name", ["atomic", "semantic"])
+def test_empty_v2_generation_is_not_reported_as_success(monkeypatch, format_name):
+    empty = {"proposals": [], "structure_relations": []}
+    outputs = (empty, empty, empty) if format_name == "atomic" else (
+        {"ir_version": "semantic_v1", "proposed_solution": [],
+         "architecture": {"components": []}, "deployment_and_integration": {}},
+        {"ir_version": "semantic_v1", "phases": [], "milestones": [], "dependencies": []},
+        {"ir_version": "semantic_v1", "risks": [], "acceptance": [],
+         "out_of_scope": [], "phase_acceptance": []},
+    )
+    provider = _ThreePassProvider(*outputs)
+    verifier = _VerifierProvider()
+
+    with pytest.raises(SolutionDraftError) as caught:
+        _run_pipeline_with_provider(monkeypatch, provider, verifier=verifier)
+
+    assert caught.value.code == "solution_draft_no_proposals"
+    assert len(provider.calls) == 3
+    assert verifier.calls == []
+
+
+def test_nonempty_v2_generation_allows_individual_empty_passes(monkeypatch):
+    empty = {"proposals": [], "structure_relations": []}
+    verifier = _VerifierProvider()
+
+    result, provider = _run_pipeline(
+        monkeypatch, _core_payload(4), empty, empty, verifier=verifier,
+    )
+
+    assert result.generation_status.value == "generated"
+    assert result.draft is not None
+    assert len(provider.calls) == 3
+    assert len(verifier.calls) == 4
+
+
 @pytest.mark.parametrize("invalid_pass", ("core", "implementation", "assurance"))
 def test_strict_pass_rejection_regenerates_only_that_pass_once(monkeypatch, invalid_pass):
     valid = (_core_payload(), _implementation_payload(), _assurance_payload())
@@ -392,7 +428,20 @@ def test_strict_pass_rejection_regenerates_only_that_pass_once(monkeypatch, inva
 
     assert result.draft is not None
     assert len(provider.calls) == 4
-    assert provider.calls[position][0] == provider.calls[position + 1][0]
+    original_messages = provider.calls[position][0]
+    retry_messages = provider.calls[position + 1][0]
+    assert retry_messages[:-1] == original_messages
+    assert retry_messages[-1]["role"] == "user"
+    feedback = json.loads(ElementTree.fromstring(retry_messages[-1]["content"])
+                          .find("contract_failure").text)
+    assert feedback == {
+        "category": "invalid_placement",
+        "json_path": "$.proposals[0].placement.section",
+        "expected": "current pass allowed section",
+        "actual": "architecture" if invalid_pass == "implementation" else "implementation_plan",
+    }
+    assert all(len(messages) == 2 for index, (messages, _) in enumerate(provider.calls)
+               if index != position + 1)
     assert [budget for _, budget in provider.calls] == [6000] * 4
     assert verifier.calls
 

@@ -16,11 +16,28 @@ const showCustomer=ref(false), showOpportunity=ref(false), saving=ref(false)
 const customerForm=reactive({name:'',industry:'',company_size:'',basic_info:''})
 const opportunityForm=reactive({project_name:'',customer:0,presales_owner:null as number|null,raw_requirement:'',budget:''})
 const customerQuery=ref(''), customers=ref<Customer[]>([]), presales=ref<PresalesOption[]>([]), searchBusy=ref(false)
+let customerSearchRequest=0
 
 async function load(){loading.value=true;error.value='';try{data.value=await getSalesWorkspace()}catch(e){error.value=safeError(e)}finally{loading.value=false}}
 async function saveCustomer(){if(saving.value||!customerForm.name.trim())return;saving.value=true;error.value='';try{const created=await createCustomer({...customerForm,name:customerForm.name.trim()});feedback.value=`客户已创建：${created.name}`;showCustomer.value=false;Object.assign(customerForm,{name:'',industry:'',company_size:'',basic_info:''})}catch(e){error.value=safeError(e)}finally{saving.value=false}}
 async function openOpportunity(){showOpportunity.value=true;error.value='';try{presales.value=await listPresalesOptions()}catch(e){error.value=safeError(e)}}
-async function findCustomers(){if(!customerQuery.value.trim())return;searchBusy.value=true;error.value='';try{customers.value=(await searchCustomers(customerQuery.value.trim())).results}catch(e){error.value=safeError(e)}finally{searchBusy.value=false}}
+async function findCustomers(){
+  const query=customerQuery.value.trim()
+  if(!query)return
+  const request=++customerSearchRequest
+  customers.value=[]
+  opportunityForm.customer=0
+  searchBusy.value=true
+  error.value=''
+  try{
+    const result=await searchCustomers(query)
+    if(request===customerSearchRequest)customers.value=result.results
+  }catch(e){
+    if(request===customerSearchRequest)error.value=safeError(e)
+  }finally{
+    if(request===customerSearchRequest)searchBusy.value=false
+  }
+}
 async function saveOpportunity(){if(saving.value||!opportunityForm.project_name.trim()||!opportunityForm.customer)return;saving.value=true;error.value='';try{const created=await createOpportunity({project_name:opportunityForm.project_name.trim(),customer:opportunityForm.customer,presales_owner:opportunityForm.presales_owner,raw_requirement:opportunityForm.raw_requirement,budget:opportunityForm.budget||null});await router.push(`/opportunities/${created.id}`)}catch(e){error.value=safeError(e)}finally{saving.value=false}}
 onMounted(load)
 </script>

@@ -1,0 +1,7 @@
+{% extends "admin/change_form.html" %}
+{% block form_top %}
+<p>文档及索引元数据只读。索引就绪、事实抽取成功和人工批准是不同状态；已批准事实仍须通过来源和方案准入校验。</p>
+{% if original.status == 'ready' %}<p><a href="{% url 'admin:knowledge_knowledgedocument_reindex' original.pk %}">确认重建索引</a></p>{% endif %}
+{% if original.status == 'ready' and not original.indexing_run_id %}<p><a href="{% url 'admin:knowledge_knowledgedocument_extract' original.pk %}">确认抽取待审事实 / 失败后重新确认</a></p>{% endif %}
+{{ block.super }}
+{% endblock %}

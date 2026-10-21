@@ -129,6 +129,21 @@ KNOWLEDGE_INDEXING_STALE_TIMEOUT_SECONDS = env.int(
     default=3600,
 )
 
+# Per-process cache. Throttle counters are therefore not globally exact across
+# workers; see docs/known-limitations.md before claiming a global rate limit.
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "salesmind-rate-limits",
+    },
+}
+
+# DRF falls back to the whole X-Forwarded-For string when NUM_PROXIES is unset,
+# letting a client mint a new anonymous bucket per request. Unset stays None for
+# local runs without a proxy; production requires an explicit hop count.
+_num_proxies_raw = env("DRF_NUM_PROXIES", default="").strip()
+_NUM_PROXIES = int(_num_proxies_raw) if _num_proxies_raw.isdigit() else None
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
@@ -136,6 +151,27 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
     ),
+    "EXCEPTION_HANDLER": "config.api_exceptions.api_exception_handler",
+    "NUM_PROXIES": _NUM_PROXIES,
+    
+    "DEFAULT_THROTTLE_CLASSES": (
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ),
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": env("THROTTLE_ANON_RATE", default="30/min"),
+        "user": env("THROTTLE_USER_RATE", default="600/hour"),
+        "login": env("THROTTLE_LOGIN_RATE", default="10/min"),
+        "token_refresh": env("THROTTLE_TOKEN_REFRESH_RATE", default="120/hour"),
+        "solution_generation": env(
+            "THROTTLE_SOLUTION_GENERATION_RATE", default="20/hour"
+        ),
+        "requirement_analysis": env(
+            "THROTTLE_REQUIREMENT_ANALYSIS_RATE", default="40/hour"
+        ),
+        "rag_answer": env("THROTTLE_RAG_ANSWER_RATE", default="60/hour"),
+        "knowledge_write": env("THROTTLE_KNOWLEDGE_WRITE_RATE", default="20/hour"),
+    },
 }
 
 SIMPLE_JWT = {

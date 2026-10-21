@@ -2,18 +2,21 @@
 
 from django.conf import settings
 
-from apps.llm.base import LLMProviderConfig
+from apps.llm.base import LLMProvider, LLMProviderConfig
+from apps.llm.deepseek import DeepSeekLLMProvider
 from apps.llm.exceptions import LLMErrorCode, LLMProviderError
 from apps.llm.openai_compatible import OpenAICompatibleLLMProvider
 
 
-def get_verifier_provider() -> OpenAICompatibleLLMProvider:
+def get_verifier_provider() -> LLMProvider:
     provider_name = settings.VERIFIER_PROVIDER
     if not isinstance(provider_name, str) or not provider_name.strip():
         raise LLMProviderError(LLMErrorCode.LLM_NOT_CONFIGURED)
-    if provider_name.strip() != "openai_compatible":
+    if provider_name.strip() not in {"openai_compatible", "deepseek"}:
         raise LLMProviderError(LLMErrorCode.UNSUPPORTED_LLM_PROVIDER)
     config = _config_from_settings()
+    if config.provider_name == "deepseek":
+        return DeepSeekLLMProvider(config)
     return OpenAICompatibleLLMProvider(
         config,
         supports_enable_thinking=config.model_name.casefold().startswith("qwen3"),

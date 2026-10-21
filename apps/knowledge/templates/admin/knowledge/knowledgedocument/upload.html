@@ -1,0 +1,9 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<p>{{ explanation }}</p>
+<form method="post" enctype="multipart/form-data">{% csrf_token %}
+{{ form.as_p }}
+<input type="submit" value="确认上传并索引">
+<a href="{{ back_url }}">返回文档列表</a>
+</form>
+{% endblock %}

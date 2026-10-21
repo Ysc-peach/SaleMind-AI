@@ -1,4 +1,5 @@
 import { beforeEach, expect, it } from 'vitest'
+import type { AxiosAdapter } from 'axios'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -157,6 +158,63 @@ it('Sales can search a customer and create an Opportunity', async () => {
   wrapper.unmount()
 })
 
+it('Sales cannot reuse an old selected customer after an oversized search', async () => {
+  const {wrapper}=await mountAt(SalesWorkspace)
+  await wrapper.get('[data-test="new-opportunity"]').trigger('click')
+  await flushPromises()
+  await wrapper.get('[data-test="customer-query"]').setValue('示例')
+  await wrapper.get('[data-test="customer-query"]').trigger('keyup.enter')
+  await flushPromises()
+  await wrapper.get('[data-test="customer-select"]').setValue('3')
+  await wrapper.get('[data-test="project-name"]').setValue('Valid project')
+  expect((wrapper.get('[data-test="save-opportunity"]').element as HTMLButtonElement).disabled).toBe(false)
+
+  const query='客'.repeat(201)
+  await wrapper.get('[data-test="customer-query"]').setValue(query)
+  await wrapper.get('[data-test="customer-query"]').trigger('keyup.enter')
+  await flushPromises()
+
+  expect(wrapper.text()).toContain('200')
+  expect(wrapper.get('[data-test="customer-select"]').findAll('option')).toHaveLength(1)
+  expect((wrapper.get('[data-test="customer-select"]').element as HTMLSelectElement).value).toBe('0')
+  expect((wrapper.get('[data-test="save-opportunity"]').element as HTMLButtonElement).disabled).toBe(true)
+  expect((wrapper.get('[data-test="customer-query"]').element as HTMLInputElement).value).toBe(query)
+  expect(calls.filter(call=>call.url==='/customers/search/')).toHaveLength(1)
+  expect(calls.some(call=>call.url==='/opportunities/'&&call.method==='post')).toBe(false)
+  wrapper.unmount()
+})
+
+it('Sales ignores a late customer result after an oversized search has failed', async () => {
+  const originalAdapter=http.defaults.adapter as AxiosAdapter
+  let finish:(()=>void)|undefined
+  http.defaults.adapter=async config=>{
+    if(config.url==='/customers/search/') {
+      return new Promise(resolve=>{
+        finish=()=>resolve({config,status:200,statusText:'OK',headers:{},data:{count:1,next:null,previous:null,
+          results:[{id:3,name:'Stale customer',industry:'',company_size:'',basic_info:'',opportunities:[]}]}})
+      })
+    }
+    return originalAdapter(config)
+  }
+  const {wrapper}=await mountAt(SalesWorkspace)
+  await wrapper.get('[data-test="new-opportunity"]').trigger('click')
+  await flushPromises()
+  await wrapper.get('[data-test="customer-query"]').setValue('slow search')
+  await wrapper.get('[data-test="customer-query"]').trigger('keyup.enter')
+  await flushPromises()
+  expect(finish).toBeDefined()
+  await wrapper.get('[data-test="customer-query"]').setValue('客'.repeat(201))
+  await wrapper.get('[data-test="customer-query"]').trigger('keyup.enter')
+  await flushPromises()
+  finish!()
+  await flushPromises()
+
+  expect(wrapper.text()).toContain('200')
+  expect(wrapper.get('[data-test="customer-select"]').findAll('option')).toHaveLength(1)
+  expect(wrapper.get('[data-test="customer-select"]').text()).not.toContain('Stale customer')
+  wrapper.unmount()
+})
+
 it('Presales sees assigned reviews immediately and starts from the correct Solution', async () => {
   const auth=useAuthStore(); auth.user!.id=2; auth.user!.role='presales'
   const {wrapper}=await mountAt(PresalesWorkspace)
@@ -190,7 +248,8 @@ it('workspace handles empty and safe error states', async () => {
 
   failWorkspace=true
   mounted=await mountAt(SalesWorkspace)
-  expect(mounted.wrapper.text()).toContain('请求未完成')
+  expect(mounted.wrapper.text()).toContain('后端处理发生异常')
+  expect(mounted.wrapper.text()).not.toContain('请检查网络')
   expect(mounted.wrapper.text()).not.toContain('private traceback')
   mounted.wrapper.unmount()
 })

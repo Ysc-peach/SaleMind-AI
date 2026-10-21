@@ -334,6 +334,16 @@ class DemoRequirementAnalysisProvider(LLMProvider):
         max_output_tokens: int | None = None,
     ) -> LLMGeneration:
         del messages, max_output_tokens
+        snapshot = self.legacy_snapshot_payload()
+        payload = {key: snapshot[key] for key in ("summary", "requirements", "conflicts")}
+        return LLMGeneration(json.dumps(payload, ensure_ascii=False))
+
+    def legacy_snapshot_payload(self) -> dict:
+        """Explicit v1 fixture for validating existing, immutable demo records.
+
+        The provider only emits generation facts; historical questions are not
+        submitted to the new generation parser or regenerated on reads.
+        """
         known = {
             "business_goal": self.scenario.business_goal,
             "use_scenario": self.scenario.use_scenario,
@@ -366,7 +376,7 @@ class DemoRequirementAnalysisProvider(LLMProvider):
                 {"field": "budget", "question": "本项目可用于软件与实施的预算范围是多少？"},
             ],
         }
-        return LLMGeneration(json.dumps(payload, ensure_ascii=False))
+        return payload
 
 
 class DemoGroundingExtractionProvider(LLMProvider):

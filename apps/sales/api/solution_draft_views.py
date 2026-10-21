@@ -6,15 +6,18 @@ from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.parsers import JSONParser
 from rest_framework.response import Response
 
+from config.throttling import ScopedActionThrottleMixin
 from apps.llm.exceptions import LLMProviderError
 from apps.sales.models import OpportunityRequirementAnalysis, SolutionDraftRecord
 from apps.sales.services.solution_errors import SolutionDraftError
+from apps.sales.services.solution_grounding import SolutionDraftGroundingError
 from apps.sales.services.solution_persistence import (
     SolutionPersistenceError,
     generate_and_persist_solution_draft,
-    refresh_solution_draft_staleness,
+    project_solution_draft_staleness,
 )
 from apps.sales.services.solution_review import (
+    SolutionReviewErrorCode,
     SolutionReviewPermissionError,
     SolutionReviewStateError,
     approve_solution_draft,
@@ -56,23 +59,28 @@ class SolutionReviewActionAPIError(APIException):
         super().__init__({"code": error.code, "message": error.safe_message})
 
 
-class SolutionDraftCollectionViewSet(OpportunityVisibilityMixin, viewsets.GenericViewSet):
+class SolutionDraftCollectionViewSet(
+    ScopedActionThrottleMixin,
+    OpportunityVisibilityMixin,
+    viewsets.GenericViewSet,
+):
     permission_classes = (SolutionDraftPermission,)
     parser_classes = (JSONParser,)
     pagination_class = DefaultPageNumberPagination
     lookup_url_kwarg = "opportunity_id"
     http_method_names = ["get", "post", "head", "options"]
+    scoped_throttle_actions = {"create_draft": "solution_generation"}
 
     def list_drafts(self, request, *args, **kwargs):
         opportunity = self.get_object()
-        records = list(
+        records = (
             SolutionDraftRecord.objects.filter(opportunity=opportunity)
             .select_related("created_by", "requirement_analysis")
             .order_by("-version", "-id")
         )
-        for record in records:
-            refresh_solution_draft_staleness(record)
         page = self.paginate_queryset(records)
+        for record in page:
+            project_solution_draft_staleness(record)
         serializer = SolutionDraftListSerializer(page, many=True)
         return self.get_paginated_response(serializer.data)
 
@@ -95,7 +103,7 @@ class SolutionDraftCollectionViewSet(OpportunityVisibilityMixin, viewsets.Generi
             )
         except SolutionPersistenceError as exc:
             raise SolutionDraftAPIError() from exc
-        except SolutionDraftError as exc:
+        except (SolutionDraftError, SolutionDraftGroundingError) as exc:
             raise SolutionDraftAPIError(
                 detail={"code": exc.code, "message": exc.safe_message}
             ) from exc
@@ -125,20 +133,22 @@ class SolutionDraftDetailViewSet(viewsets.GenericViewSet):
 
     def retrieve_draft(self, request, *args, **kwargs):
         record = self.get_object()
-        refresh_solution_draft_staleness(record)
+        project_solution_draft_staleness(record)
         return Response(SolutionDraftDetailSerializer(record).data)
 
     def submit_review(self, request, *args, **kwargs):
         record = self.get_object()
         serializer = SolutionReviewSubmitSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        reviewer = None
-        reviewer_id = serializer.validated_data.get("reviewer_id")
-        if reviewer_id is not None:
-            reviewer = get_user_model().objects.filter(pk=reviewer_id).first()
-            if reviewer is None:
-                raise ValidationError({"reviewer_id": "The reviewer does not exist."})
         try:
+            reviewer = None
+            reviewer_id = serializer.validated_data.get("reviewer_id")
+            if reviewer_id is not None:
+                reviewer = get_user_model().objects.filter(pk=reviewer_id).first()
+                if reviewer is None:
+                    # An absent id must be indistinguishable from an ineligible
+                    # reviewer, otherwise this endpoint enumerates the user table.
+                    raise SolutionReviewStateError(SolutionReviewErrorCode.INVALID_REVIEWER)
             review = submit_solution_draft_for_review(
                 record,
                 actor=request.user,

@@ -3,6 +3,9 @@
 from dataclasses import dataclass
 from enum import StrEnum
 from collections.abc import Callable, Sequence
+import logging
+import json
+from html import escape
 
 from django.conf import settings
 
@@ -15,7 +18,9 @@ from apps.llm.verifier_factory import get_verifier_provider
 from apps.sales.models import OpportunityRequirementAnalysis as AnalysisRecord
 from apps.sales.services.requirement_analysis_history import analysis_record_to_domain
 from apps.sales.services.solution_admission import GroundingAdmission, build_solution_admission
-from apps.sales.services.solution_errors import SolutionDraftError, SolutionDraftErrorCode
+from apps.sales.services.solution_errors import (
+    SolutionContractFailure, SolutionDraftError, SolutionDraftErrorCode,
+)
 from apps.sales.services.solution_evaluation import emit_evaluation
 from apps.sales.services.solution_grounding import (
     verify_atomic_solution_proposals,
@@ -54,6 +59,9 @@ from apps.sales.services.solution_schema_v2 import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 class SolutionGenerationStatus(StrEnum):
     GENERATED = "generated"
     BLOCKED_BY_READINESS = "blocked_by_readiness"
@@ -73,6 +81,52 @@ class GroundedSolutionDraftResult:
     v2_provenance_bindings: tuple[V2ClaimProvenanceBinding, ...] = ()
 
 
+def _contract_rejection_diagnostic(failure: SolutionContractFailure) -> dict:
+    """Project only formal parser metadata; unknown provider keys are redacted."""
+    path = failure.json_path
+    if failure.category == "unknown_key":
+        path = path.rsplit(".", 1)[0] + ".<key>"
+    diagnostic = {
+        "category": failure.category, "json_path": path,
+        "expected": failure.expected, "actual": failure.actual,
+    }
+    if failure.allowed_keys:
+        # These names come from the executing closed-object contract, never
+        # from the model's extra keys or values.
+        diagnostic["allowed_keys"] = failure.allowed_keys
+    if failure.category == "invalid_citation":
+        diagnostic.update(citation_subtype=failure.citation_subtype,
+                          allowed_ids=failure.allowed_ids,
+                          offending_ids=failure.offending_ids)
+    return diagnostic
+
+
+def _contract_regeneration_message(failure: SolutionContractFailure | None) -> LLMMessage:
+    """Feedback for the existing second attempt, never a repaired proposal."""
+    diagnostic = (
+        _contract_rejection_diagnostic(failure)
+        if isinstance(failure, SolutionContractFailure)
+        else {"category": "unknown_contract_failure"}
+    )
+    # Do not repeat disallowed IDs in generation input. The formal allowlist is
+    # sufficient; originals remain in the secret-safe parser diagnostic log.
+    diagnostic.pop("offending_ids", None)
+    metadata = escape(json.dumps(diagnostic, ensure_ascii=False), quote=False)
+    return {
+        "role": "user",
+        "content": (
+            "<contract_regeneration>\n"
+            f"<contract_failure>{metadata}</contract_failure>\n"
+            "<instructions>上一版输出未通过正式合同校验。依据原始需求、已准入依据和上述错误，"
+            "重新生成本 pass 的完整合法 JSON，而不是差异补丁。所有原始约束和数量上限保持不变。"
+            "不得机械替换引用编号；每条判断必须由实际允许引用的证据支持。"
+            "不得编造事实、能力、承诺或引用，不得删除关键结构来绕过安全校验。"
+            "只返回完整 JSON。</instructions>\n"
+            "</contract_regeneration>"
+        ),
+    }
+
+
 def _generate_and_parse_v2_pass(
     provider: LLMProvider,
     messages: Sequence[LLMMessage],
@@ -82,15 +136,24 @@ def _generate_and_parse_v2_pass(
 ) -> AtomicSolutionProposalSetV2:
     """Regenerate once only when strict parsing rejects provider output."""
 
+    request_messages = messages
     for attempt in range(2):
         try:
             generation = provider.generate_json(
-                messages,
+                request_messages,
                 max_output_tokens=settings.SOLUTION_DRAFT_MAX_OUTPUT_TOKENS,
             )
         except LLMProviderError as error:
             emit_evaluation("generation_provider", phase=pass_name, success=False,
                             category=error.failure_kind.value if error.failure_kind else None)
+            diagnostic = {
+                "phase": pass_name, "attempt": attempt + 1,
+                "exception_class": type(error).__name__, "code": error.code,
+                "category": error.failure_kind.value if error.failure_kind else "unknown_provider_error",
+                "http_status": error.http_status,
+            }
+            logger.warning("Solution generation provider failed: %s", diagnostic,
+                           extra={"solution_generation_failure": diagnostic})
             raise
         emit_evaluation("generation_provider", phase=pass_name, success=True)
         try:
@@ -99,11 +162,29 @@ def _generate_and_parse_v2_pass(
             failure = getattr(error, "contract_failure", None)
             emit_evaluation("generation_parser", phase=pass_name, success=False,
                             category=failure.category if failure else "unknown_contract_failure")
+            diagnostic = {
+                "phase": pass_name, "attempt": attempt + 1,
+                "exception_class": type(error).__name__, "code": error.code,
+                "category": "unknown_contract_failure",
+            }
+            if isinstance(failure, SolutionContractFailure):
+                diagnostic.update(_contract_rejection_diagnostic(failure))
+            finish_reason = getattr(generation, "finish_reason", None)
+            diagnostic["finish_reason"] = finish_reason if finish_reason in {
+                "stop", "length", "content_filter", "tool_calls", "function_call",
+                "insufficient_system_resource", "aborted",
+            } else None
+            for key in ("prompt_tokens", "completion_tokens"):
+                value = getattr(generation, key, None)
+                diagnostic[key] = value if type(value) is int and value >= 0 else None
+            logger.warning("Solution generation contract rejected: %s", diagnostic,
+                           extra={"solution_generation_failure": diagnostic})
             if (
                 attempt == 1
                 or error.code != SolutionDraftErrorCode.INVALID_RESPONSE.value
             ):
                 raise
+            request_messages = [*messages, _contract_regeneration_message(failure)]
         else:
             emit_evaluation("generation_parser", phase=pass_name, success=True,
                             count=len(result.proposals))
@@ -150,6 +231,8 @@ def generate_grounded_solution_draft(
     ) for intent in build_retrieval_intents(typed)]
     sources = merge_evidence(groups)
     if not sources:
+        if schema_version == 2:
+            raise SolutionDraftError(SolutionDraftErrorCode.INSUFFICIENT_APPROVED_EVIDENCE)
         return GroundedSolutionDraftResult(
             analysis_id, readiness, SolutionGenerationStatus.INSUFFICIENT_EVIDENCE,
             None, (), unresolved_items, None, schema_version=schema_version,
@@ -159,6 +242,8 @@ def generate_grounded_solution_draft(
     except Exception:
         emit_evaluation("deterministic_admission", success=False)
         raise
+    if schema_version == 2 and not admission.allowed_proposal_source_labels:
+        raise SolutionDraftError(SolutionDraftErrorCode.INSUFFICIENT_APPROVED_EVIDENCE)
     provider = llm_provider if llm_provider is not None else get_llm_provider()
     if schema_version == 1:
         generation = provider.generate(
@@ -215,6 +300,10 @@ def generate_grounded_solution_draft(
             proposals = merge_solution_v2_proposal_passes(
                 core, implementation, assurance
             )
+            if not proposals.proposals:
+                # Deterministic facts alone are not a newly generated deliverable.
+                # Empty individual passes remain legal; never invent filler claims.
+                raise SolutionDraftError(SolutionDraftErrorCode.NO_PROPOSALS)
         except SolutionDraftError:
             emit_evaluation("global_structure", success=False)
             raise

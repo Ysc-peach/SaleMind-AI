@@ -3,7 +3,7 @@
 from enum import StrEnum
 
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from apps.accounts.models import UserRole
@@ -15,7 +15,8 @@ from apps.sales.models import (
     SolutionReviewStatus,
 )
 from apps.sales.services.solution_persistence import (
-    evaluate_solution_draft_stale_reasons,
+    project_solution_draft_staleness,
+    refresh_solution_draft_staleness,
 )
 
 
@@ -67,30 +68,61 @@ def submit_solution_draft_for_review(
     actor = _saved_user(actor)
     reviewer = _optional_saved_user(reviewer)
 
-    with transaction.atomic():
-        locked = (
-            SolutionDraftRecord.objects.select_for_update(of=("self",))
-            .select_related(
-                "opportunity__presales_owner",
-                "opportunity__sales_owner",
-                "created_by",
+    stale_rejection = None
+    created_review = None
+    try:
+        with transaction.atomic():
+            locked = (
+                SolutionDraftRecord.objects.select_for_update(of=("self",))
+                .select_related(
+                    "opportunity__presales_owner",
+                    "opportunity__sales_owner",
+                    "created_by",
+                )
+                .get(pk=solution_id)
             )
-            .get(pk=solution_id)
-        )
-        _require_submitter(locked, actor)
-        _require_current(locked)
-        if locked.review_status != SolutionReviewStatus.DRAFT:
-            raise SolutionReviewStateError(SolutionReviewErrorCode.INVALID_STATE)
+            try:
+                selected_reviewer = _validate_submission(locked, actor, reviewer)
+            except SolutionReviewStateError as error:
+                if error.code != SolutionReviewErrorCode.STALE.value:
+                    raise
+                # Commit only the stale metadata; no review has been created yet.
+                stale_rejection = error
+            else:
+                created_review = SolutionReview.objects.create(
+                    solution_draft=locked,
+                    submitted_by=actor,
+                    reviewer=selected_reviewer,
+                )
+                locked.review_status = SolutionReviewStatus.PENDING_REVIEW
+                locked.save(update_fields=["review_status"])
+    except IntegrityError as exc:
+        # The draft row lock normally serializes submitters. If a constraint
+        # still fires, report the existing conflict code without leaking the
+        # constraint name. The transaction is already rolled back.
+        raise SolutionReviewStateError(SolutionReviewErrorCode.INVALID_STATE) from exc
+    if created_review is not None:
+        return created_review
+    raise stale_rejection
 
-        selected_reviewer = _resolve_reviewer(locked, actor, reviewer)
-        review = SolutionReview.objects.create(
-            solution_draft=locked,
-            submitted_by=actor,
-            reviewer=selected_reviewer,
-        )
-        locked.review_status = SolutionReviewStatus.PENDING_REVIEW
-        locked.save(update_fields=["review_status"])
-        return review
+
+def validate_solution_review_submission(solution, *, actor, reviewer=None) -> None:
+    """Read-only eligibility check; a later submit must recheck under its lock."""
+    solution_id = _saved_pk(solution, SolutionDraftRecord)
+    actor = _saved_user(actor)
+    reviewer = _optional_saved_user(reviewer)
+    current = SolutionDraftRecord.objects.select_related(
+        "opportunity__presales_owner", "opportunity__sales_owner", "created_by",
+    ).get(pk=solution_id)
+    _validate_submission(current, actor, reviewer, persist_stale=False)
+
+
+def _validate_submission(solution, actor, reviewer, *, persist_stale=True):
+    _require_submitter(solution, actor)
+    _require_current(solution, persist_stale=persist_stale)
+    if solution.review_status != SolutionReviewStatus.DRAFT:
+        raise SolutionReviewStateError(SolutionReviewErrorCode.INVALID_STATE)
+    return _resolve_reviewer(solution, actor, reviewer)
 
 
 def approve_solution_draft(
@@ -223,6 +255,7 @@ def _decide_solution_review(
 ) -> SolutionReview:
     solution_id = _saved_pk(solution, SolutionDraftRecord)
     actor = _saved_user(actor)
+    stale_rejection = None
     with transaction.atomic():
         locked = (
             SolutionDraftRecord.objects.select_for_update(of=("self",))
@@ -243,22 +276,29 @@ def _decide_solution_review(
             raise SolutionReviewStateError(SolutionReviewErrorCode.NO_PENDING_REVIEW)
         _require_decider(locked, review, actor)
         if status == SolutionReviewDecisionStatus.APPROVED:
-            _require_current(locked)
+            try:
+                _require_current(locked)
+            except SolutionReviewStateError as error:
+                if error.code != SolutionReviewErrorCode.STALE.value:
+                    raise
+                stale_rejection = error
 
-        review.status = status
-        review.return_reason = return_reason
-        review.comment = comment
-        review.decided_at = timezone.now()
-        review.save(
-            update_fields=["status", "return_reason", "comment", "decided_at"]
-        )
-        locked.review_status = (
-            SolutionReviewStatus.APPROVED
-            if status == SolutionReviewDecisionStatus.APPROVED
-            else SolutionReviewStatus.NEEDS_REVISION
-        )
-        locked.save(update_fields=["review_status"])
-        return review
+        if stale_rejection is None:
+            review.status = status
+            review.return_reason = return_reason
+            review.comment = comment
+            review.decided_at = timezone.now()
+            review.save(
+                update_fields=["status", "return_reason", "comment", "decided_at"]
+            )
+            locked.review_status = (
+                SolutionReviewStatus.APPROVED
+                if status == SolutionReviewDecisionStatus.APPROVED
+                else SolutionReviewStatus.NEEDS_REVISION
+            )
+            locked.save(update_fields=["review_status"])
+            return review
+    raise stale_rejection
 
 
 def _require_submitter(solution: SolutionDraftRecord, actor) -> None:
@@ -317,14 +357,17 @@ def _require_decider(
         raise SolutionReviewPermissionError(SolutionReviewErrorCode.SELF_REVIEW)
 
 
-def _require_current(solution: SolutionDraftRecord) -> None:
-    reasons = evaluate_solution_draft_stale_reasons(solution)
-    if reasons and not solution.is_stale:
-        solution.is_stale = True
-        solution.stale_at = timezone.now()
-        solution.stale_reasons = [reason.value for reason in reasons]
-        solution.save(update_fields=["is_stale", "stale_at", "stale_reasons"])
-    if solution.is_stale or reasons:
+def _require_current(solution: SolutionDraftRecord, *, persist_stale=True) -> None:
+    # Deriving and persisting separately let a source read that straddled a
+    # concurrent reindex commit be written into the monotonic stale union, which
+    # is never cleared. The refresh path locks the draft and its provenance rows
+    # first, so the derived reasons come from one committed snapshot.
+    current = (
+        refresh_solution_draft_staleness(solution)
+        if persist_stale
+        else project_solution_draft_staleness(solution)
+    )
+    if current.is_stale:
         raise SolutionReviewStateError(SolutionReviewErrorCode.STALE)
 
 

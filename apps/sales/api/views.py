@@ -20,6 +20,9 @@ from .serializers import (
 from ..models import Customer, Opportunity, OpportunityStatus
 
 
+CUSTOMER_SEARCH_MAX_LENGTH = 200
+
+
 class CustomerViewSet(
     mixins.CreateModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
 ):
@@ -46,6 +49,11 @@ class CustomerViewSet(
             query = self.request.query_params.get("q", "").strip()
             if not query:
                 raise ValidationError({"q": "This query parameter is required."})
+            if len(query) > CUSTOMER_SEARCH_MAX_LENGTH:
+                raise ValidationError({
+                    "code": "customer_search_query_too_long",
+                    "q": "客户搜索最多 200 个字符，请缩短后重试。",
+                })
             queryset = queryset.filter(name__icontains=query)
 
         if action in ("search", "retrieve"):

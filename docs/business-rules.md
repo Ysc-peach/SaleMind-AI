@@ -20,6 +20,7 @@ The fixed business roles are:
 - `is_staff` or `is_superuser` does not grant business Admin, Sales, or Presales authorization.
 - Business APIs authorize using `User.role`; technical flags cannot bypass those checks.
 - Grounding-fact review is deliberately stricter because it is exposed through Django Admin: the reviewer must be active, have `is_staff=True`, and have business role `admin`. A technical superuser with another business role cannot approve facts.
+- Admin document upload, reindex, extraction and cancellation use the same active/staff/business-admin gate; the existing knowledge business API permissions are unchanged. Document metadata remains read-only. Explicit extraction creates only PROPOSED facts and records a frozen-index attempt; repeated or cancelled attempts cannot silently publish duplicates. Human approval still does not replace current-index/provenance admission.
 
 Primary references: `apps/accounts/models.py`, `apps/sales/api/permissions.py`, `apps/sales/api/opportunity_access.py`, `apps/knowledge/api/permissions.py`, and `apps/knowledge/services/grounding_fact_approval.py`.
 
@@ -199,6 +200,7 @@ grant enterprise fact admission or technical review approval.
 - Architecture component identity still requires admissibility, but `COMPOUND` alone is not its hard veto. Identity is a semantic naming claim, not a container for responsibilities or technical decisions.
 - Ordinary atomicity means one independently approvable/rejectable technical judgment, not one verb. Implementation tasks use phase-objective work-package coherence; deliverables use phase-objective outcome-package coherence; risk mitigations use same-risk strategy coherence. These still require `ATOMIC`, not a `COMPOUND` exception.
 - The phase objective and risk condition/impact are untrusted proposal context, not confirmed facts or new capability evidence.
+- V2 planning-purpose policy applies only to implementation-phase `objective/tasks/deliverables/timing`, risk `condition/impact/mitigation`, and milestone `outcome` (8 complete section/kind/field combinations). Bounded inquiries, planned verification artifacts, hypothetical risks and qualified conditional work may proceed to semantic review even with non-known linked dimensions. Verification completion is not verification success or satisfaction of deployment conditions; result-dependent work requires an explicitly satisfied prerequisite. Explicit non-known object dependencies cannot be hidden by clearing linkage or attaching only a known unrelated field. Every clause is checked; parents never exempt child claims. This never promotes requirement status or grants capability admission. All-known ordinary technical claims retain original guards. Citations, precision, semantic veto/atomicity and return-time provenance remain mandatory; risk trigger, milestone timing, other placements and V1 are unchanged.
 - No verdict can turn proposed, rejected, stale, unconfirmed, conflicting, missing, or provenance-invalid evidence into an enterprise capability.
 - Deterministic claims bypass semantic verification because their authority comes from typed analysis, human approval, and deterministic provenance checks.
 
@@ -210,8 +212,13 @@ requests may still finish. Provider failure is not an `INADMISSIBLE` verdict.
 
 - Invalid model structure, invalid citations, verifier errors/timeouts, malformed verifier output, unsupported proposals, and compound proposals fail closed.
 - Each V2 Core/Implementation/Assurance pass may regenerate once only after strict output-contract rejection; at most two attempts are allowed. The complete new output is revalidated, never patched or partially retained.
-- This pass regeneration does not retry provider errors, deterministic guard failures, Qwen vetoes, or persistence failures. There is no second retrieval, safety-rule rewrite, or partial-draft recovery. Provider SDK retry settings remain a separate transport concern.
+- This pass regeneration does not retry provider errors, deterministic guard failures, semantic verifier vetoes, or persistence failures. There is no second retrieval, safety-rule rewrite, or partial-draft recovery. Provider SDK retry settings remain a separate transport concern.
 - No partially verified proposal set is returned.
+- A newly generated V2 must contain at least one proposal across all passes.
+  Globally empty Atomic or Semantic IR output returns `solution_draft_no_proposals`
+  without saving a draft, provenance, or review. Individual empty passes remain
+  valid; the system never invents filler content. Historical payload reading and
+  deterministic assembly remain compatible.
 - Readiness and no-evidence short circuits avoid unnecessary model calls.
 - Deterministic admission is rebuilt after external model calls. If provenance or approval changed, return fails closed.
 
@@ -221,3 +228,35 @@ Current V2-specific regressions also include
 `apps/sales/tests/test_solution_semantic_ir_v2.py`,
 `apps/sales/tests/test_solution_split_generation_v2.py`, and
 `apps/sales/tests/test_solution_proposal_admissibility_v2.py`.
+
+## Approved-version document exports
+
+Downloads preserve the same role-filtered exact-version visibility, including independent version reviewers without granting Opportunity visibility. A current APPROVED projection alone is insufficient: the latest review attempt must be completed APPROVED, the selected version must remain current under existing stale rules, and raw requirements must match the analysis snapshot. Complete citation provenance is required. All checks repeat after rendering; no LLM or staff/superuser flag grants export admission. Older approved versions are not excluded solely because a higher version number exists. See [export contract](solution-export.md).
+
+## Stale-state projection and review refusal
+
+Solution list/detail GETs project current stale reasons without writing database
+metadata; lists paginate before evaluating source validity. Explicit refresh
+reloads the version under a row lock and never clears a persisted invalidation
+or replaces its first-stale timestamp. Submission/approval checks still run under
+their existing locks. A stale rejection commits only stale metadata before
+raising the existing conflict response; it never creates or decides a review.
+Read-only eligibility checks do not persist metadata. Other review failures
+retain normal transaction rollback behavior.
+
+## Budget and customer-search input bounds
+
+New budget inputs in Opportunity create/update APIs and model-backed forms must
+be nonnegative. `null` (unknown), zero and positive amounts remain valid within
+the existing Decimal precision. This is input validation, not a new database
+constraint or automatic legacy-data cleanup: an unrelated partial update does
+not rewrite an existing budget, including a historical invalid value. Such
+values require human review rather than silent replacement.
+
+Customer collision search trims leading/trailing whitespace, requires a nonempty
+`q`, and accepts at most 200 Unicode code points. Overlong queries return HTTP 400
+with `customer_search_query_too_long` before executing the search. The frontend
+uses the same code-point length bound before sending HTTP, preserves the input
+for correction, and displays only a fixed safe explanation. It does not silently
+truncate input or treat validation failure as an empty search result. Existing
+role permissions, response field allowlists and pagination remain unchanged.

@@ -57,6 +57,11 @@ from apps.sales.services.requirement_analysis_history import (
     analysis_record_to_domain,
     create_opportunity_requirement_analysis,
 )
+from apps.sales.services.requirement_analysis import (
+    REQUIREMENT_ANALYSIS_VERSION,
+    _parse_analysis,
+    _parse_generated_analysis,
+)
 from apps.sales.services.solution_persistence import (
     generate_and_persist_solution_draft,
 )
@@ -378,7 +383,7 @@ def _ensure_analysis(scenario: DemoScenario, opportunity: Opportunity, sales_use
     provider = DemoRequirementAnalysisProvider(scenario)
     matches = OpportunityRequirementAnalysis.objects.filter(
         opportunity=opportunity,
-        analysis_version="v1",
+        analysis_version__in=("v1", REQUIREMENT_ANALYSIS_VERSION),
         llm_provider=provider.provider_name,
         llm_model=provider.model_name,
     )
@@ -393,16 +398,15 @@ def _ensure_analysis(scenario: DemoScenario, opportunity: Opportunity, sales_use
         )
     if analysis.created_by_id != sales_user.pk:
         raise DemoDatasetError("Demo requirement analysis fixture conflict.")
-    expected = json.loads(provider.generate(()).content)
+    if analysis.analysis_version == "v1":
+        expected = _parse_analysis(json.dumps(provider.legacy_snapshot_payload()))
+    else:
+        expected = _parse_generated_analysis(provider.generate_json(()).content)
     if (
-        analysis.summary != expected["summary"]
-        or analysis.requirements != expected["requirements"]
-        or analysis.conflicts != expected["conflicts"]
-        or analysis.clarifying_questions != expected["clarifying_questions"]
+        analysis_record_to_domain(analysis) != expected
         or analysis.source_raw_requirement != opportunity.raw_requirement
     ):
         raise DemoDatasetError("Demo requirement analysis fixture conflict.")
-    analysis_record_to_domain(analysis)
     return analysis
 
 

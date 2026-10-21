@@ -3,6 +3,7 @@
 from dataclasses import replace
 import html
 import json
+import logging
 import re
 
 import pytest
@@ -216,6 +217,114 @@ def test_unresolved_requirement_cannot_be_asserted_as_confirmed():
     with pytest.raises(SolutionDraftGroundingError):
         _verify(proposal, provider)
     assert provider.calls == []
+
+
+@pytest.mark.parametrize("text,related,citations,reason,guard", (
+    ("客户将使用 OIDC 完成身份集成。private-customer-text",
+     (RequirementDimension.INTEGRATION_REQUIREMENT,), ("S1",),
+     "unresolved_as_confirmed", "_asserts_unresolved_as_confirmed"),
+    ("建议在 14 天内完成。private-customer-text",
+     (RequirementDimension.DEPLOYMENT_REQUIREMENT,), ("S1",),
+     "unsupported_precision", "_unsupported_precision_match"),
+    ("private-customer-text", (RequirementDimension.DEPLOYMENT_REQUIREMENT,), ("S9",),
+     "invalid_grounding_reference", "verify_atomic_solution_v2_proposals.citation_validation"),
+))
+def test_actual_deterministic_branch_logs_safe_rejection_without_evaluation_observer(
+    caplog, text, related, citations, reason, guard,
+):
+    from apps.sales.services.solution_grounding import SolutionDraftGroundingError
+
+    provider = _AdmissibilityVerifier()
+    proposals = _proposal(text, related=related, citations=citations)
+    proposals = replace(proposals, proposals=(replace(
+        proposals.proposals[0], placement=replace(
+            proposals.proposals[0].placement, container_key="private-container-key",
+        ),
+    ),))
+    with caplog.at_level(logging.WARNING), pytest.raises(SolutionDraftGroundingError):
+        _verify(proposals, provider)
+    records = [r for r in caplog.records if hasattr(r, "solution_admission_rejection")]
+    assert len(records) == 1
+    diagnostic = records[0].solution_admission_rejection
+    assert diagnostic["stage"] == "deterministic"
+    assert diagnostic["proposal_index"] == 0
+    assert diagnostic["reason_code"] == reason
+    assert diagnostic["guard_name"] == guard
+    assert diagnostic["placement"] == {
+        "section": "architecture", "container_kind": "architecture_component", "field": "rationale",
+    }
+    assert diagnostic["related_requirement_fields"] == tuple(field.value for field in related)
+    assert diagnostic["citation_count"] == 1
+    assert "private" not in caplog.text + repr(diagnostic)
+    assert "S9" not in caplog.text
+    assert all(r.exc_info is None for r in records)
+    assert provider.calls == []
+
+
+@pytest.mark.parametrize("decision,atomicity", (
+    ("INADMISSIBLE", "ATOMIC"), ("ADMISSIBLE", "COMPOUND"), ("INADMISSIBLE", "COMPOUND"),
+))
+def test_parsed_qwen_hard_veto_logs_actual_verdict_without_claim_or_sources(
+    caplog, decision, atomicity,
+):
+    from apps.sales.services.solution_grounding import SolutionDraftGroundingError
+
+    provider = _AdmissibilityVerifier(decision=decision, atomicity=atomicity)
+    with caplog.at_level(logging.WARNING), pytest.raises(SolutionDraftGroundingError):
+        _verify(_proposal("建议复用现有私有化能力。private-customer-text"), provider,
+                sources=(_source("S1", content="private-source-content"),))
+    records = [r for r in caplog.records if hasattr(r, "solution_admission_rejection")]
+    assert len(records) == 1
+    diagnostic = records[0].solution_admission_rejection
+    assert diagnostic["stage"] == "qwen"
+    assert diagnostic["proposal_index"] == 0
+    assert diagnostic["guard_name"] == "proposal_admissibility_verifier"
+    assert diagnostic["reason_code"] == "qwen_hard_veto"
+    assert diagnostic["decision"] == decision
+    assert diagnostic["atomicity"] == atomicity
+    assert diagnostic["placement"]["field"] == "rationale"
+    assert "private" not in caplog.text + repr(diagnostic)
+    assert all(r.exc_info is None for r in records)
+    assert len(provider.calls) == 1
+
+
+def test_admitted_identity_compound_is_not_logged_as_a_veto(caplog):
+    proposals = _proposal("知识服务组件。", field=SolutionV2PlacementField.IDENTITY)
+    with caplog.at_level(logging.WARNING):
+        assert _verify(proposals, _AdmissibilityVerifier(atomicity="COMPOUND")) is proposals
+    assert not any(hasattr(r, "solution_admission_rejection") for r in caplog.records)
+
+
+def test_qwen_rejection_index_identifies_second_proposal_not_first(caplog, settings):
+    from apps.sales.services.solution_grounding import SolutionDraftGroundingError
+    settings.VERIFIER_MAX_CONCURRENCY = 1
+    class SecondVeto(_AdmissibilityVerifier):
+        def generate(self, messages, *, max_output_tokens=None):
+            generated = super().generate(messages, max_output_tokens=max_output_tokens)
+            payload = json.loads(generated.content)
+            if payload["results"][0]["location"] == "proposals[1]":
+                payload["results"][0]["decision"] = "INADMISSIBLE"
+            return LLMGeneration(json.dumps(payload))
+    item = _proposal("建议复用现有私有化能力。").proposals[0]
+    provider = SecondVeto()
+    with caplog.at_level(logging.WARNING), pytest.raises(SolutionDraftGroundingError) as caught:
+        _verify(AtomicSolutionProposalSetV2((item, item)), provider)
+    diagnostics = [r.solution_admission_rejection for r in caplog.records
+                   if hasattr(r, "solution_admission_rejection")]
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["proposal_index"] == 1
+    assert caught.value.violations[0].location == "proposals[1]"
+    assert len(provider.calls) == 2
+
+
+def test_invalid_qwen_response_is_not_fabricated_into_a_verdict(caplog):
+    from apps.sales.services.solution_grounding import SolutionDraftGroundingError
+    class InvalidVerifier(_AdmissibilityVerifier):
+        def generate(self, messages, *, max_output_tokens=None):
+            return LLMGeneration('{"results": "private-invalid-output"}')
+    with caplog.at_level(logging.WARNING), pytest.raises(SolutionDraftGroundingError):
+        _verify(_proposal("建议复用现有私有化能力。"), InvalidVerifier())
+    assert not any(hasattr(r, "solution_admission_rejection") for r in caplog.records)
 
 
 def test_conditional_proposal_preserves_unresolved_requirement():

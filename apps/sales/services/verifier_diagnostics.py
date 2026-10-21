@@ -40,6 +40,8 @@ class DeterministicGuardReason(StrEnum):
     INVALID_REQUIREMENT_LINKAGE = "invalid_requirement_linkage"
     UNRESOLVED_AS_CONFIRMED = "unresolved_as_confirmed"
     UNSUPPORTED_PRECISION = "unsupported_precision"
+    UNQUALIFIED_PRECONDITION = "unqualified_precondition"
+    EXPRESSION_UNCLASSIFIED = "expression_unclassified"
 
 
 _CATEGORY_BY_KIND = {

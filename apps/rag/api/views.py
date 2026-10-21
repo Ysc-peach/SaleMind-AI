@@ -4,6 +4,7 @@ from rest_framework import status
 from rest_framework.exceptions import ParseError
 from rest_framework.parsers import JSONParser
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle, UserRateThrottle
 from rest_framework.views import APIView
 
 from apps.knowledge.api.permissions import IsKnowledgeSearchUser
@@ -34,6 +35,8 @@ class RAGAnswerView(APIView):
 
     permission_classes = (IsKnowledgeSearchUser,)
     parser_classes = (JSONParser,)
+    throttle_classes = (UserRateThrottle, ScopedRateThrottle)
+    throttle_scope = "rag_answer"
 
     def post(self, request):
         try:

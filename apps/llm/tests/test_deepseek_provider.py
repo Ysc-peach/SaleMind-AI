@@ -4,7 +4,11 @@ import logging
 from types import SimpleNamespace
 
 import pytest
-from openai import OpenAIError
+import httpx
+from openai import (
+    APIConnectionError, APITimeoutError, AuthenticationError, InternalServerError,
+    OpenAIError, PermissionDeniedError, RateLimitError,
+)
 
 from apps.llm.base import LLMProviderConfig
 
@@ -143,6 +147,76 @@ def test_reasoning_content_is_not_exposed_by_generation_result(monkeypatch):
     assert secret_reasoning not in repr(result)
 
 
+def test_requirement_analysis_uses_json_mode_without_overriding_provider_budget(monkeypatch):
+    import json
+
+    from apps.sales.models import Customer, Opportunity
+    from apps.sales.services.requirement_analysis import analyze_opportunity_requirement
+    from apps.sales.tests.requirement_fakes import valid_analysis_generation_payload
+
+    provider, endpoint, client_arguments = _build_provider(
+        monkeypatch, _response(json.dumps(valid_analysis_generation_payload())),
+    )
+    opportunity = Opportunity(
+        customer=Customer(name="Synthetic customer"),
+        project_name="Synthetic project", raw_requirement="Synthetic requirements",
+    )
+    result = analyze_opportunity_requirement(opportunity, llm_provider=provider)
+
+    assert result.requirements.budget.status == "conflict"
+    assert len(endpoint.calls) == 1
+    request = endpoint.calls[0]
+    assert request["response_format"] == {"type": "json_object"}
+    assert request["max_tokens"] == 321
+    assert request["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert client_arguments["timeout"] == 17
+    assert client_arguments["max_retries"] == 2
+
+
+@pytest.mark.parametrize("method", ["generate", "generate_json"])
+@pytest.mark.parametrize("finish_reason", ["stop", "length"])
+def test_provider_preserves_safe_finish_reason_and_usage(monkeypatch, method, finish_reason):
+    response = _response("final answer", reasoning_content="private reasoning")
+    response.choices[0].finish_reason = finish_reason
+    response.usage = SimpleNamespace(prompt_tokens=123, completion_tokens=45)
+    provider, _, _ = _build_provider(monkeypatch, response)
+
+    result = getattr(provider, method)([{"role": "user", "content": "Return JSON."}])
+
+    assert result.content == "final answer"
+    assert result.finish_reason == finish_reason
+    assert result.prompt_tokens == 123
+    assert result.completion_tokens == 45
+    assert "private reasoning" not in repr(result)
+
+
+@pytest.mark.parametrize("reason,prompt,completion", [
+    ("private-provider-value", "private-usage", True),
+    ([], -1, 1.5),
+    (None, None, None),
+])
+def test_invalid_optional_provider_metadata_is_omitted_not_echoed(
+    monkeypatch, reason, prompt, completion,
+):
+    response = _response()
+    response.choices[0].finish_reason = reason
+    response.usage = SimpleNamespace(prompt_tokens=prompt, completion_tokens=completion)
+    provider, _, _ = _build_provider(monkeypatch, response)
+
+    result = provider.generate_json([{"role": "user", "content": "Return JSON."}])
+
+    assert result.content == "SalesMind LLM connected"
+    assert (result.finish_reason, result.prompt_tokens, result.completion_tokens) == (None, None, None)
+    assert "private-provider-value" not in repr(result)
+    assert "private-usage" not in repr(result)
+
+
+def test_missing_optional_provider_metadata_preserves_valid_response(monkeypatch):
+    provider, _, _ = _build_provider(monkeypatch)
+    result = provider.generate_json([{"role": "user", "content": "Return JSON."}])
+    assert (result.finish_reason, result.prompt_tokens, result.completion_tokens) == (None, None, None)
+
+
 @pytest.mark.parametrize(
     "messages",
     [
@@ -248,3 +322,35 @@ def test_generate_performs_no_database_queries(monkeypatch, django_assert_num_qu
         result = provider.generate([{"role": "user", "content": "question"}])
 
     assert result.content == "SalesMind LLM connected"
+
+
+@pytest.mark.parametrize("method", ["generate", "generate_json"])
+@pytest.mark.parametrize("error_class,status,category", [
+    (APITimeoutError, None, "timeout"),
+    (APIConnectionError, None, "connection_error"),
+    (AuthenticationError, 401, "auth_error"),
+    (PermissionDeniedError, 403, "permission_denied"),
+    (RateLimitError, 429, "rate_limited"),
+    (InternalServerError, 500, "server_error"),
+])
+def test_deepseek_retains_safe_failure_category_without_changing_api_error(
+    monkeypatch, caplog, method, error_class, status, category,
+):
+    from apps.llm.exceptions import LLMProviderError
+
+    request = httpx.Request("POST", "https://api.deepseek.com/chat/completions")
+    secret = "secret-key-private-customer-text"
+    if status is None:
+        error = error_class(request=request)
+    else:
+        response = httpx.Response(status, request=request)
+        error = error_class(secret, response=response, body={"message": secret})
+    provider, endpoint, _ = _build_provider(monkeypatch, error)
+    with pytest.raises(LLMProviderError) as caught:
+        getattr(provider, method)([{"role": "user", "content": secret}])
+    assert caught.value.code == "llm_provider_error"
+    assert caught.value.failure_kind.value == category
+    assert caught.value.http_status == status
+    assert caught.value.__suppress_context__ is True
+    assert secret not in str(caught.value) + repr(caught.value) + caplog.text
+    assert len(endpoint.calls) == 1

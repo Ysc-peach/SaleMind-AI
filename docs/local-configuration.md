@@ -1,6 +1,6 @@
 # 本地运行与配置
 
-对应核心基线 `1141281c07b2f5f92d51151fc9b2f0803814ef60`。本文只描述现有配置，不要求修改任何 provider、预算或数据库实例。
+核心功能历史基线为 `1141281c07b2f5f92d51151fc9b2f0803814ef60`。本文的 verifier 配置已更新为当前本地选择；历史 Qwen benchmark 不代表更换后的 verifier 已通过真实评估。本文不要求修改预算或数据库实例。
 
 ## 环境前置条件
 
@@ -23,26 +23,30 @@
 | --- | --- | --- |
 | Embedding | `EMBEDDING_PROVIDER / MODEL / API_KEY / BASE_URL / DIMENSIONS` | `openai_compatible`、`BAAI/bge-m3`、1024 维；服务地址和 key 自行安全填写 |
 | Generation | `LLM_PROVIDER / MODEL / API_KEY / BASE_URL` | `deepseek`、`deepseek-v4-flash`、`https://api.deepseek.com` |
-| Proposal verifier | `VERIFIER_PROVIDER / MODEL / API_KEY / BASE_URL` | `openai_compatible`、`qwen3.8-flash`、`https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| Proposal verifier | `VERIFIER_PROVIDER / MODEL / API_KEY / BASE_URL` | `deepseek`、`deepseek-flash`、`https://api.deepseek.com` |
 
 这些是项目配置值，不保证任意外部账号都有模型权限或额度；本文没有进行实时 provider 能力/价格查询。
 
-### Qwen verifier
+### DeepSeek verifier
 
 ```dotenv
-VERIFIER_PROVIDER=openai_compatible
-VERIFIER_MODEL=qwen3.8-flash
+VERIFIER_PROVIDER=deepseek
+VERIFIER_MODEL=deepseek-flash
 VERIFIER_API_KEY=
-VERIFIER_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+VERIFIER_BASE_URL=https://api.deepseek.com
 VERIFIER_TIMEOUT_SECONDS=60
 VERIFIER_MAX_RETRIES=0
 VERIFIER_MAX_OUTPUT_TOKENS=1500
 VERIFIER_MAX_CONCURRENCY=2
 ```
 
-`VERIFIER_API_KEY` 在示例中必须空白。当前 [verifier_factory.py](../apps/llm/verifier_factory.py) 固定 `thinking_enabled=False`；支持 Qwen3 thinking control 时正式 wrapper 发送 `extra_body={"enable_thinking": false}`。没有 `VERIFIER_THINKING_ENABLED` 环境变量，不要添加一个无效配置项。`LLM_THINKING_ENABLED` 属于生成 provider，不控制独立 verifier。
+`VERIFIER_API_KEY` 在示例中必须空白。当前 [verifier_factory.py](../apps/llm/verifier_factory.py) 固定 `thinking_enabled=False`；DeepSeek wrapper 发送 `extra_body={"thinking": {"type": "disabled"}}`，不能向 DeepSeek 套用 Qwen 的 `enable_thinking` 参数。没有 `VERIFIER_THINKING_ENABLED` 环境变量，`LLM_THINKING_ENABLED` 只控制生成 provider。
 
-如果 `VERIFIER_PROVIDER` 未配置，代码保留由生成 provider 执行 verification 的历史路径；这不是 provider 失败后的自动 fallback。本项目真实展示基线应显式配置独立 Qwen。
+DeepSeek-V4.1-Flash 的官方 API 标识为 `deepseek-flash`，见 [官方接入文档](https://api-docs.deepseek.com/)。生成端的 `LLM_MODEL` 不因此改变。工厂仍支持显式配置 Qwen 的 `openai_compatible` 路径，但没有额度失败后的自动 fallback。
+
+本地经明确授权复用生成端的 DeepSeek 密钥时，可以在被 Git 忽略的 `.env` 使用 `VERIFIER_API_KEY=$LLM_API_KEY`；项目使用的 django-environ 会解析这一引用。不是 `${LLM_API_KEY}`，也不在示例、文档或日志写入真实值。独立 verifier 设置缺失时仍拒绝，不会隐式借用生成配置。
+
+如果 `VERIFIER_PROVIDER` 未配置，代码保留由生成 provider 执行 verification 的历史路径；这不是 provider 失败后的自动 fallback。本地运行应显式配置独立 verifier。生成和验证使用同一模型族时，独立配置/请求不等于模型错误相互独立；仍需 deterministic guards 和人工审核。
 
 ### 输出空间与结构预算
 
@@ -99,3 +103,7 @@ $env:TEST_DATABASE_TEMPLATE = 'salesmind_test_template'
 - contract / grounding / verifier failure：系统应失败且不保存半份 Solution；不要修改 payload 使它“能演示”。
 
 限制与结果见 [Known Limitations](known-limitations.md)、[真实 benchmark](real-provider-benchmark-summary.md)。
+
+## 文档导出依赖
+
+安装 base requirements 中的 python-docx / ReportLab，并随应用部署 `apps/sales/assets/fonts/` 的静态字体、manifest 和 OFL。导出请求不下载字体，不需要 Office/LibreOffice，也不修改 PostgreSQL 配置。字体缺失/哈希不符/缺字返回受控503；DOCX/PDF上限10MiB，超限拒绝而非截断。版式验收工具与应用运行依赖分离，详见 [方案导出](solution-export.md)。

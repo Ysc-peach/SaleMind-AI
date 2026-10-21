@@ -1,6 +1,7 @@
 """Read-only analysis of opportunity facts through the existing LLM provider."""
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import date
@@ -11,9 +12,12 @@ from typing import NoReturn
 
 from django.core.exceptions import ObjectDoesNotExist
 
-from apps.llm.base import LLMMessage, LLMProvider
+from apps.llm.base import LLMGeneration, LLMMessage, LLMProvider
 from apps.llm.factory import get_llm_provider
 from apps.sales.models import Customer, Opportunity
+
+
+logger = logging.getLogger(__name__)
 
 
 class RequirementDimension(StrEnum):
@@ -41,11 +45,25 @@ class RequirementAnalysisErrorCode(StrEnum):
     INVALID_INPUT = "invalid_requirement_analysis_input"
 
 
+@dataclass(frozen=True, slots=True)
+class RequirementAnalysisContractFailure:
+    """Internal fixed-rule metadata, never model text or unknown JSON keys."""
+
+    category: str
+    json_path: str
+    expected: str
+    actual: str
+
+
 class RequirementAnalysisError(Exception):
     """Fixed public messages; never attach business data or model responses."""
 
-    def __init__(self, code: RequirementAnalysisErrorCode):
+    def __init__(
+        self, code: RequirementAnalysisErrorCode, *,
+        contract_failure: RequirementAnalysisContractFailure | None = None,
+    ):
         self.code = code.value
+        self.contract_failure = contract_failure
         self.safe_message = {
             RequirementAnalysisErrorCode.INVALID_RESPONSE: (
                 "The requirement analysis response is invalid."
@@ -100,7 +118,23 @@ class OpportunityRequirementAnalysis:
     clarifying_questions: tuple[ClarifyingQuestion, ...]
 
 
-REQUIREMENT_ANALYSIS_VERSION = "v1"
+REQUIREMENT_ANALYSIS_VERSION = "v2"
+MAX_CLARIFYING_QUESTIONS = 8
+
+# Questions ask for customer facts; they never supply defaults, technology
+# recommendations, commitments, or evidence. Enum order breaks priority ties.
+_QUESTION_TEMPLATES = {
+    RequirementDimension.BUSINESS_GOAL: ("业务目标", "本项目希望解决哪些业务问题，预期达成哪些业务结果？"),
+    RequirementDimension.USE_SCENARIO: ("使用场景", "哪些岗位将在什么业务场景中使用系统，需要完成哪些操作？"),
+    RequirementDimension.USER_SCALE: ("用户规模", "预计使用人数、峰值同时在线人数及使用频率分别是多少？"),
+    RequirementDimension.DEPLOYMENT_REQUIREMENT: ("部署要求", "系统应部署在哪里，网络访问和部署边界有哪些要求？"),
+    RequirementDimension.DATA_SECURITY_REQUIREMENT: ("数据安全要求", "哪些数据需要保护，访问权限和数据传输边界有哪些要求？"),
+    RequirementDimension.EXISTING_ENVIRONMENT: ("现有环境", "可供项目使用的服务器、数据库版本和运维条件有哪些？"),
+    RequirementDimension.INTEGRATION_REQUIREMENT: ("系统集成要求", "需要对接哪些现有系统，接口协议、文档及对接条件是否已明确？"),
+    RequirementDimension.TIMELINE: ("时间要求", "项目计划何时启动、验收和上线，各时间节点是否已确认？"),
+    RequirementDimension.BUDGET: ("预算", "本项目可用预算范围及预算审批状态是什么？"),
+    RequirementDimension.TECHNICAL_CONSTRAINTS: ("技术约束", "有哪些必须遵守的技术限制，以及明确不纳入本期的功能范围？"),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,15 +200,14 @@ evidence 应简短、忠实，优先引用原始表述；结构化字段可以�
 不得把推断伪装为证据或编造客户原话。
 
 必须只返回一个 JSON 对象，不附带解释、Markdown 或其他文字。顶层恰好只有：
-summary、requirements、conflicts、clarifying_questions。
+summary、requirements、conflicts。
 summary 使用简体中文简洁总结明确事实，可以指出关键未确认项，不写方案或推荐。
 conflicts 是数组；每项恰好有 fields 和 description。
 fields 是至少一个合法维度 key 的数组，不重复；description 非空且简述矛盾。
 每个 conflict 状态的维度必须在 conflicts 中记录；其中引用的维度也必须标为 conflict。
-clarifying_questions 是数组，最多8项；每项恰好有 field 和 question。
-field 只能指向 unknown/unclear/conflict 的合法维度。question 必须是销售可直接询问客户的
-具体业务问题，禁止“请提供更多信息”等泛化问题；优先重要问题，不必机械覆盖所有 unknown。
-禁止额外 key，包括 solution、recommendation、products、sources、confidence、score。
+你只负责需求事实、状态和冲突分析。追问由系统根据已校验的 unknown/unclear/conflict
+维度生成；不要生成追问，也不要为了产生追问而将明确事实降级为 unclear/unknown。
+禁止额外 key，包括 clarifying_questions、solution、recommendation、products、sources、confidence、score。
 """
 
 
@@ -200,11 +233,35 @@ def _execute_requirement_analysis(
     provider = llm_provider if llm_provider is not None else get_llm_provider()
     provider_name, model_name = provider.provider_name, provider.model_name
     analysis_version = REQUIREMENT_ANALYSIS_VERSION
-    generation = provider.generate(messages)
+    generation = provider.generate_json(messages)
+    try:
+        analysis = _parse_generated_analysis(generation.content)
+    except RequirementAnalysisError:
+        _log_generation_metadata(generation, rejected=True)
+        raise
+    _log_generation_metadata(generation, rejected=False)
     return RequirementAnalysisExecution(
-        analysis=_parse_analysis(generation.content), source=source,
+        analysis=analysis, source=source,
         llm_provider=provider_name, llm_model=model_name,
         analysis_version=analysis_version,
+    )
+
+
+def _log_generation_metadata(generation: LLMGeneration, *, rejected: bool) -> None:
+    # The provider exposes only allowlisted finish reasons and numeric usage;
+    # never log the generation object, prompt, response body, or reasoning.
+    diagnostic = {
+        "finish_reason": generation.finish_reason,
+        "prompt_tokens": generation.prompt_tokens,
+        "completion_tokens": generation.completion_tokens,
+    }
+    if all(value is None for value in diagnostic.values()):
+        return
+    logger.log(
+        logging.WARNING if rejected else logging.INFO,
+        "Requirement analysis generation: finish_reason=%s prompt_tokens=%s completion_tokens=%s",
+        diagnostic["finish_reason"], diagnostic["prompt_tokens"], diagnostic["completion_tokens"],
+        extra={"analysis_generation": diagnostic},
     )
 
 
@@ -278,9 +335,10 @@ def _validate_input(opportunity: Opportunity) -> Customer:
     return customer
 
 
-def _parse_analysis(content: str) -> OpportunityRequirementAnalysis:
+def _decode_analysis_json(content: str) -> dict:
     if not isinstance(content, str) or not content.strip():
-        _invalid_response()
+        _invalid_response("wrong_type" if not isinstance(content, str) else "empty_text",
+                          "$", "nonempty JSON string", _shape(content))
     text = content.strip()
     fence = re.fullmatch(r"```json[ \t]*\r?\n(.*)\r?\n```", text, flags=re.DOTALL)
     if fence is not None:
@@ -290,13 +348,54 @@ def _parse_analysis(content: str) -> OpportunityRequirementAnalysis:
             text, object_pairs_hook=_unique_object, parse_constant=_reject_constant,
         )
     except (ValueError, RecursionError):
-        raise RequirementAnalysisError(RequirementAnalysisErrorCode.INVALID_RESPONSE) from None
+        _invalid_response("malformed_json", "$", "complete standard JSON", "invalid JSON")
 
-    _expect_object(payload, {"summary", "requirements", "conflicts", "clarifying_questions"})
-    summary = _nonempty_text(payload["summary"])
-    _expect_object(payload["requirements"], set(RequirementDimension))
+    return payload
+
+
+def _parse_generated_analysis(content: str) -> OpportunityRequirementAnalysis:
+    """Strict generation-only facts contract; never repair old provider output.
+
+    The final snapshot parser validates both facts and assembled questions.
+    Its historical contract remains unchanged. No question is built before
+    the complete fact analysis has passed that same validation.
+    """
+
+    payload = _decode_analysis_json(content)
+    _expect_object(payload, {"summary", "requirements", "conflicts"}, "$")
+    facts = _parse_analysis(json.dumps({**payload, "clarifying_questions": []}, ensure_ascii=False))
+    questions = _build_clarifying_questions(facts.requirements)
+    return _parse_analysis(json.dumps({**payload, "clarifying_questions": questions}, ensure_ascii=False))
+
+
+def _build_clarifying_questions(requirements: RequirementDimensions) -> list[dict[str, str]]:
+    """Stable conflict-first follow-up; no facts or status are overwritten."""
+
+    questions = []
+    for status in (RequirementStatus.CONFLICT, RequirementStatus.UNCLEAR, RequirementStatus.UNKNOWN):
+        for dimension in RequirementDimension:
+            if getattr(requirements, dimension.value).status is not status:
+                continue
+            label, question = _QUESTION_TEMPLATES[dimension]
+            if status is RequirementStatus.CONFLICT:
+                question = f"当前记录中{label}信息存在冲突，请确认以哪一项为准：{question}"
+            elif status is RequirementStatus.UNCLEAR:
+                question = f"{label}信息尚不明确，请核实：{question}"
+            questions.append({"field": dimension.value, "question": question})
+            if len(questions) == MAX_CLARIFYING_QUESTIONS:
+                return questions
+    return questions
+
+
+def _parse_analysis(content: str) -> OpportunityRequirementAnalysis:
+    """Strict final/historical snapshot contract, including question linkage."""
+
+    payload = _decode_analysis_json(content)
+    _expect_object(payload, {"summary", "requirements", "conflicts", "clarifying_questions"}, "$")
+    summary = _nonempty_text(payload["summary"], "$.summary")
+    _expect_object(payload["requirements"], set(RequirementDimension), "$.requirements")
     requirements = {
-        name: _parse_requirement(item)
+        name: _parse_requirement(item, f"$.requirements.{name}")
         for name, item in payload["requirements"].items()
     }
     conflicts = _parse_conflicts(payload["conflicts"], requirements)
@@ -313,94 +412,147 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict:
     result = {}
     for key, value in pairs:
         if key in result:
-            raise ValueError("Duplicate JSON key.")
+            # The JSON decoder does not expose the object's path. Report the
+            # document scope, not a guessed path or the untrusted duplicate key.
+            _invalid_response("duplicate_key", "$", "unique object keys", "duplicate key")
         result[key] = value
     return result
 
 
 def _reject_constant(value: str) -> NoReturn:
-    raise ValueError("Nonstandard JSON constant.")
+    _invalid_response("nonstandard_json", "$", "standard JSON values", "nonstandard number")
 
 
-def _expect_object(value: object, keys: set[str]) -> None:
-    if not isinstance(value, dict) or set(value) != keys:
-        _invalid_response()
+def _expect_object(value: object, keys: set[str], path: str) -> None:
+    if not isinstance(value, dict):
+        _invalid_response("wrong_type", path, "object", _shape(value))
+    if set(value) != keys:
+        missing = keys - set(value)
+        if missing:
+            # Only documented, constant keys may appear in diagnostic paths.
+            _invalid_response("missing_required_key", f"{path}.{sorted(missing)[0]}",
+                              "required key present", "missing key")
+        _invalid_response("unknown_key", path, "only documented keys",
+                          f"unexpected key count {len(set(value) - keys)}")
 
 
-def _nonempty_text(value: object) -> str:
+def _nonempty_text(value: object, path: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        _invalid_response()
+        _invalid_response("wrong_type" if not isinstance(value, str) else "empty_text",
+                          path, "nonempty string", _shape(value))
     return value.strip()
 
 
-def _parse_requirement(item: object) -> RequirementFieldAnalysis:
-    _expect_object(item, {"status", "value", "evidence"})
+def _parse_requirement(item: object, path: str) -> RequirementFieldAnalysis:
+    _expect_object(item, {"status", "value", "evidence"}, path)
     try:
         status = RequirementStatus(item["status"])
     except (ValueError, TypeError):
-        raise RequirementAnalysisError(RequirementAnalysisErrorCode.INVALID_RESPONSE) from None
+        _invalid_response("invalid_enum", f"{path}.status", "known|unknown|unclear|conflict",
+                          _shape(item["status"]))
     value, evidence = item["value"], item["evidence"]
     if status is RequirementStatus.UNKNOWN:
-        if value is not None or evidence is not None:
-            _invalid_response()
+        if value is not None:
+            _invalid_response("status_value_mismatch", f"{path}.value",
+                              "null for unknown status", _shape(value))
+        if evidence is not None:
+            _invalid_response("status_value_mismatch", f"{path}.evidence",
+                              "null for unknown status", _shape(evidence))
     elif status is RequirementStatus.CONFLICT:
         if value is not None:
-            _invalid_response()
-        evidence = _nonempty_text(evidence)
+            _invalid_response("status_value_mismatch", f"{path}.value",
+                              "null for conflict status", _shape(value))
+        evidence = _nonempty_text(evidence, f"{path}.evidence")
     else:
-        value, evidence = _nonempty_text(value), _nonempty_text(evidence)
+        value = _nonempty_text(value, f"{path}.value")
+        evidence = _nonempty_text(evidence, f"{path}.evidence")
     return RequirementFieldAnalysis(status=status, value=value, evidence=evidence)
 
 
-def _dimension(value: object) -> RequirementDimension:
+def _dimension(value: object, path: str) -> RequirementDimension:
     try:
         return RequirementDimension(value)
     except (ValueError, TypeError):
-        raise RequirementAnalysisError(RequirementAnalysisErrorCode.INVALID_RESPONSE) from None
+        _invalid_response("invalid_enum", path, "valid requirement dimension", _shape(value))
 
 
 def _parse_conflicts(
     items: object, requirements: dict[str, RequirementFieldAnalysis],
 ) -> tuple[RequirementConflict, ...]:
     if not isinstance(items, list):
-        _invalid_response()
+        _invalid_response("wrong_type", "$.conflicts", "array", _shape(items))
     conflicts = []
     referenced = set()
-    for item in items:
-        _expect_object(item, {"fields", "description"})
+    for index, item in enumerate(items):
+        path = f"$.conflicts[{index}]"
+        _expect_object(item, {"fields", "description"}, path)
         if not isinstance(item["fields"], list) or not item["fields"]:
-            _invalid_response()
-        dimensions = tuple(_dimension(name) for name in item["fields"])
+            _invalid_response("wrong_type" if not isinstance(item["fields"], list) else "cardinality",
+                              f"{path}.fields", "nonempty array", _shape(item["fields"], cardinality=True))
+        dimensions = tuple(_dimension(name, f"{path}.fields[{i}]") for i, name in enumerate(item["fields"]))
         if len(set(dimensions)) != len(dimensions):
-            _invalid_response()
+            _invalid_response("duplicate_identifier", f"{path}.fields",
+                              "unique requirement dimensions", "duplicate dimensions")
         if any(requirements[name].status is not RequirementStatus.CONFLICT for name in dimensions):
-            _invalid_response()
+            _invalid_response("conflict_status_mismatch", f"{path}.fields",
+                              "only conflict dimensions", "non-conflict dimension")
         referenced.update(dimensions)
         conflicts.append(RequirementConflict(
-            fields=dimensions, description=_nonempty_text(item["description"]),
+            fields=dimensions, description=_nonempty_text(item["description"], f"{path}.description"),
         ))
     expected = {name for name, item in requirements.items() if item.status is RequirementStatus.CONFLICT}
     if referenced != expected:
-        _invalid_response()
+        _invalid_response("conflict_coverage_mismatch", "$.conflicts",
+                          "all conflict dimensions referenced", "incomplete conflict coverage")
     return tuple(conflicts)
 
 
 def _parse_questions(
     items: object, requirements: dict[str, RequirementFieldAnalysis],
 ) -> tuple[ClarifyingQuestion, ...]:
-    if not isinstance(items, list) or len(items) > 8:
-        _invalid_response()
+    if not isinstance(items, list) or len(items) > MAX_CLARIFYING_QUESTIONS:
+        _invalid_response("wrong_type" if not isinstance(items, list) else "cardinality",
+                          "$.clarifying_questions", f"array length <={MAX_CLARIFYING_QUESTIONS}",
+                          _shape(items, cardinality=True))
     questions = []
-    for item in items:
-        _expect_object(item, {"field", "question"})
-        dimension = _dimension(item["field"])
+    for index, item in enumerate(items):
+        path = f"$.clarifying_questions[{index}]"
+        _expect_object(item, {"field", "question"}, path)
+        dimension = _dimension(item["field"], f"{path}.field")
         if requirements[dimension].status is RequirementStatus.KNOWN:
-            _invalid_response()
+            # The field is already a validated enum. Expose only fixed names,
+            # JSON shape and length, never question/value/evidence text.
+            question = item["question"]
+            question_length = len(question) if isinstance(question, str) else "unavailable"
+            _invalid_response("question_targets_known_requirement", f"{path}.field",
+                              "unknown|unclear|conflict dimension",
+                              f"known dimension: {dimension.value}; question type: {_shape(question)}; "
+                              f"question length: {question_length}")
         questions.append(ClarifyingQuestion(
-            field=dimension, question=_nonempty_text(item["question"]),
+            field=dimension, question=_nonempty_text(item["question"], f"{path}.question"),
         ))
     return tuple(questions)
 
 
-def _invalid_response() -> NoReturn:
-    raise RequirementAnalysisError(RequirementAnalysisErrorCode.INVALID_RESPONSE)
+def _shape(value: object, *, cardinality: bool = False) -> str:
+    """Describe JSON types/counts without serializing any input value or key."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, str):
+        return "string" if value.strip() else "empty string"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return f"array length {len(value)}" if cardinality else "array"
+    if isinstance(value, (int, float)):
+        return "number"
+    return "other type"
+
+
+def _invalid_response(category: str, path: str, expected: str, actual: str) -> NoReturn:
+    raise RequirementAnalysisError(
+        RequirementAnalysisErrorCode.INVALID_RESPONSE,
+        contract_failure=RequirementAnalysisContractFailure(category, path, expected, actual),
+    ) from None

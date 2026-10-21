@@ -15,6 +15,7 @@ from apps.knowledge.exceptions import (
 )
 from apps.knowledge.models import (
     EnterpriseGroundingFact,
+    GroundingFactExtractionAttempt,
     KnowledgeChunk,
     KnowledgeDocument,
 )
@@ -61,10 +62,11 @@ def reindex_document(
     document_id: int,
     *,
     provider: EmbeddingProvider | None = None,
+    expected_index_run_id: UUID | None = None,
 ) -> KnowledgeDocument:
     """Rebuild one ready document while its current chunks remain available."""
 
-    document, run_id = _start_reindexing(document_id)
+    document, run_id = _start_reindexing(document_id, expected_index_run_id=expected_index_run_id)
     try:
         chunks, embeddings, embedding_provider = _prepare_index_payload(
             document,
@@ -150,10 +152,12 @@ def _start_indexing(document_id: int) -> tuple[KnowledgeDocument, UUID]:
     return document, run_id
 
 
-def _start_reindexing(document_id: int) -> tuple[KnowledgeDocument, UUID]:
+def _start_reindexing(document_id: int, *, expected_index_run_id: UUID | None = None) -> tuple[KnowledgeDocument, UUID]:
     run_id = uuid4()
     with transaction.atomic():
         document = KnowledgeDocument.objects.select_for_update().get(pk=document_id)
+        if expected_index_run_id is not None and document.last_index_run_id != expected_index_run_id:
+            raise KnowledgeDocumentError(KnowledgeDocumentErrorCode.INDEXING_RUN_CONFLICT)
         if document.status != KnowledgeDocument.Status.READY:
             raise KnowledgeDocumentError(
                 KnowledgeDocumentErrorCode.INVALID_REINDEX_STATE
@@ -167,6 +171,19 @@ def _start_reindexing(document_id: int) -> tuple[KnowledgeDocument, UUID]:
                 raise KnowledgeDocumentError(
                     KnowledgeDocumentErrorCode.INDEXING_ALREADY_IN_PROGRESS
                 )
+        # Reindex start permanently fences managed requests, even if rebuilding
+        # later fails and restores the same usable index. Lock order stays
+        # document -> extraction attempt, as in cancellation and completion.
+        GroundingFactExtractionAttempt.objects.filter(
+            document=document,
+            index_run_id=document.last_index_run_id,
+            status="running",
+        ).update(
+            status="failed",
+            error_code="fact_extraction_index_changed",
+            proposed_count=0,
+            finished_at=started_at,
+        )
         document.indexing_run_id = run_id
         document.processing_started_at = started_at
         document.error_code = ""

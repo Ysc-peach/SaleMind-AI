@@ -46,6 +46,98 @@ it('requires explicit analysis selection, preserves its id and does not auto-sub
   expect(calls.filter(c=>c.method==='get'&&c.url==='/solution-drafts/21/')).toHaveLength(0)
   expect(calls.some(c=>c.url.endsWith('submit/'))).toBe(false); w.unmount()
 })
+it.each([
+  ['solution_draft_insufficient_approved_evidence', '可引用'],
+  ['solution_needs_sales_clarification', '客户确认'],
+  ['solution_needs_presales_involvement', '技术冲突'],
+  ['solution_draft_not_grounded', '事实依据'],
+  ['invalid_solution_grounding_input', '校验输入'],
+  ['solution_grounding_invalid_response', '校验模型'],
+  ['solution_draft_unqualified_precondition', '核验完成不等于条件满足'],
+  ['solution_draft_unconfirmed_assertion', '断言'],
+  ['solution_draft_expression_unclassified', '技术核对'],
+  ['solution_draft_invalid_response', '格式'],
+])('keeps a failed %s replay on the analysis page without a new request key', async(code, subject)=>{
+  const base=http.defaults.adapter as AxiosAdapter
+  const requestKeys:string[]=[]
+  http.defaults.adapter=async config=>{
+    if(config.method!=='post'||!config.url?.endsWith('solution-workflows/'))return base(config)
+    requestKeys.push(String(config.headers.get('Idempotency-Key')))
+    if(requestKeys.length===1)throw {config,response:{status:422,data:{code,message:'private provider text'}}}
+    return {config,status:200,statusText:'OK',headers:{},data:{
+      workflow_id:'8de65214-6e04-4d32-a97a-8afc68483051',status:'FAILED',
+      solution_draft_id:null,solution_version:null,solution_review_id:null,reviewer_id:null,
+      allowed_actions:[],error_code:code,
+    }}
+  }
+  const w=await mountPage(AnalysisPanel,{opportunityId:7})
+  await w.get('select').setValue('14');await flushPromises()
+  const router=(w.vm as any).$router
+  const before=router.currentRoute.value.fullPath
+  await w.get('[data-test="generate"]').trigger('click');await flushPromises()
+  expect(w.text()).toContain(subject)
+  await w.get('[data-test="generate"]').trigger('click');await flushPromises()
+  expect(w.text()).toContain(subject)
+  expect(w.text()).not.toContain('private provider text')
+  expect(router.currentRoute.value.fullPath).toBe(before)
+  expect(requestKeys).toHaveLength(2)
+  expect(requestKeys[0]).toBe(requestKeys[1])
+  w.unmount()
+})
+it.each([
+  ['solution_needs_sales_clarification', '查看并补充客户需求', 'requirement'],
+  ['solution_needs_presales_involvement', '查看售前负责人', 'overview'],
+])('provides a safe next action for %s without generating again', async(code, caption, tab)=>{
+  const base=http.defaults.adapter as AxiosAdapter
+  http.defaults.adapter=async config=>{
+    if(config.method==='post'&&config.url?.endsWith('solution-workflows/'))
+      throw {config,response:{status:422,data:{code,message:'private output'}}}
+    return base(config)
+  }
+  const w=await mountPage(AnalysisPanel,{opportunityId:7})
+  await w.get('select').setValue('14'); await flushPromises()
+  await w.get('[data-test="generate"]').trigger('click'); await flushPromises()
+  const action=w.get('[data-test="generation-next-action"]')
+  expect(action.text()).toContain(caption)
+  expect(action.attributes('href')).toBe(`/opportunities/7?tab=${tab}`)
+  await action.trigger('click'); await flushPromises()
+  expect((w.vm as any).$router.currentRoute.value.query.tab).toBe(tab)
+  expect(w.text()).not.toContain('private output')
+  w.unmount()
+})
+it('does not offer customer supplementation as the remedy for a grounding veto', async()=>{
+  const base=http.defaults.adapter as AxiosAdapter
+  http.defaults.adapter=async config=>{
+    if(config.method==='post'&&config.url?.endsWith('solution-workflows/'))
+      throw {config,response:{status:422,data:{code:'solution_draft_not_grounded'}}}
+    return base(config)
+  }
+  const w=await mountPage(AnalysisPanel,{opportunityId:7})
+  await w.get('select').setValue('14'); await flushPromises()
+  await w.get('[data-test="generate"]').trigger('click'); await flushPromises()
+  expect(w.find('[data-test="generation-next-action"]').exists()).toBe(false)
+  expect(w.text()).toContain('不等同于客户信息缺失')
+  w.unmount()
+})
+it('shows pending dimensions without blocking a ready-with-gaps snapshot', async()=>{
+  const base=http.defaults.adapter as AxiosAdapter
+  http.defaults.adapter=async config=>{
+    const response=await base(config)
+    if(config.url?.endsWith('requirement-analyses/14/')) response.data={...snapshot,
+      requirements:{user_scale:{status:'unknown',value:null,evidence:null}},
+      clarifying_questions:[{field:'user_scale',question:'请确认实际使用人数。'}],
+    }
+    return response
+  }
+  const w=await mountPage(AnalysisPanel,{opportunityId:7})
+  await w.get('select').setValue('14'); await flushPromises()
+  expect(w.get('[data-test="pending-information"]').text()).toContain('用户规模')
+  expect(w.get('[data-test="pending-information"]').text()).toContain('并非所有待确认项都会阻塞')
+  expect(w.get('[data-test="generate"]').attributes('disabled')).toBeUndefined()
+  await w.get('[data-test="generate"]').trigger('click'); await flushPromises()
+  expect((w.vm as any).$router.currentRoute.value.path).toBe('/solutions/21')
+  w.unmount()
+})
 it('uses the successful analysis response without a second history read',async()=>{
   const w=await mountPage(AnalysisPanel,{opportunityId:7})
   expect(calls.filter(c=>c.method==='get'&&c.url.endsWith('requirement-analyses/'))).toHaveLength(1)

@@ -178,6 +178,24 @@ it('restores the Sales confirmation state from status after loading the DRAFT', 
   wrapper.unmount()
 })
 
+it('offers manual submit after a blocked draft becomes eligible without starting generation', async () => {
+  workflow.status = 'BLOCKED'; workflow.allowed_actions = []; workflow.error_code = 'solution_review_submit_blocked'
+  const wrapper = await mountDetail()
+  expect(wrapper.find('[data-test="submit"]').exists()).toBe(false)
+  workflow.status = 'WAITING_FOR_SALES_CONFIRMATION'; workflow.allowed_actions = ['SUBMIT_FOR_REVIEW']
+  const refresh = wrapper.findAll('button').find(button => button.text() === '刷新')!
+  await refresh.trigger('click'); await flushPromises()
+  expect(wrapper.get('[data-test="submit"]').isVisible()).toBe(true)
+  expect(calls.filter(call => call.method === 'post')).toHaveLength(0)
+  await wrapper.get('[data-test="submit"]').trigger('click'); await flushPromises()
+  expect(calls.filter(call => call.method === 'post').map(call => ({url:call.url,body:call.body}))).toEqual([
+    {url:`/solution-workflows/${workflowId}/resume/`,body:{action:'SUBMIT_FOR_REVIEW'}},
+  ])
+  expect(wrapper.text()).toContain('等待售前审核')
+  expect(wrapper.find('[data-test="submit"]').exists()).toBe(false)
+  wrapper.unmount()
+})
+
 it('summarizes the V2 review state and attention counts above the long document', async () => {
   useV2Draft()
   const wrapper = await mountDetail()

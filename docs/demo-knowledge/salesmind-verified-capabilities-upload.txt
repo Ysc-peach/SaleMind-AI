@@ -1,0 +1,59 @@
+SalesMind AI 知识检索能力说明——本地测试用待审核资料
+
+整理日期：2026-10-10
+资料归属：当前 SalesMind AI 项目，不是任何客户的已交付案例。
+核对范围：本地工作区源码；Git HEAD 为 b5edbf3fec7ea548d7f83e5e3103d30407c5adfa，工作区含未提交修改。
+证据级别：已核对代码实现，不等同于客户现场验证、容量测试或商业交付。
+审核状态：本文是待审核来源资料，不是系统内已批准的企业事实。
+
+一、企业知识检索能力
+
+SalesMind AI 实现了企业知识文档的向量相似度检索流程。
+SalesMind AI 的检索结果包含来源文档、分块编号和来源定位信息。
+检索仅使用已就绪且与当前向量模型配置相匹配的文档分块。
+适用范围：本项目的知识资料检索模块。不能据此承诺任何查询准确率、并发人数或响应时间。
+源码依据：apps/knowledge/services/search.py；apps/knowledge/services/indexing.py。
+
+二、PostgreSQL 存储
+
+SalesMind AI 当前本地配置使用 PostgreSQL 数据库。
+SalesMind AI 在数据库中保存知识文档元数据、文档分块、企业事实和审批信息。
+适用范围：当前项目的数据模型与本地配置。不能据此保证客户数据库的版本、资源或扩展安装条件符合要求。
+源码依据：config/settings/base.py；apps/knowledge/models.py。
+
+三、pgvector 向量检索
+
+SalesMind AI 的知识检索模块使用 PostgreSQL 的 pgvector 保存文档向量。
+SalesMind AI 使用余弦距离对兼容的知识文档分块进行相似度排序。
+适用范围：当前项目的向量检索实现。不能据此宣称已经采用混合检索、完成生产索引优化或达到某项容量指标。
+源码依据：apps/knowledge/models.py；apps/knowledge/services/search.py。
+
+四、JWT 身份认证
+
+SalesMind AI 实现了 JWT 登录认证。
+SalesMind AI 提供登录令牌获取和令牌刷新接口。
+适用范围：本项目的用户登录。JWT 登录本身不证明已实现客户 SSO 对接，也不证明已实现文档级或部门级检索权限隔离。
+源码依据：apps/accounts/api/urls.py；config/settings/base.py。
+
+五、文档格式与扫描版 PDF 边界
+
+SalesMind AI 的知识文档入口接受 UTF-8 TXT 和 Markdown 文本文件。
+SalesMind AI 的 PDF 解析器使用页面文字提取，并保存来源页码。
+SalesMind AI 当前 PDF 解析器未实现扫描版 PDF 的 OCR 识别流程，不能仅凭支持 PDF 宣称支持扫描版资料检索。
+当前知识文档入口不接受原生 Word/DOCX 文件；可另行转换为支持的格式，但转换步骤不属于已有原生 Word 接入能力。
+源码依据：apps/knowledge/parsers/validation.py；apps/knowledge/parsers/text.py；apps/knowledge/parsers/markdown.py；apps/knowledge/parsers/pdf.py。
+
+六、部署与客户需求的未确认边界
+
+本地运行不等于全部数据留在客户内网。向量化、生成和校验会使用配置的服务端点；配置为公网服务时，相关输入可能离开本机或客户内网。
+本文不证明客户内网部署、禁止公网传输、SSO、部门或文档级权限隔离已经完成。
+本文不包含服务器规格、交付期限、报价、SLA、QPS、并发容量或性能承诺。
+本文不声明任何客户已采用这些能力，也不声明我方已完成任何客户交付或验收。
+
+七、使用与人工审核边界
+
+本资料只适合产品身份确实为当前 SalesMind AI 的本地测试。
+若实际售前代表另一家公司或另一款产品，需要用那家公司自己的产品资料、测试报告或真实交付记录替代，不能借用本项目能力。
+上传和索引不会自动批准企业事实。提取结果应由有权限的审核人员逐条核对源码依据、原文摘录、归属、适用条件和当前索引。
+对内网驻留、SSO、文档级权限或扫描版 OCR 等未证明能力，不得批准为已确认支持。
+本文能够提供可核对的来源，但不保证任意客户需求下方案生成一定通过。

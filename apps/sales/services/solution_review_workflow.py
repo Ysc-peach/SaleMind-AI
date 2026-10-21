@@ -9,15 +9,18 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import TypedDict
 from uuid import UUID
+import logging
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
+from django.db import OperationalError
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+from apps.accounts.models import UserRole
 from apps.knowledge.exceptions import KnowledgeDocumentError
-from apps.llm.exceptions import LLMProviderError
+from apps.llm.exceptions import LLMErrorCode, LLMProviderError
 from apps.sales.api.opportunity_access import visible_opportunities_for
 from apps.sales.models import (
     Opportunity,
@@ -27,19 +30,31 @@ from apps.sales.models import (
     SolutionReview,
     SolutionReviewDecisionStatus,
 )
-from apps.sales.services.solution_errors import SolutionDraftError
+from apps.sales.services.solution_errors import SolutionDraftError, SolutionDraftErrorCode
+from apps.sales.services.solution_grounding import SolutionDraftGroundingError
+from apps.sales.services.solution_log_context import solution_log_scope
 from apps.sales.services.solution_persistence import (
     SolutionPersistenceError,
+    SolutionReadinessBlockedError,
     generate_and_persist_solution_draft,
 )
 from apps.sales.services.solution_review import (
     SolutionReviewError,
+    SolutionReviewErrorCode,
     approve_solution_draft,
     recover_completed_solution_review,
     recover_pending_solution_review,
     request_solution_draft_revision,
     submit_solution_draft_for_review,
+    validate_solution_review_submission,
 )
+
+
+logger = logging.getLogger(__name__)
+_REPAIRABLE_REVIEWER_ERRORS = {
+    SolutionReviewErrorCode.MISSING_REVIEWER.value,
+    SolutionReviewErrorCode.INVALID_REVIEWER.value,
+}
 
 
 class SolutionWorkflowStage(StrEnum):
@@ -85,6 +100,7 @@ class SolutionReviewWorkflowState(TypedDict, total=False):
     return_reason: str
     comment: str
     error_code: str
+    submission_error_code: str
 
 
 def build_solution_review_graph(checkpointer):
@@ -119,7 +135,7 @@ def build_solution_review_graph(checkpointer):
     builder.add_conditional_edges(
         "submit_review",
         _route_after_submit,
-        {"wait": "wait_for_presales_review", "end": END},
+        {"wait": "wait_for_presales_review", "retry": "wait_for_sales_confirmation", "end": END},
     )
     builder.add_conditional_edges(
         "wait_for_presales_review",
@@ -146,22 +162,61 @@ def _generate_solution_node(state: SolutionReviewWorkflowState) -> dict:
             pk=state["requirement_analysis_id"],
             opportunity_id=opportunity.pk,
         )
-        record = generate_and_persist_solution_draft(
-            opportunity,
-            analysis,
-            created_by=requested_by,
-            idempotency_key=workflow_key,
-            schema_version=2,
-        )
+        with solution_log_scope(workflow_key):
+            record = generate_and_persist_solution_draft(
+                opportunity,
+                analysis,
+                created_by=requested_by,
+                idempotency_key=workflow_key,
+                schema_version=2,
+            )
     except (
         KeyError,
         ValueError,
         ObjectDoesNotExist,
+        OperationalError,
         KnowledgeDocumentError,
         LLMProviderError,
         SolutionDraftError,
+        SolutionDraftGroundingError,
         SolutionPersistenceError,
-    ):
+    ) as error:
+        # Preserve the public failure/checkpoint contract; log no payload, cause,
+        # exception message or traceback, even when an SDK exception has a body.
+        diagnostic = {
+            "opportunity_id": opportunity.pk if "opportunity" in locals() else None,
+            "analysis_id": analysis.pk if "analysis" in locals() else None,
+            "exception_class": type(error).__name__,
+            "code": getattr(error, "code", "workflow_generation_error"),
+            "category": "workflow_generation_error",
+            "http_status": None,
+        }
+        if "workflow_key" in locals():
+            diagnostic["workflow_id"] = str(workflow_key)
+        if isinstance(error, LLMProviderError):
+            diagnostic["category"] = error.failure_kind.value if error.failure_kind else "unknown_provider_error"
+            diagnostic["http_status"] = error.http_status
+        elif isinstance(error, SolutionDraftGroundingError):
+            diagnostic["category"] = "grounding_rejection"
+        elif isinstance(error, SolutionReadinessBlockedError):
+            diagnostic["category"] = "requirement_readiness"
+        logger.warning("Solution workflow generation failed: %s", diagnostic,
+                       extra={"solution_workflow_failure": diagnostic})
+        if isinstance(error, SolutionDraftGroundingError):
+            return _failure(SolutionWorkflowOutcome.FAILED, error.code)
+        if isinstance(error, SolutionReadinessBlockedError):
+            return _failure(SolutionWorkflowOutcome.FAILED, error.code)
+        if isinstance(error, LLMProviderError) and error.code in {item.value for item in LLMErrorCode}:
+            return _failure(SolutionWorkflowOutcome.FAILED, error.code)
+        if (
+            isinstance(error, SolutionDraftError)
+            and error.code in {
+                SolutionDraftErrorCode.INSUFFICIENT_APPROVED_EVIDENCE.value,
+                SolutionDraftErrorCode.INVALID_RESPONSE.value,
+                SolutionDraftErrorCode.NO_PROPOSALS.value,
+            }
+        ):
+            return _failure(SolutionWorkflowOutcome.FAILED, error.code)
         return _failure(SolutionWorkflowOutcome.FAILED, "solution_generation_failed")
     return {
         "solution_draft_id": record.pk,
@@ -213,13 +268,33 @@ def _submit_review_node(state: SolutionReviewWorkflowState) -> dict:
                 actor=actor,
                 reviewer=reviewer,
             )
-        except SolutionReviewError:
-            review = recover_pending_solution_review(
-                solution,
-                actor=actor,
-                expected_reviewer=reviewer,
-            )
-    except (KeyError, ObjectDoesNotExist, SolutionReviewError):
+        except SolutionReviewError as submit_error:
+            try:
+                review = recover_pending_solution_review(
+                    solution,
+                    actor=actor,
+                    expected_reviewer=reviewer,
+                )
+            except SolutionReviewError:
+                raise submit_error
+    except SolutionReviewError as error:
+        diagnostic = {
+            "solution_id": state.get("solution_draft_id"),
+            "actor_id": state.get("actor_id"),
+            "exception_class": type(error).__name__, "code": error.code,
+        }
+        logger.warning("Solution review submission rejected: %s", diagnostic,
+                       extra={"solution_review_submission_failure": diagnostic})
+        if actor.role == UserRole.SALES and error.code in _REPAIRABLE_REVIEWER_ERRORS:
+            return {
+                "workflow_stage": SolutionWorkflowStage.WAITING_FOR_SALES_CONFIRMATION.value,
+                "workflow_outcome": SolutionWorkflowOutcome.BLOCKED.value,
+                "error_code": error.code, "submission_error_code": error.code,
+                "human_action": "",
+            }
+        return {**_failure(SolutionWorkflowOutcome.BLOCKED, "solution_review_submit_blocked"),
+                "submission_error_code": error.code}
+    except (KeyError, ObjectDoesNotExist):
         return _failure(SolutionWorkflowOutcome.BLOCKED, "solution_review_submit_blocked")
     return {
         "solution_review_id": review.pk,
@@ -228,7 +303,39 @@ def _submit_review_node(state: SolutionReviewWorkflowState) -> dict:
         "workflow_outcome": SolutionWorkflowOutcome.WAITING_FOR_PRESALES_REVIEW.value,
         "human_action": "",
         "error_code": "",
+        "submission_error_code": "",
     }
+
+
+def can_recover_terminal_review_submission(state, solution, actor, *, workflow_id) -> bool:
+    """Recognize only a failed submit for this exact, currently eligible version.
+
+    Legacy checkpoints did not retain the underlying review error. They may be
+    offered recovery only after the same business checks as a new submission.
+    This function does not alter business data or checkpoint history.
+    """
+    if (
+        state.get("workflow_stage") != SolutionWorkflowStage.TERMINAL.value
+        or state.get("workflow_outcome") != SolutionWorkflowOutcome.BLOCKED.value
+        or state.get("error_code") != "solution_review_submit_blocked"
+        or state.get("submission_error_code", "") not in {"", *_REPAIRABLE_REVIEWER_ERRORS}
+        or str(workflow_id) != str(solution.generation_idempotency_key)
+        or state.get("workflow_run_id") != str(solution.generation_idempotency_key)
+        or state.get("solution_draft_id") != solution.pk
+        or state.get("solution_version") != solution.version
+        or state.get("opportunity_id") != solution.opportunity_id
+        or state.get("requirement_analysis_id") != solution.requirement_analysis_id
+        or solution.reviews.exists()
+    ):
+        return False
+    try:
+        reviewer = None
+        if state.get("reviewer_id") is not None:
+            reviewer = get_user_model().objects.get(pk=state["reviewer_id"])
+        validate_solution_review_submission(solution, actor=actor, reviewer=reviewer)
+    except (ObjectDoesNotExist, SolutionReviewError):
+        return False
+    return True
 
 
 def _wait_for_presales_review_node(state: SolutionReviewWorkflowState) -> dict:
@@ -349,6 +456,12 @@ def _route_sales_confirmation(state: SolutionReviewWorkflowState) -> str:
 
 
 def _route_after_submit(state: SolutionReviewWorkflowState) -> str:
+    if (
+        state.get("workflow_stage") == SolutionWorkflowStage.WAITING_FOR_SALES_CONFIRMATION
+        and state.get("workflow_outcome") == SolutionWorkflowOutcome.BLOCKED
+        and state.get("error_code") in _REPAIRABLE_REVIEWER_ERRORS
+    ):
+        return "retry"
     return (
         "wait"
         if state.get("workflow_outcome")

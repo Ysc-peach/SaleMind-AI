@@ -24,6 +24,10 @@ from apps.llm.exceptions import (
 
 
 _ALLOWED_ROLES = frozenset({"system", "user", "assistant"})
+_SAFE_FINISH_REASONS = frozenset({
+    "stop", "length", "content_filter", "tool_calls", "function_call",
+    "insufficient_system_resource", "aborted",
+})
 
 
 class OpenAICompatibleLLMProvider(LLMProvider):
@@ -80,9 +84,16 @@ class OpenAICompatibleLLMProvider(LLMProvider):
             self._invalid_response()
         if not isinstance(content, str) or not content.strip():
             self._invalid_response()
+        finish_reason = getattr(choices[0], "finish_reason", None)
+        if not isinstance(finish_reason, str) or finish_reason not in _SAFE_FINISH_REASONS:
+            finish_reason = None
+        usage = getattr(response, "usage", None)
         return LLMGeneration(
             content=content.strip(),
             provider_request_id=getattr(response, "_request_id", None),
+            finish_reason=finish_reason,
+            prompt_tokens=_safe_token_count(getattr(usage, "prompt_tokens", None)),
+            completion_tokens=_safe_token_count(getattr(usage, "completion_tokens", None)),
         )
 
     def _validate_messages(self, messages: Sequence[LLMMessage]) -> list[LLMMessage]:
@@ -107,6 +118,11 @@ class OpenAICompatibleLLMProvider(LLMProvider):
             LLMErrorCode.LLM_INVALID_RESPONSE,
             failure_kind=LLMProviderFailureKind.INVALID_RESPONSE,
         )
+
+
+def _safe_token_count(value: object) -> int | None:
+    """Optional usage carries only nonnegative counts, never provider text."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
 _QUOTA_CODES = frozenset({

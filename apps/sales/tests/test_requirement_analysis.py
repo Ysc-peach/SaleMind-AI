@@ -27,8 +27,8 @@ class ResponseLLM(DeterministicFakeLLM):
         super().__init__()
         self.content = content
 
-    def generate(self, messages):
-        super().generate(messages)
+    def generate(self, messages, *, max_output_tokens=None):
+        super().generate(messages, max_output_tokens=max_output_tokens)
         return LLMGeneration(content=self.content)
 
 
@@ -87,7 +87,10 @@ def payload():
 def run_analysis(opportunity, payload):
     from apps.sales.services.requirement_analysis import analyze_opportunity_requirement
 
-    provider = ResponseLLM(json.dumps(payload, ensure_ascii=False))
+    # Explicit generation fixture migration; final snapshot fixtures still
+    # exercise the unchanged four-key historical parser in parser-only tests.
+    generation = {key: value for key, value in payload.items() if key != "clarifying_questions"}
+    provider = ResponseLLM(json.dumps(generation, ensure_ascii=False))
     return analyze_opportunity_requirement(opportunity, llm_provider=provider), provider
 
 
@@ -143,7 +146,7 @@ def test_prompt_contract_covers_absence_ambiguity_conflict_and_no_solutions(oppo
         "不得自行解决冲突", "不得推荐产品", "架构", "报价", "解决方案",
         "结构化字段", "raw_requirement", "budget", "expected_launch_date",
         "不得因", "缺失", "50万元", "30万元", "人数应该不少", "不得编造人数",
-        "部署", "只返回", "JSON", "简体中文", "8", "原始", "证据",
+        "部署", "只返回", "JSON", "简体中文", "追问由系统", "原始", "证据",
     ):
         assert contract in system
 
@@ -223,7 +226,7 @@ DELETE = object()
     ],
 )
 def test_invalid_schema_is_rejected_without_repair(opportunity, payload, path, replacement):
-    from apps.sales.services.requirement_analysis import RequirementAnalysisError
+    from apps.sales.services.requirement_analysis import RequirementAnalysisError, _parse_analysis
 
     parent = payload
     for part in path[:-1]:
@@ -234,7 +237,10 @@ def test_invalid_schema_is_rejected_without_repair(opportunity, payload, path, r
         parent[path[-1]] = replacement
 
     with pytest.raises(RequirementAnalysisError) as caught:
-        run_analysis(opportunity, payload)
+        if path[0] == "clarifying_questions":
+            _parse_analysis(json.dumps(payload, ensure_ascii=False))
+        else:
+            run_analysis(opportunity, payload)
     assert caught.value.code == "requirement_analysis_invalid_response"
 
 
@@ -258,7 +264,8 @@ def test_malformed_or_non_object_response_is_stable_error(opportunity, content):
 def test_single_whole_json_fence_is_accepted(opportunity, payload):
     from apps.sales.services.requirement_analysis import analyze_opportunity_requirement
 
-    content = " \n```json\n" + json.dumps(payload, ensure_ascii=False) + "\n```\n "
+    generation = {key: value for key, value in payload.items() if key != "clarifying_questions"}
+    content = " \n```json\n" + json.dumps(generation, ensure_ascii=False) + "\n```\n "
     result = analyze_opportunity_requirement(opportunity, llm_provider=ResponseLLM(content))
     assert result.requirements.budget.status == "conflict"
 
@@ -281,29 +288,30 @@ def test_duplicate_keys_and_nonstandard_json_constants_are_rejected(opportunity,
 
 @pytest.mark.parametrize(("count", "valid"), [(8, True), (9, False)])
 def test_clarification_limit(opportunity, payload, count, valid):
-    from apps.sales.services.requirement_analysis import RequirementAnalysisError
+    from apps.sales.services.requirement_analysis import RequirementAnalysisError, _parse_analysis
 
     payload["clarifying_questions"] = [
         {"field": "existing_environment", "question": f"请确认第{index + 1}台现有服务器的配置？"}
         for index in range(count)
     ]
     if valid:
-        result, _ = run_analysis(opportunity, payload)
+        result = _parse_analysis(json.dumps(payload))
         assert len(result.clarifying_questions) == 8
     else:
         with pytest.raises(RequirementAnalysisError) as caught:
-            run_analysis(opportunity, payload)
+            _parse_analysis(json.dumps(payload))
         assert caught.value.code == "requirement_analysis_invalid_response"
 
 
-def test_unknown_dimensions_do_not_require_mechanical_questions(opportunity, payload):
+def test_historical_unknown_dimensions_allow_empty_question_list(opportunity, payload):
+    from apps.sales.services.requirement_analysis import _parse_analysis
     opportunity.budget = None
     opportunity.raw_requirement = "客户计划建设企业知识库，服务器配置尚未确定。"
     payload["summary"] = "客户计划建设企业知识库，预算尚未明确。"
     payload["requirements"]["budget"] = {"status": "unknown", "value": None, "evidence": None}
     payload["conflicts"] = []
     payload["clarifying_questions"] = []
-    result, _ = run_analysis(opportunity, payload)
+    result = _parse_analysis(json.dumps(payload))
     assert result.requirements.budget.value is None
     assert result.conflicts == ()
     assert result.clarifying_questions == ()
@@ -329,7 +337,8 @@ def test_invalid_service_input_is_safe_before_llm(invalid_input, payload):
         RequirementAnalysisError, analyze_opportunity_requirement,
     )
 
-    provider = ResponseLLM(json.dumps(payload))
+    generation = {key: value for key, value in payload.items() if key != "clarifying_questions"}
+    provider = ResponseLLM(json.dumps(generation))
     with pytest.raises(RequirementAnalysisError) as caught:
         analyze_opportunity_requirement(invalid_input, llm_provider=provider)
     assert caught.value.code == "invalid_requirement_analysis_input"
@@ -384,7 +393,8 @@ def test_absent_optional_facts_are_preserved_as_null_not_invented(opportunity, p
 def test_default_path_uses_existing_llm_factory(opportunity, payload, monkeypatch):
     from apps.sales.services import requirement_analysis
 
-    provider = ResponseLLM(json.dumps(payload))
+    generation = {key: value for key, value in payload.items() if key != "clarifying_questions"}
+    provider = ResponseLLM(json.dumps(generation))
     monkeypatch.setattr(requirement_analysis, "get_llm_provider", lambda: provider)
     result = requirement_analysis.analyze_opportunity_requirement(opportunity)
     assert result.summary == payload["summary"]

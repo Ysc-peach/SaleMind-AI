@@ -1,7 +1,10 @@
 """Customer and opportunity persistence models."""
 
+from decimal import Decimal
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
@@ -101,7 +104,8 @@ class Opportunity(models.Model):
     )
     raw_requirement = models.TextField(_("原始需求"), blank=True, default="")
     budget = models.DecimalField(
-        _("预算"), max_digits=14, decimal_places=2, null=True, blank=True
+        _("预算"), max_digits=14, decimal_places=2, null=True, blank=True,
+        validators=[MinValueValidator(Decimal("0"))],
     )
     stage = models.CharField(
         _("阶段"),

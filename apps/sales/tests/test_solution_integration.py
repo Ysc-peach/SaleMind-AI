@@ -28,11 +28,15 @@ def history_and_knowledge(make_user):
     owner = make_user()
     customer = Customer.objects.create(name="受控企业", created_by=owner)
     opportunity = Opportunity.objects.create(customer=customer, project_name="历史需求项目", sales_owner=owner, created_by=owner)
+    first_facts = analysis_payload(existing_environment="unclear", integration_requirement="unclear")
+    del first_facts["clarifying_questions"]  # Explicit generation-only fixture.
     first = create_opportunity_requirement_analysis(opportunity, created_by=owner, llm_provider=AnalysisFakeLLM(
-        content=json.dumps(analysis_payload(existing_environment="unclear", integration_requirement="unclear")),
+        content=json.dumps(first_facts),
     ))
+    latest_facts = analysis_payload(data_security_requirement="conflict")
+    del latest_facts["clarifying_questions"]
     latest = create_opportunity_requirement_analysis(opportunity, created_by=owner, llm_provider=AnalysisFakeLLM(
-        content=json.dumps(analysis_payload(data_security_requirement="conflict")),
+        content=json.dumps(latest_facts),
     ))
     embedding = DeterministicEmbeddingProvider()
     document = KnowledgeDocument.objects.create(

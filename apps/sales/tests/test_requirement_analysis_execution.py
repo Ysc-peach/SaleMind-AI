@@ -57,7 +57,7 @@ def test_execution_freezes_exact_input_before_provider_callback(opportunity):
     assert execution.source_raw_requirement == actual_raw == "预算最多30万元。"
     assert execution.llm_provider == "analysis-test-provider"
     assert execution.llm_model == "analysis-test-model"
-    assert execution.analysis_version == "v1"
+    assert execution.analysis_version == "v2"
     assert execution.analysis.requirements.budget.status == "conflict"
 
 

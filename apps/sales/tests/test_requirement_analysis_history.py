@@ -57,7 +57,7 @@ def test_create_persists_valid_analysis_and_exact_execution_snapshot(context):
     assert record.opportunity_id == opportunity.pk
     assert record.created_by_id == actor.pk != opportunity.sales_owner_id
     expected = valid_analysis_payload()
-    for name in ("summary", "requirements", "conflicts", "clarifying_questions"):
+    for name in ("summary", "requirements", "conflicts"):
         assert getattr(record, name) == expected[name]
     assert len(record.requirements) == 10
     assert type(record.requirements["budget"]["status"]) is str
@@ -68,7 +68,11 @@ def test_create_persists_valid_analysis_and_exact_execution_snapshot(context):
     assert record.source_context["opportunity"]["expected_launch_date"] == "2026-12-01"
     assert record.source_context["customer"]["basic_info"] == "企业基础资料 A"
     assert (record.llm_provider, record.llm_model) == ("analysis-test-provider", "analysis-test-model")
-    assert record.analysis_version == "v1"
+    assert record.analysis_version == "v2"
+    assert [q["field"] for q in record.clarifying_questions] == [
+        "budget", "business_goal", "use_scenario", "user_scale", "deployment_requirement",
+        "data_security_requirement", "existing_environment", "integration_requirement",
+    ]
     assert Opportunity.objects.values().get(pk=opportunity.pk) == before_opportunity
     assert Customer.objects.values().get(pk=opportunity.customer_id) == before_customer
 

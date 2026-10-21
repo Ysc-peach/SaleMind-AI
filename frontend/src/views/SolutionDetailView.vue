@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { getSolution } from '../api/solutions'
+import { fetchSolutionExport, type SolutionExportFormat } from '../api/solutionExports'
+import { saveDownload } from '../utils/download'
 import { getOpportunity } from '../api/opportunities'
 import { reviewHistory, submitReview, approveReview, returnReview } from '../api/reviews'
 import { getSolutionWorkflow, resumeSolutionWorkflow } from '../api/workflows'
@@ -15,6 +17,23 @@ import SolutionV1Renderer from '../components/solution/SolutionV1Renderer.vue'
 import SolutionV2Renderer from '../components/solution/SolutionV2Renderer.vue'
 import WorkflowProgress from '../components/workflow/WorkflowProgress.vue'
 const route=useRoute(),auth=useAuthStore()
+const exporting=ref(false),exportError=ref('')
+let exportRequest=0,exportController:AbortController|undefined,mounted=true
+const canExport=computed(()=>draft.value?.review_status==='approved'&&!draft.value.is_stale)
+function cancelExport(){exportRequest++;exportController?.abort();exportController=undefined;exporting.value=false}
+async function exportFile(fileType:SolutionExportFormat){
+  if(exporting.value||busy.value||loading.value||!draft.value||!canExport.value)return
+  const id=draft.value.id,version=draft.value.version,session=auth.sessionEpoch(),current=++exportRequest
+  exportController=new AbortController();exporting.value=true;exportError.value=''
+  const valid=()=>mounted&&current===exportRequest&&session===auth.sessionEpoch()&&Number(route.params.id)===id&&draft.value?.version===version
+  try{
+    const result=await fetchSolutionExport(id,version,fileType,exportController.signal)
+    if(valid())saveDownload(result.blob,result.filename)
+  }catch(e){if(valid())exportError.value=safeError(e)}
+  finally{if(current===exportRequest){exporting.value=false;exportController=undefined}}
+}
+watch(()=>auth.sessionEpoch(),cancelExport)
+onBeforeUnmount(()=>{mounted=false;cancelExport()})
 const draft=ref<Solution>(),opportunity=ref<Opportunity>(),reviews=ref<Review[]>([]),workflow=ref<SolutionWorkflow>(),loading=ref(false),busy=ref(false),error=ref(''),historyError=ref('')
 const reason=ref<ReturnReason|''>(''),comment=ref(''),reviewerId=ref('')
 const pending=computed(()=>reviews.value.find(r=>r.status==='pending'))
@@ -37,6 +56,7 @@ const reviewStatusCopy=computed(()=>{
 })
 let request=0
 async function load(){
+  cancelExport();exportError.value=''
   const current=++request; loading.value=true;error.value='';historyError.value='';draft.value=undefined;reviews.value=[];workflow.value=undefined;opportunity.value=undefined
   try{
     const data=await getSolution(Number(route.params.id)); if(current!==request)return; draft.value=data
@@ -86,8 +106,14 @@ watch(()=>route.params.id,()=>{reason.value='';comment.value='';reviewerId.value
         <h1>{{draft.title}}</h1>
         <p class="muted">{{dateTime(draft.created_at)}} · 创建人 #{{draft.created_by}}</p>
       </div>
-      <el-button :disabled="busy||loading" @click="load">刷新</el-button>
+      <div class="export-actions">
+        <el-button data-test="export-docx" :disabled="!canExport||busy||loading||exporting" @click="exportFile('docx')">导出 Word</el-button>
+        <el-button data-test="export-pdf" :disabled="!canExport||busy||loading||exporting" @click="exportFile('pdf')">导出 PDF</el-button>
+        <el-button :disabled="busy||loading" @click="load">刷新</el-button>
+      </div>
     </div>
+    <p v-if="exporting" role="status">正在准备导出文件…</p>
+    <p v-if="exportError" class="export-error" role="alert">{{exportError}}</p>
 
     <section class="solution-summary" data-test="solution-summary" aria-label="方案状态摘要">
       <div><span class="summary-label">方案版本</span><strong>V{{draft.version}}</strong></div>
@@ -163,5 +189,6 @@ watch(()=>route.params.id,()=>{reason.value='';comment.value='';reviewerId.value
 </template>
 
 <style scoped>
+.export-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}.export-actions .el-button{margin-left:0}.export-error{padding:12px 0;color:#a33424}
 .solution-summary{display:grid;grid-template-columns:repeat(6,minmax(110px,1fr));gap:1px;margin:16px 0 20px;overflow:hidden;border:1px solid #dfe6ef;border-radius:12px;background:#dfe6ef}.solution-summary>div{display:grid;gap:7px;padding:16px;background:#fff}.summary-label{font-size:12px;color:#64748b}.summary-success{color:#247044}.summary-danger{color:#9a6500}.solution-detail-layout{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:24px;align-items:start;min-width:0;max-width:100%}.solution-document{min-width:0;max-width:100%}.review-action-rail{position:sticky;top:20px;scroll-margin-top:20px;min-width:0;max-width:100%}.review-action-card{margin-top:20px}.review-action-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.review-action-heading h2{margin-bottom:8px}.review-action-card .review-form{max-width:none}.review-action-card .el-button{width:100%}.review-history{scroll-margin-top:72px}@media(max-width:1100px){.solution-summary{grid-template-columns:repeat(3,minmax(0,1fr))}.solution-detail-layout{display:flex;flex-direction:column}.review-action-rail{position:static;order:-1;width:100%}.review-action-card{margin-bottom:0}}@media(max-width:600px){.solution-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>

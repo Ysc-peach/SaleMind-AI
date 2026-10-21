@@ -108,6 +108,26 @@ def admission_fixture():
     )
 
 
+@pytest.mark.parametrize("retrieved", (False, True))
+def test_v2_retrieval_without_approved_citations_stops_before_providers(monkeypatch, retrieved):
+    from apps.sales.services import solution_draft as service
+    from apps.sales.services.solution_errors import SolutionDraftError
+    from apps.sales.models import SolutionDraftRecord, SolutionDraftProvenance
+
+    # Keep the actual admission rules: a retrieved chunk without approved facts
+    # cannot authorize any proposal citation.
+    monkeypatch.setattr(service, "search_knowledge", lambda **kw: [search_result()] if retrieved else [])
+    def forbidden(*args, **kwargs):
+        pytest.fail("No authorized citations must stop before generation or verification")
+    monkeypatch.setattr(service, "get_llm_provider", forbidden)
+    monkeypatch.setattr(service, "get_verifier_provider", forbidden)
+    with pytest.raises(SolutionDraftError) as caught:
+        service.generate_grounded_solution_draft(analysis_record(), schema_version=2)
+    assert caught.value.code == "solution_draft_insufficient_approved_evidence"
+    assert not SolutionDraftRecord.objects.exists()
+    assert not SolutionDraftProvenance.objects.exists()
+
+
 def test_deterministic_v2_content_owns_customer_enterprise_and_unresolved_claims():
     from apps.sales.services.solution_schema_v2 import (
         SolutionClaimTypeV2,
@@ -315,26 +335,20 @@ def _generate_v2(
     ), generation
 
 
-def test_explicit_v2_selection_builds_structured_draft_and_skips_verifier_for_deterministic_claims(monkeypatch):
-    from apps.sales.services.solution_schema_v2 import SolutionClaimTypeV2, SolutionDraftV2
+def test_explicit_v2_selection_rejects_deterministic_only_generation(monkeypatch):
+    from apps.sales.services.solution_errors import SolutionDraftError
 
     verifier = _VerifierProvider()
-    (result, generation) = _generate_v2(monkeypatch, [], verifier=verifier)
+    with pytest.raises(SolutionDraftError) as caught:
+        _generate_v2(monkeypatch, [], verifier=verifier)
 
-    assert result.schema_version == 2
-    assert isinstance(result.draft, SolutionDraftV2)
+    assert caught.value.code == "solution_draft_no_proposals"
     assert verifier.calls == []
-    assert '"ir_version":"semantic_v1"' in generation.calls[0][0]["content"]
-    assert '"container_kind"' not in generation.calls[0][0]["content"]
-    assert any(claim.statement_type is SolutionClaimTypeV2.ENTERPRISE_FACT for claim in result.draft.claims)
-    assert any(
-        claim.statement_type is SolutionClaimTypeV2.UNRESOLVED and "SSO" in claim.text
-        for claim in result.draft.claims
-    )
 
 
 def test_v2_generation_uses_json_output_capability_when_available(monkeypatch):
     from apps.sales.services import solution_draft as service
+    from apps.sales.services.solution_errors import SolutionDraftError
 
     class JsonGenerationProvider(_GenerationProvider):
         def __init__(self):
@@ -356,11 +370,12 @@ def test_v2_generation_uses_json_output_capability_when_available(monkeypatch):
     monkeypatch.setattr(service, "build_solution_admission", lambda *args: next(sequence))
     provider = JsonGenerationProvider()
 
-    result = service.generate_grounded_solution_draft(
-        analysis_record(), llm_provider=provider, schema_version=2,
-    )
+    with pytest.raises(SolutionDraftError) as caught:
+        service.generate_grounded_solution_draft(
+            analysis_record(), llm_provider=provider, schema_version=2,
+        )
 
-    assert result.generation_status == "generated"
+    assert caught.value.code == "solution_draft_no_proposals"
     assert provider.json_calls == [6000, 6000, 6000]
 
 

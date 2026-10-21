@@ -7,16 +7,19 @@ from enum import StrEnum
 from html import escape
 from typing import NoReturn
 
+from apps.knowledge.models import EnterpriseGroundingFactStatus
 from apps.knowledge.evidence import format_source
 from apps.llm.base import LLMMessage
 from apps.sales.services.requirement_analysis import (
     OpportunityRequirementAnalysis,
     RequirementDimension,
+    RequirementStatus,
 )
 from apps.sales.services.solution_admission import GroundingAdmission
 from apps.sales.services.solution_errors import SolutionDraftError, SolutionDraftErrorCode
 from apps.sales.services.solution_readiness import SolutionReadiness
 from apps.sales.services.solution_retrieval import SolutionSource
+from apps.sales.services.solution_schema import SolutionStatementType
 
 
 from apps.sales.services.solution_generation_contract import (
@@ -470,10 +473,42 @@ def _solution_v2_input_context(
         _invalid(SolutionDraftErrorCode.INVALID_INPUT)
     customer = escape(json.dumps(asdict(analysis), ensure_ascii=False), quote=False)
     readiness_data = escape(json.dumps(asdict(readiness), ensure_ascii=False), quote=False)
-    admitted_claims = escape(
-        json.dumps([asdict(item) for item in admission.claims.claims], ensure_ascii=False),
-        quote=False,
-    )
+    # Project for generation only: negative facts keep their original admission
+    # and durable provenance, but are not offered as positive capability citations.
+    # Source membership alone is insufficient: one chunk may support one subject
+    # while explicitly denying another.
+    # Classify the existing dimensions only. Do not infer confirmed subfacts
+    # from an unclear value or mutate the saved analysis/admission authority.
+    design_scope = {"confirmed_fields": [], "conditional_fields": {}}
+    for dimension in RequirementDimension:
+        requirement = getattr(analysis.requirements, dimension.value)
+        if requirement.status is RequirementStatus.KNOWN:
+            design_scope["confirmed_fields"].append(dimension.value)
+        else:
+            design_scope["conditional_fields"][dimension.value] = requirement.status.value
+    design_scope_json = escape(json.dumps(design_scope, ensure_ascii=False), quote=False)
+    supported_subjects = {
+        item.subject_key for item in admission.enterprise_decisions
+        if item.status == EnterpriseGroundingFactStatus.CONFIRMED_SUPPORTED
+    }
+    supported_claims = {
+        item.claim for item in admission.enterprise_provenance
+        if item.subject_key in supported_subjects
+    }
+    usable, boundaries = [], []
+    for item in admission.claims.claims:
+        projected = asdict(item)
+        if (
+            item.statement_type == SolutionStatementType.UNRESOLVED
+            or (item.statement_type == SolutionStatementType.ENTERPRISE_FACT
+                and item not in supported_claims)
+        ):
+            projected.pop("citations")
+            boundaries.append(projected)
+        else:
+            usable.append(projected)
+    admitted_claims = escape(json.dumps(usable, ensure_ascii=False), quote=False)
+    boundary_claims = escape(json.dumps(boundaries, ensure_ascii=False), quote=False)
     allowed = frozenset(admission.allowed_proposal_source_labels)
     evidence = "\n\n".join(
         format_source(source, source_id=source.label)
@@ -482,8 +517,19 @@ def _solution_v2_input_context(
     )
     return (
         f"<customer_requirements>\n{customer}\n</customer_requirements>\n"
+        f"<requirement_design_scope>\n{design_scope_json}\n</requirement_design_scope>\n"
         f"<solution_readiness>\n{readiness_data}\n</solution_readiness>\n"
         f"<program_admitted_claims>\n{admitted_claims}\n</program_admitted_claims>\n"
+        f"<solution_boundaries>\n{boundary_claims}\n</solution_boundaries>\n"
+        "<generation_context_rules>\n"
+        "solution_boundaries 保留已确认不支持、冲突和待确认的方案边界；"
+        "不得忽略、改写或将其升格为支持，也不得从该块生成 proposal citation。"
+        "边界中的企业事实仍保留既有事实状态，不因未展示来源编号而变为未确认。"
+        "proposal 只引用 allowed_citation_ids 中的编号，且实际证据必须支持对应判断。"
+        "\n</generation_context_rules>\n"
+        "<allowed_citation_ids>\n"
+        f"{escape(json.dumps(admission.allowed_proposal_source_labels), quote=False)}\n"
+        "</allowed_citation_ids>\n"
         f"<allowed_enterprise_capabilities>\n{evidence}\n</allowed_enterprise_capabilities>"
     )
 
@@ -513,13 +559,18 @@ def _pass_system_prompt(contract: str, example: str) -> str:
     return prompt + contract
 
 
-def _semantic_pass_prompt(pass_name: str, runtime_budget: int) -> str:
+def _semantic_pass_prompt(
+    pass_name: str, runtime_budget: int, *, allowed_source_labels: tuple[str, ...],
+) -> str:
     """Keep proposal semantics while replacing repeated placement envelopes."""
 
-    claim = {"text": "独立应用边界便于隔离业务入口。", "citations": ["S1"],
+    validate_citation_allowlist(allowed_source_labels)
+    if not allowed_source_labels:
+        _invalid(SolutionDraftErrorCode.INSUFFICIENT_APPROVED_EVIDENCE)
+    claim = {"text": "独立应用边界便于隔离业务入口。", "citations": [allowed_source_labels[0]],
              "related_requirement_fields": ["business_goal"]}
-    def sample(text: str) -> dict:
-        return {**claim, "text": text}
+    def sample(text: str, *, related_fields: tuple[str, ...] = ("business_goal",)) -> dict:
+        return {**claim, "text": text, "related_requirement_fields": list(related_fields)}
     if pass_name == "core":
         example = {
             "ir_version": SEMANTIC_IR_VERSION, "proposed_solution": [sample("设置受控的企业应用入口。")],
@@ -542,7 +593,10 @@ def _semantic_pass_prompt(pass_name: str, runtime_budget: int) -> str:
                 "request_flows": [{"from": "application", "to": "service"}],
                 "data_flows": [{"from": "service", "to": "application"}]},
             "deployment_and_integration": {
-                "deployment": [sample("将应用入口部署在客户网络内。")],
+                "deployment": [sample(
+                    "若客户确认目标环境符合本期部署条件，则依照确认后的边界安排部署。",
+                    related_fields=("deployment_requirement",),
+                )],
                 "integration": [], "data_security": [], "environment": [],
             },
         }
@@ -621,11 +675,21 @@ def _semantic_pass_prompt(pass_name: str, runtime_budget: int) -> str:
     elif pass_name == "implementation":
         example = {
             "ir_version": SEMANTIC_IR_VERSION,
-            "phases": [{"ref": "discovery", "objective": [sample("确认集成接口边界。")],
-                        "tasks": [sample("核对目标系统接口能力。")],
-                        "deliverables": [sample("形成接口清单。")]}],
-            "milestones": [{"ref": "ready", "outcome": [sample("接口清单已确认。")],
-                            "phase_refs": ["discovery"]}], "dependencies": [],
+            "phases": [
+                {"ref": "discovery", "objective": [sample("确认本期实施边界。")],
+                 "tasks": [sample("核对已确认的实施范围。")],
+                 "deliverables": [sample("形成实施范围核对记录。")]},
+                {"ref": "implement", "objective": [sample("落实已验证的技术方案。")],
+                 "tasks": [sample("按已验证方案实施本期功能。")],
+                 "deliverables": [sample("形成实施结果记录。")],
+                 "timing": [sample("在准备阶段完成后开展实施。")]},
+                {"ref": "validate", "objective": [sample("验证本期业务链路。")],
+                 "tasks": [sample("验证约定业务场景的执行结果。")],
+                 "deliverables": [sample("形成业务场景验证记录。")]}],
+            "milestones": [{"ref": "ready", "outcome": [sample("本期业务场景完成验证。")],
+                            "phase_refs": ["validate"]}],
+            "dependencies": [{"from": "implement", "to": "discovery"},
+                             {"from": "validate", "to": "implement"}],
         }
         contract = (
             f"Pass 2 — Implementation Planning：runtime proposal 总预算最多 {runtime_budget} 条，"
@@ -651,6 +715,14 @@ def _semantic_pass_prompt(pass_name: str, runtime_budget: int) -> str:
             f"每个 milestone 的 outcome 恰好 {IMPLEMENTATION_MILESTONE_FIELD_LIMITS['outcome'][1]} 条，"
             f"timing 为 0～{IMPLEMENTATION_MILESTONE_FIELD_LIMITS['timing'][1]} 条。"
             "dependencies 的 from 阶段依赖 to 阶段；milestone.phase_refs 只引用本次 phases 的 ref。"
+            "每个 dependencies 对象恰好只有 from、to 两个必填键，值均为本次 phases 中已定义的 ref；"
+            "不要输出 reason、source、target、type 或 relation_type 等额外键。"
+            "先按业务需要选择阶段和里程碑数量，再使用 <implementation_budget_options> 中对应行的已计算额度；"
+            "shared_work_maximum 是 tasks 与全部 timing 的合计上限，phase_work_maximum 是阶段内 tasks 与 timing 的合计上限，"
+            "milestone_timing_maximum 是里程碑 timing 的上限；三项必须同时满足，并遵守每个字段的局部限制。"
+            "优先紧凑且业务完整的阶段划分，不默认填满4个阶段和2个里程碑。"
+            "timing 可省略；仅在相关需求或证据支持时填写，不为补齐示例添加日期或期限。"
+            "示例中的阶段名称和顺序仅展示格式，不能替代对实际项目的实施设计。"
             "ref 是小写结构引用，匹配 [a-z][a-z0-9_]{0,63}。"
             "<validated_technical_core> 已验证，不得重写技术选择或组件；"
             "不生成架构、部署、风险、验收或范围外内容。"
@@ -675,6 +747,13 @@ def _semantic_pass_prompt(pass_name: str, runtime_budget: int) -> str:
             "phase_acceptance 不计入 proposal 总预算，只表达关系；所有上限都不是生成目标。"
             "只生成 risks 的 condition、impact、mitigation、trigger；"
             "acceptance 的 criterion；out_of_scope。"
+            "acceptance 中每个对象恰好只有 ref、criterion 两个必填键。"
+            "criterion 是恰好包含 1 个 claim 对象的数组；每个 claim 恰好只有 "
+            "text、citations、related_requirement_fields 三个必填键。"
+            "验收正文、引用和原始需求关联必须放在 criterion[0] 内，不能提到 acceptance 对象外层；"
+            "acceptance 外层不得添加 text、citations、related_requirement_fields、phase_ref 或 phase_refs。"
+            "阶段关联只写在顶层 phase_acceptance 数组，每个关系对象恰好只有 from、to 两个必填键。"
+            "phase_acceptance 关系不能承载正文、引用或理由，不添加 criterion、citations 或 reason。"
             "acceptance[].criterion 对应最终 acceptance_criteria，按独立验收检查而非阶段成果包组织。"
             "检索相关性与 OCR 可检索性、授权访问与越权阻断、业务结果与引用来源定位，"
             "分别具有独立 PASS/FAIL 结果，应分别验收。"
@@ -713,12 +792,44 @@ def _semantic_pass_prompt(pass_name: str, runtime_budget: int) -> str:
     else:
         _invalid(SolutionDraftErrorCode.INVALID_INPUT)
     semantics = _SYSTEM_PROMPT.partition("placement 只用于")[0]
+    clarification_guidance = (
+        "<clarification_action_style> 仅指导其 targets 中真实核验动作的表达，不是输出字段或事实依据。"
+        "若阶段目标、任务或风险措施的真实用途是核验未确认前提，应明确写待执行的核验动作，"
+        "例如核验部署条件、评估服务器容量是否满足本期部署需求；不要把待核验的结果写成环境可用或容量足够。"
+        "纯核验动作不主张结果已确认；随后依赖核验结果的部署、性能或交付安排仍须体现真实确认前提。"
+        "核验完成不等于核验通过或条件满足；条件性建设应明确经核验确认部署条件满足后开展建设。"
+        "deliverables 使用计划形成的核验记录；milestones.outcome 使用完成核验并记录结果，不保证条件满足。"
+        "risk condition/impact 使用若容量不满足则部署可能受影响的假设，不写成已发生事实。"
+        "示例不批准任何能力、状态、引用或建议，实际建议仍须由允许证据支持并通过全部审核。"
+        "不得把事实断言或承诺机械改写成核验动作来规避校验，不得改变原始需求关联。"
+        "涉及部署条件、服务器容量或承载条件的规划条目，related_requirement_fields 必须包含 deployment_requirement，"
+        "不能只用 existing_environment 或 integration_requirement 代替；现有环境配置另保留真实的 existing_environment 关联。"
+        "条件性技术接入可以表达为经核验确认部署条件满足后，完成检索入口的接入；"
+        "具体技术对象和动作必须由已准入证据支持，按已验证方案等措辞不是批准事实或省略需求关联的依据。"
+        "不得将 clarification_action_style 或 targets 等指导键写进输出 JSON。"
+        if pass_name in {"implementation", "assurance"} else ""
+    )
     return (
-        semantics + "\n" + contract + "\n"
+        semantics + "\n" + contract + "\n" + clarification_guidance
+        + "设计前读取 requirement_design_scope：它只重述当前需求维度状态，不是新的事实或能力审批。"
+        "confirmed_fields 中的原始 value/evidence 可作为已确认客户背景，仍必须忠实于其实际内容。"
+        "conditional_fields 中 unknown/unclear/conflict 维度不是已确认需求；"
+        "如果建议直接依赖其中任一维度，必须在该条 claim 自身说明真实的未确认前提及确认后的安排，"
+        "例如若客户确认目标环境满足部署条件，再按确认结果安排部署；不要只在其它条目写一次免责声明。"
+        "混合已知背景和未确认容量的维度仍保持原状态，不可自行提取其中一部分并升格为 confirmed。"
+        "例如 existing_environment 已确认且 deployment_requirement 尚不明确时，"
+        "可以围绕已确认的现有环境提出建议，但不能由此断言其服务器容量足够或部署位置已经确定。"
+        "related_requirement_fields 必须保持真实直接关联，不能为了避开边界改关联、清空关联或挂到 business_goal。"
+        "不得机械给原句加若、如果、待确认来包装无依据事实、容量、性能、期限或能力；"
+        "条件性建议仍需企业证据支持并经过正式语义审核。"
         "只返回紧凑 JSON，不含 Markdown 或 JSON 之外的文字。"
         f"顶层必须使用示例中的 ir_version={SEMANTIC_IR_VERSION} 和本 pass 专用字段，不得输出旧版 proposals 列表。"
         "每条 claim 恰好只有 text、citations、related_requirement_fields。"
-        "citations 至少一项且只使用输入允许的 S1...Sn；不可编造或自动补引用。"
+        "citations 至少一项且只使用 <allowed_citation_ids> 中逐项列出的准确编号；"
+        "编号可能不连续，不得从 S1...Sn 推断、补齐或重编号，不可编造或自动补引用。"
+        "其他上下文或已准入事实中出现的 citation 编号不自动获得 proposal 引用许可。"
+        "示例使用本次合法编号只为展示格式，不证明示例技术结论；"
+        "实际 claim 仍必须由其所引用的、允许使用的企业能力证据支持。"
         "related_requirement_fields 只允许当前分析中确实存在、且直接相关的维度；"
         f"合法 RequirementDimension：{', '.join(item.value for item in RequirementDimension)}。"
         "无直接相关维度时使用 []。所有列表的最大值不是填充目标；优先简洁且不重复的原子判断。"
@@ -738,7 +849,10 @@ def build_solution_v2_core_messages(
     return [
         {
             "role": "system",
-            "content": _semantic_pass_prompt("core", MAX_CORE_PROPOSALS),
+            "content": _semantic_pass_prompt(
+                "core", MAX_CORE_PROPOSALS,
+                allowed_source_labels=admission.allowed_proposal_source_labels,
+            ),
         },
         {
             "role": "user",
@@ -747,6 +861,18 @@ def build_solution_v2_core_messages(
             ),
         },
     ]
+
+
+def _clarification_action_style_context(pass_name: str) -> str:
+    """Input-only inquiry style; neither output intent tags nor admission."""
+    from .solution_unresolved_policy import unresolved_v2_generation_guidance
+
+    guidance = unresolved_v2_generation_guidance(pass_name)
+    if guidance is None:
+        return ""
+    style = asdict(guidance)
+    payload = escape(json.dumps(style, ensure_ascii=False, separators=(",", ":")), quote=False)
+    return f"\n<clarification_action_style>{payload}</clarification_action_style>"
 
 
 def build_solution_v2_implementation_messages(
@@ -769,20 +895,26 @@ def build_solution_v2_implementation_messages(
         quote=False,
     )
     runtime_budget = implementation_runtime_proposal_budget(len(core.proposals))
+    budget_options = json.dumps(_implementation_budget_options(runtime_budget), separators=(",", ":"))
     contract = _IMPLEMENTATION_PASS_CONTRACT.replace(
         "__IMPLEMENTATION_RUNTIME_BUDGET__", str(runtime_budget)
     )
     return [
         {
             "role": "system",
-            "content": _semantic_pass_prompt("implementation", runtime_budget),
+            "content": _semantic_pass_prompt(
+                "implementation", runtime_budget,
+                allowed_source_labels=admission.allowed_proposal_source_labels,
+            ),
         },
         {
             "role": "user",
             "content": (
                 _solution_v2_input_context(analysis, readiness, sources, admission)
+                + _clarification_action_style_context("implementation")
                 + f"\n<validated_technical_core>\n{compact_core}\n"
                 "</validated_technical_core>"
+                + f"\n<implementation_budget_options>{budget_options}</implementation_budget_options>"
             ),
         },
     ]
@@ -834,12 +966,16 @@ def build_solution_v2_assurance_messages(
     return [
         {
             "role": "system",
-            "content": _semantic_pass_prompt("assurance", runtime_budget),
+            "content": _semantic_pass_prompt(
+                "assurance", runtime_budget,
+                allowed_source_labels=admission.allowed_proposal_source_labels,
+            ),
         },
         {
             "role": "user",
             "content": (
                 _solution_v2_input_context(analysis, readiness, sources, admission)
+                + _clarification_action_style_context("assurance")
                 + f"\n<validated_technical_core>\n{compact_core}\n"
                 "</validated_technical_core>"
                 + f"\n<validated_implementation_plan>\n{compact_implementation}\n"
@@ -847,6 +983,37 @@ def build_solution_v2_assurance_messages(
             ),
         },
     ]
+
+
+def _implementation_budget_options(runtime_budget: int) -> list[dict[str, int]]:
+    """Compute feasible shape allowances without changing the formal contract.
+
+    The model chooses the business plan; these program-owned numbers only
+    remove arithmetic over total, section and per-container limits.
+    """
+    options = []
+    phase_field_maximum = sum(IMPLEMENTATION_PHASE_FIELD_LIMITS[field][1]
+                              for field in ("tasks", "timing"))
+    for phases in range(1, MAX_IMPLEMENTATION_PHASES + 1):
+        phase_base = phases * (IMPLEMENTATION_PHASE_FIELD_LIMITS["objective"][0]
+                               + IMPLEMENTATION_PHASE_FIELD_LIMITS["deliverables"][0])
+        for milestones in range(MAX_IMPLEMENTATION_MILESTONES + 1):
+            milestone_base = milestones * IMPLEMENTATION_MILESTONE_FIELD_LIMITS["outcome"][0]
+            remaining = runtime_budget - phase_base - milestone_base
+            if remaining < phases * IMPLEMENTATION_PHASE_FIELD_LIMITS["tasks"][0]:
+                continue
+            phase_work = min(phases * phase_field_maximum,
+                             IMPLEMENTATION_SECTION_PROPOSAL_LIMITS["implementation_plan"] - phase_base,
+                             remaining)
+            milestone_timing = min(milestones * IMPLEMENTATION_MILESTONE_FIELD_LIMITS["timing"][1],
+                                   IMPLEMENTATION_SECTION_PROPOSAL_LIMITS["milestones"] - milestone_base)
+            options.append({
+                "phase_count": phases, "milestone_count": milestones,
+                "shared_work_maximum": min(remaining, phase_work + milestone_timing),
+                "phase_work_maximum": phase_work,
+                "milestone_timing_maximum": milestone_timing,
+            })
+    return options
 
 
 def implementation_runtime_proposal_budget(core_proposal_count: int) -> int:

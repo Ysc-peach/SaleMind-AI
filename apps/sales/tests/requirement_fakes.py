@@ -28,6 +28,13 @@ def valid_analysis_payload():
     }
 
 
+def valid_analysis_generation_payload():
+    """Explicit v2 provider fixture; the v1 snapshot fixture stays unchanged."""
+
+    snapshot = valid_analysis_payload()
+    return {name: snapshot[name] for name in ("summary", "requirements", "conflicts")}
+
+
 class AnalysisFakeLLM(DeterministicFakeLLM):
     provider_name = "analysis-test-provider"
     model_name = "analysis-test-model"
@@ -35,7 +42,7 @@ class AnalysisFakeLLM(DeterministicFakeLLM):
     def __init__(self, *, callback=None, content=None):
         super().__init__()
         self.callback = callback
-        self.content = content if content is not None else json.dumps(valid_analysis_payload(), ensure_ascii=False)
+        self.content = content if content is not None else json.dumps(valid_analysis_generation_payload(), ensure_ascii=False)
 
     def generate(self, messages, *, max_output_tokens=None):
         super().generate(messages, max_output_tokens=max_output_tokens)

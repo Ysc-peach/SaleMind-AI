@@ -13,6 +13,7 @@ from .solution_workflow_views import (
     SolutionWorkflowDetailViewSet,
 )
 from .workspace_views import ReviewerInboxAPIView, SalesWorkspaceAPIView
+from .solution_export_views import SolutionExportAPIView
 
 
 customer_create_view = CustomerViewSet.as_view({"post": "create"})
@@ -54,6 +55,7 @@ solution_workflow_resume_view = SolutionWorkflowDetailViewSet.as_view(
 
 
 urlpatterns = [
+    path('solution-drafts/<int:solution_id>/export/', SolutionExportAPIView.as_view(), name='solution-draft-export'),
     path(
         "workspaces/sales/",
         SalesWorkspaceAPIView.as_view(),

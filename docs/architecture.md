@@ -2,7 +2,7 @@
 
 ## 当前快照
 
-核心功能冻结于 `1141281c07b2f5f92d51151fc9b2f0803814ef60`。本文以该提交的源码为准，替代早期“前端待实现 / 单次 proposal generation”的架构说明；历史决策和实验结果不因此被重写。
+核心功能历史冻结于 `1141281c07b2f5f92d51151fc9b2f0803814ef60`。本文以当前源码为准，verifier 配置已更新为本地选择；历史决策和实验结果不因此被重写，也不作为新模型真实评估的证明。
 
 系统是模块化 Django 单体 + Vue 前端。目标是辅助销售与售前形成可审核的技术方案，不是让 LLM 承担企业事实批准或技术方案终审。
 
@@ -42,6 +42,8 @@ Admin 可见全部商机；Sales 只见自己拥有的商机；Presales 只见�
 
 需求分析基于 Customer / Opportunity 的冻结输入快照，输出十个固定维度：业务目标、使用场景、人数、部署、安全、环境、集成、时间、预算、技术约束。每个维度为 `known / unknown / unclear / conflict`。
 
+需求分析生成合同 `v2` 将追问从模型职责中分离：模型仅输出摘要、十维事实分析和冲突，后端在事实通过校验后，按固定模板为尚未明确的维度生成最多八条追问，并按原快照合同再次校验。已明确维度不会生成追问；新记录标为 `v2`，历史 `v1` 快照不被重写。最终 API / 数据库存储结构不变，也不新增模型调用。
+
 `OpportunityRequirementAnalysis` 为 append-only 历史记录。方案请求必须选择一个明确的已保存 analysis，不能偷偷替换成最新版本。readiness 确定是否可生成、有缺口但可继续，或应交回 Sales/Presales；缺信息不等于允许模型补事实。
 
 入口：[requirement_analysis.py](../apps/sales/services/requirement_analysis.py)、[requirement_analysis_history.py](../apps/sales/services/requirement_analysis_history.py)、[solution_readiness.py](../apps/sales/services/solution_readiness.py)。
@@ -63,6 +65,12 @@ Admin 可见全部商机；Sales 只见自己拥有的商机；Presales 只见�
 入口：[indexing.py](../apps/knowledge/services/indexing.py)、[search.py](../apps/knowledge/services/search.py)、[solution_retrieval.py](../apps/sales/services/solution_retrieval.py)。
 
 ## 4. Grounding Facts / 事实准入
+
+后台真实文档入口扩展：`/admin/` 文档只读列表、专用上传/重建/抽取确认操作与既有事实审批衔接。
+`GroundingFactExtractionAttempt` 对冻结 index-run 记录执行，文档行锁和条件唯一约束防重；
+候选事实与成功状态同事务提交，取消后的 token 不再可写入。外部调用不放入长事务。
+此源码扩展新增知识域 migration0004，业务库应用与真实 provider 验收仍需单独确认。
+操作与限制见 [Admin 资料流程](admin-knowledge-workflow.md)。
 
 ```text
 LLM extraction → EnterpriseGroundingFact PROPOSED
@@ -95,19 +103,19 @@ Core ceiling 来自局部上限：`5 + 2 + 4×(1+2+1+2) + (4+3+2+2) + 2×2 = 46`
 
 LLM claim 只写 `text / citations / related_requirement_fields`，以及明确的局部 ref 与关系方向。converter 负责 placement、field、kind、relation enum、稳定映射和排序；不造 citation、需求关联、理由或 flow。不合格 IR 不截断、不合并、不修半截 JSON。
 
-每段 strict contract 拒绝最多触发一次重新生成（最多两次 attempt）；provider error、deterministic guard、Qwen veto 和 persistence failure 不触发这一机制。两个 attempt 都不合法则整份失败，无部分方案持久化。
+每段 strict contract 拒绝最多触发一次重新生成（最多两次 attempt）；provider error、deterministic guard、verifier veto 和 persistence failure 不触发这一机制。两个 attempt 都不合法则整份失败，无部分方案持久化。
 
 合同真源：[solution_generation_contract.py](../apps/sales/services/solution_generation_contract.py)。链路：[solution_prompt_v2.py](../apps/sales/services/solution_prompt_v2.py)、[solution_semantic_ir_v2.py](../apps/sales/services/solution_semantic_ir_v2.py)、[solution_draft.py](../apps/sales/services/solution_draft.py)。
 
-## 6. Deterministic Guards / Qwen Verifier
+## 6. Deterministic Guards / Semantic Verifier
 
-结构解析及 merge 先检查字段、citation allowlist、需求维度、数量、关系端点、组件完整性和 phase dependency cycle。Qwen 前再检查引用/需求上下文、unresolved 被断言成 confirmed，以及缺乏依据的 precision 等规则。不能把全部安全判断都描述成正则 guard：自然语义相关性、矛盾和 atomicity 还由独立 proposal admissibility 审查。
+结构解析及 merge 先检查字段、citation allowlist、需求维度、数量、关系端点、组件完整性和 phase dependency cycle。语义 verifier 前再检查引用/需求上下文、unresolved 被断言成 confirmed，以及缺乏依据的 precision 等规则。不能把全部安全判断都描述成正则 guard：自然语义相关性、矛盾和 atomicity 还由独立 proposal admissibility 审查。
 
-当前独立 verifier 为 Qwen `qwen3.8-flash`，DashScope compatible-mode；正式 wrapper 显式关闭 thinking。single claim/request，timeout 60s、SDK retries 0、每份方案 concurrency 2。调度只维持有限 in-flight 请求；已观察到 veto 后停止补充任务，已经开始的请求可能仍需完成。它不是跨进程全局限流器。
+当前本地独立 verifier 配置为 DeepSeek `deepseek-flash`；正式 DeepSeek wrapper 显式发送 `thinking.type=disabled`。single claim/request，timeout 60s、SDK retries 0、每份方案 concurrency 2。调度只维持有限 in-flight 请求；已观察到 veto 后停止补充任务，已经开始的请求可能仍需完成。它不是跨进程全局限流器。历史 Qwen benchmark 保留当时的模型记录，不作为本次模型更换后的通过证明。
 
 V2 decision 为 `ADMISSIBLE / INADMISSIBLE`，atomicity 为 `ATOMIC / COMPOUND`。通常需 `ADMISSIBLE + ATOMIC`；组件 identity 仍需 admissibility，但不以 COMPOUND 单独 hard veto。task、deliverable、mitigation 的 ATOMIC 分别按统一工作包、统一阶段成果包、同一风险缓解策略判断；这不是允许这些字段跳过 atomicity。
 
-phase objective 或 risk condition/impact 是理解建议的上下文，不会变成已确认事实。Qwen 只能否决，不能扩大可用事实集或授予 review APPROVED。
+phase objective 或 risk condition/impact 是理解建议的上下文，不会变成已确认事实。verifier 只能否决，不能扩大可用事实集或授予 review APPROVED。
 
 事实准入在外部调用之后再次构建，持久化事务中再次验证，防止模型调用期间的重建索引/审批变更导致陈旧方案返回或保存。
 
@@ -125,7 +133,7 @@ Vue 详情页区分推荐/理由/取舍、职责/交互/依赖、实施任务/�
 
 ## 8. Persistence / Provenance
 
-外部模型调用不在长数据库事务内。所有 pass、global structure、guards、Qwen 和 V2 validation 均通过后，短事务锁定 Opportunity、再次校验来源、分配版本、一起写入 `SolutionDraftRecord` 与 `SolutionDraftProvenance`。失败不保存部分 Solution 或孤立 provenance。
+外部模型调用不在长数据库事务内。所有 pass、global structure、guards、verifier 和 V2 validation 均通过后，短事务锁定 Opportunity、再次校验来源、分配版本、一起写入 `SolutionDraftRecord` 与 `SolutionDraftProvenance`。失败不保存部分 Solution 或孤立 provenance。
 
 持久化 provenance 包含 Fact、文档、citation/claim 对应路径、chunk-id/index-run/hash/excerpt 快照，不依赖可被重新索引删除的 chunk 外键。多个 citation/fact binding 可对应同一 claim，所以 provenance 行数不是独立事实数量。
 
@@ -147,6 +155,8 @@ review 为版本级审计记录。作者不能自审；技术 superuser 不绕�
 
 LangGraph 编排 generate/persist、submit、human interrupt、resume。官方 PostgresSaver 保留稳定 ID 与路由状态，不存整份文档、provider response、凭据或方案语义。重放使用既有服务校验业务状态；checkpoint 不能覆盖已提交决策。退回后当前是 terminal/handoff，不自动生成新版。
 
+销售提交时缺少或失效的审核人属于可补齐问题：返回明确拒绝原因，保留人工提交等待点，不自动重试或生成方案。历史 `solution_review_submit_blocked` 终止记录仅在工作流、商机、分析和版本匹配且当前正式提交校验通过后开放恢复入口；GET 只读，明确的人工 POST 才追加恢复步骤并通过事务内校验创建审核。原始失败 checkpoint、方案 payload 和审核历史不改写。已知权限拒绝、自审、过期、生成失败及已完成审核不会通过此恢复入口重置。
+
 入口：[solution_review.py](../apps/sales/services/solution_review.py)、[solution_review_workflow.py](../apps/sales/services/solution_review_workflow.py)、[solution_workflow_checkpoint.py](../apps/sales/services/solution_workflow_checkpoint.py)。
 
 ## 验证与范围
@@ -154,3 +164,7 @@ LangGraph 编排 generate/persist、submit、human interrupt、resume。官方 P
 离线自动化验证工程和安全合同，真实 benchmark 验证一次真实链路，人工售前审核决定业务使用。三者不能互相替代。当前不是高并发生产部署，也未证明跨场景 SLA。
 
 进一步阅读：[AI pipeline](ai-pipeline.md)、[真实 benchmark](real-provider-benchmark-summary.md)、[Known Limitations](known-limitations.md)、[配置说明](local-configuration.md)。
+
+## 已审核方案导出
+
+独立只读 API 使用 `solution_export_guard` 建立冻结版本快照，`solution_export_document` 适配 V1/V2，Word/PDF renderer 共用投影，在内存完成文件后再次核验 actor、版本、需求、批准记录及来源指纹。不经过 LangGraph，不调用生成/verifier，不新建业务记录。导出不使用会保存 stale 元数据的刷新函数。详见 [导出合同](solution-export.md)。

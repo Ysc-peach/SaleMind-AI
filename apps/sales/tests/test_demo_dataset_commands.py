@@ -107,6 +107,37 @@ def _seed(monkeypatch, demo_settings, password="Demo-only-Strong-Password-41!"):
     call_command("seed_demo", verbosity=0)
 
 
+def test_demo_analysis_reuses_v1_snapshot_without_rewriting_questions(make_user):
+    from apps.sales.demo_fixtures import DEMO_SCENARIOS, DemoRequirementAnalysisProvider
+    from apps.sales.services.demo_dataset import (
+        _ensure_analysis, _ensure_customer, _ensure_opportunity,
+    )
+    from apps.sales.services.requirement_analysis_history import analysis_record_to_domain
+
+    scenario = DEMO_SCENARIOS[0]
+    sales = make_user(UserRole.SALES)
+    presales = make_user(UserRole.PRESALES)
+    customer = _ensure_customer(scenario, sales)
+    opportunity = _ensure_opportunity(scenario, customer, sales, presales)
+    provider = DemoRequirementAnalysisProvider(scenario)
+    payload = provider.legacy_snapshot_payload()
+    record = OpportunityRequirementAnalysis.objects.create(
+        opportunity=opportunity, created_by=sales, **payload,
+        source_raw_requirement=opportunity.raw_requirement, source_context={},
+        analysis_version="v1", llm_provider=provider.provider_name,
+        llm_model=provider.model_name,
+    )
+    assert _ensure_analysis(scenario, opportunity, sales).pk == record.pk
+    assert _ensure_analysis(scenario, opportunity, sales).pk == record.pk
+    record.refresh_from_db()
+    assert record.analysis_version == "v1"
+    assert record.clarifying_questions == payload["clarifying_questions"]
+    assert analysis_record_to_domain(record).clarifying_questions[0].question == (
+        "客户期望何时完成首批业务上线？"
+    )
+    assert OpportunityRequirementAnalysis.objects.filter(opportunity=opportunity).count() == 1
+
+
 def _workflow_id(scenario_key: str):
     return uuid5(DEMO_NAMESPACE, f"{scenario_key}:solution:v1")
 

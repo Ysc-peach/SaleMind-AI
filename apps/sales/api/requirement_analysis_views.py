@@ -1,12 +1,18 @@
 """HTTP adaptation of existing analysis services under Opportunity visibility."""
 
+import logging
+from dataclasses import asdict
+
 from rest_framework import viewsets
 from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.parsers import JSONParser
 from rest_framework.response import Response
 
-from apps.llm.exceptions import LLMErrorCode, LLMProviderError
-from apps.sales.services.requirement_analysis import RequirementAnalysisError, RequirementAnalysisErrorCode
+from config.throttling import ScopedActionThrottleMixin
+from apps.llm.exceptions import LLMErrorCode, LLMProviderError, LLMProviderFailureKind
+from apps.sales.services.requirement_analysis import (
+    RequirementAnalysisContractFailure, RequirementAnalysisError, RequirementAnalysisErrorCode,
+)
 from apps.sales.services import requirement_analysis_history as history
 
 from .opportunity_access import OpportunityVisibilityMixin
@@ -19,8 +25,14 @@ from .requirement_analysis_serializers import (
     RequirementAnalysisListSerializer,
 )
 
+logger = logging.getLogger(__name__)
 
-class RequirementAnalysisViewSet(OpportunityVisibilityMixin, viewsets.GenericViewSet):
+
+class RequirementAnalysisViewSet(
+    ScopedActionThrottleMixin,
+    OpportunityVisibilityMixin,
+    viewsets.GenericViewSet,
+):
     """Derived analysis actions use Opportunity read access, not mutation access.
 
     Action names deliberately differ from Opportunity create/partial_update;
@@ -31,6 +43,7 @@ class RequirementAnalysisViewSet(OpportunityVisibilityMixin, viewsets.GenericVie
     permission_classes = (OpportunityPermission,)
     parser_classes = (JSONParser,)
     http_method_names = ["get", "post", "head", "options"]
+    scoped_throttle_actions = {"analyze": "requirement_analysis"}
     lookup_url_kwarg = "opportunity_id"
     serializer_class = RequirementAnalysisDetailSerializer
     pagination_class = DefaultPageNumberPagination
@@ -74,6 +87,41 @@ class RequirementAnalysisViewSet(OpportunityVisibilityMixin, viewsets.GenericVie
         return Response(self.get_serializer(record).data)
 
     def handle_exception(self, exc):
+        if isinstance(exc, (RequirementAnalysisError, LLMProviderError)):
+            # Fixed categories only: never stringify exceptions or their causes,
+            # log tracebacks, or include customer text/provider response bodies.
+            if isinstance(exc, RequirementAnalysisError):
+                category = (
+                    "invalid_analysis_input"
+                    if exc.code == RequirementAnalysisErrorCode.INVALID_INPUT
+                    else "invalid_analysis_response"
+                )
+                provider_status = None
+            else:
+                category = (
+                    exc.failure_kind.value
+                    if isinstance(exc.failure_kind, LLMProviderFailureKind)
+                    else "unknown_provider_error"
+                )
+                provider_status = exc.http_status
+            diagnostic = {
+                "stage": "requirement_analysis", "code": exc.code,
+                "category": category, "http_status": provider_status,
+            }
+            logger.warning(
+                "Requirement analysis failed: stage=%s code=%s category=%s provider_http_status=%s",
+                diagnostic["stage"], diagnostic["code"], category, provider_status,
+                extra={"analysis_failure": diagnostic},
+            )
+            if isinstance(exc, RequirementAnalysisError) and isinstance(
+                exc.contract_failure, RequirementAnalysisContractFailure,
+            ):
+                contract = asdict(exc.contract_failure)
+                logger.warning(
+                    "Requirement analysis contract rejected: category=%s path=%s expected=%s actual=%s",
+                    contract["category"], contract["json_path"], contract["expected"], contract["actual"],
+                    extra={"analysis_contract_failure": contract},
+                )
         if isinstance(exc, RequirementAnalysisError):
             error_status = 400 if exc.code == RequirementAnalysisErrorCode.INVALID_INPUT else 502
             exc = RequirementAnalysisAPIError(exc.code, exc.safe_message, status_code=error_status)

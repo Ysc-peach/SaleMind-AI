@@ -1,7 +1,10 @@
 """Persistence models for the enterprise knowledge base."""
 
+from uuid import uuid4
+
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from pgvector.django import VectorField
 
@@ -300,3 +303,61 @@ class EnterpriseGroundingFact(models.Model):
 
     def __str__(self) -> str:
         return f"{self.subject_key}: {self.statement}"
+
+
+class GroundingFactExtractionStatus(models.TextChoices):
+    RUNNING = 'running', _('抽取中')
+    SUCCEEDED = 'succeeded', _('抽取成功')
+    FAILED = 'failed', _('抽取失败')
+    CANCELLED = 'cancelled', _('已取消')
+
+
+class GroundingFactExtractionAttempt(models.Model):
+    """One auditable, fenced attempt against a frozen document index."""
+
+    document = models.ForeignKey(KnowledgeDocument, on_delete=models.PROTECT,
+                                 related_name='fact_extraction_attempts')
+    requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                     related_name='fact_extraction_attempts')
+    index_run_id = models.UUIDField()
+    token = models.UUIDField(default=uuid4, unique=True, editable=False)
+    status = models.CharField(max_length=16, choices=GroundingFactExtractionStatus.choices,
+                              default=GroundingFactExtractionStatus.RUNNING)
+    started_at = models.DateTimeField(default=timezone.now)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    error_code = models.CharField(max_length=64, blank=True, default='')
+    proposed_count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['document', 'index_run_id'],
+                condition=models.Q(status__in=['running', 'succeeded']),
+                name='knowledge_extract_active_run_unique',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(status__in=GroundingFactExtractionStatus.values),
+                name='knowledge_extract_status_valid',
+            ),
+            models.CheckConstraint(condition=models.Q(proposed_count__gte=0),
+                                   name='knowledge_extract_count_nonnegative'),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(status='running', finished_at__isnull=True,
+                             error_code='', proposed_count=0)
+                    | models.Q(status='succeeded', finished_at__isnull=False, error_code='')
+                    | (models.Q(status__in=['failed', 'cancelled'], finished_at__isnull=False,
+                                proposed_count=0) & ~models.Q(error_code=''))
+                ),
+                name='knowledge_extract_outcome_consistent',
+            ),
+            models.CheckConstraint(
+                condition=(models.Q(finished_at__isnull=True)
+                           | models.Q(finished_at__gte=models.F('started_at'))),
+                name='knowledge_extract_time_ordered',
+            ),
+        ]
+        indexes = [models.Index(fields=['document', 'index_run_id', 'id'],
+                                name='knowledge_extract_history_idx')]
+        verbose_name = _('事实抽取记录')
+        verbose_name_plural = _('事实抽取记录')

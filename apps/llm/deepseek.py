@@ -12,9 +12,14 @@ from apps.llm.base import (
     LLMProviderConfig,
 )
 from apps.llm.exceptions import LLMErrorCode, LLMProviderError
+from apps.llm.openai_compatible import _safe_provider_error
 
 
 _ALLOWED_ROLES = frozenset({"system", "user", "assistant"})
+_SAFE_FINISH_REASONS = frozenset({
+    "stop", "length", "content_filter", "tool_calls", "function_call",
+    "insufficient_system_resource", "aborted",
+})
 
 
 class DeepSeekLLMProvider(LLMProvider):
@@ -81,8 +86,10 @@ class DeepSeekLLMProvider(LLMProvider):
             request["response_format"] = {"type": "json_object"}
         try:
             response = self._client.chat.completions.create(**request)
-        except OpenAIError:
-            raise LLMProviderError(LLMErrorCode.LLM_PROVIDER_ERROR) from None
+        except OpenAIError as error:
+            # Preserve only existing secret-safe metadata; public error, request
+            # semantics, SDK retries and fail-closed behavior stay unchanged.
+            raise _safe_provider_error(error) from None
 
         try:
             choices = list(response.choices)
@@ -91,7 +98,16 @@ class DeepSeekLLMProvider(LLMProvider):
             self._raise_invalid_response()
         if not isinstance(content, str) or not content.strip():
             self._raise_invalid_response()
-        return LLMGeneration(content=content.strip())
+        finish_reason = getattr(choices[0], "finish_reason", None)
+        if not isinstance(finish_reason, str) or finish_reason not in _SAFE_FINISH_REASONS:
+            finish_reason = None
+        usage = getattr(response, "usage", None)
+        return LLMGeneration(
+            content=content.strip(),
+            finish_reason=finish_reason,
+            prompt_tokens=_safe_token_count(getattr(usage, "prompt_tokens", None)),
+            completion_tokens=_safe_token_count(getattr(usage, "completion_tokens", None)),
+        )
 
     def _validate_messages(
         self,
@@ -121,3 +137,8 @@ class DeepSeekLLMProvider(LLMProvider):
 
     def _raise_invalid_response(self) -> NoReturn:
         raise LLMProviderError(LLMErrorCode.LLM_INVALID_RESPONSE)
+
+
+def _safe_token_count(value: object) -> int | None:
+    """Optional usage metadata must never carry response text or booleans."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None

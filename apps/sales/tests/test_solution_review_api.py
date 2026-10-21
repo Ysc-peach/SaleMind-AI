@@ -366,3 +366,121 @@ def test_stale_solution_cannot_be_submitted(review_api_context):
     assert response.status_code == 409
     assert response.json()["code"] == "solution_review_stale"
     assert not SolutionReview.objects.filter(solution_draft=solution).exists()
+
+
+def test_refused_submission_persists_staleness_without_creating_review(review_api_context):
+    context = review_api_context
+    solution = context["make_solution"]()
+    context["make_analysis"]()
+
+    response = client_for(context["sales"]).post(
+        action_url("solution-draft-submit", solution), {}, format="json"
+    )
+
+    solution.refresh_from_db()
+    assert response.status_code == 409
+    assert solution.is_stale is True
+    assert solution.stale_at is not None
+    assert solution.stale_reasons == ["newer_requirement_analysis"]
+    assert solution.review_status == SolutionReviewStatus.DRAFT
+    assert not solution.reviews.exists()
+
+
+def test_refused_approval_persists_staleness_without_deciding_review(review_api_context):
+    context = review_api_context
+    solution = context["make_solution"]()
+    submitted = client_for(context["sales"]).post(
+        action_url("solution-draft-submit", solution), {}, format="json"
+    )
+    assert submitted.status_code == 201
+    context["make_analysis"]()
+
+    response = client_for(context["presales"]).post(
+        action_url("solution-draft-approve", solution), {}, format="json"
+    )
+
+    solution.refresh_from_db()
+    assert response.status_code == 409
+    assert solution.is_stale is True
+    assert solution.stale_at is not None
+    assert solution.stale_reasons == ["newer_requirement_analysis"]
+    assert solution.review_status == SolutionReviewStatus.PENDING_REVIEW
+    review = solution.reviews.get()
+    assert review.status == SolutionReviewDecisionStatus.PENDING
+    assert review.decided_at is None
+
+
+@pytest.mark.parametrize("endpoint", ["list", "detail"])
+def test_solution_get_projects_staleness_without_writing_database(review_api_context, endpoint):
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    context = review_api_context
+    solution = context["make_solution"]()
+    context["make_analysis"]()
+    url = (
+        reverse("solution-draft-list", kwargs={"opportunity_id": solution.opportunity_id})
+        if endpoint == "list" else action_url("solution-draft-detail", solution)
+    )
+
+    with CaptureQueriesContext(connection) as captured:
+        response = client_for(context["sales"]).get(url)
+
+    assert response.status_code == 200
+    body = response.json()["results"][0] if endpoint == "list" else response.json()
+    assert body["is_stale"] is True
+    assert body["stale_reasons"] == ["newer_requirement_analysis"]
+    assert not any(query["sql"].lstrip().upper().startswith(("UPDATE", "INSERT", "DELETE"))
+                   for query in captured.captured_queries)
+    solution.refresh_from_db()
+    assert solution.is_stale is False
+    assert solution.stale_at is None
+    assert solution.stale_reasons == []
+
+
+def test_refresh_with_old_instance_cannot_erase_persisted_staleness(review_api_context):
+    from django.utils import timezone
+    from apps.sales.services.solution_persistence import refresh_solution_draft_staleness
+
+    context = review_api_context
+    solution = context["make_solution"]()
+    first_stale_at = timezone.now()
+    SolutionDraftRecord.objects.filter(pk=solution.pk).update(
+        is_stale=True, stale_at=first_stale_at, stale_reasons=["grounding_fact_invalid"],
+    )
+
+    refresh_solution_draft_staleness(solution)
+
+    solution.refresh_from_db()
+    assert solution.is_stale is True
+    assert solution.stale_at == first_stale_at
+    assert solution.stale_reasons == ["grounding_fact_invalid"]
+
+
+def test_solution_list_evaluates_staleness_only_for_the_requested_page(review_api_context, monkeypatch):
+    from apps.sales.services import solution_persistence
+
+    context = review_api_context
+    oldest = context["make_solution"]()
+    for _ in range(20):
+        context["make_solution"]()
+    evaluated_ids = []
+    evaluate = solution_persistence.evaluate_solution_draft_stale_reasons
+
+    def record_evaluation(record):
+        evaluated_ids.append(record.pk)
+        return evaluate(record)
+
+    monkeypatch.setattr(solution_persistence, "evaluate_solution_draft_stale_reasons", record_evaluation)
+    response = client_for(context["sales"]).get(
+        reverse("solution-draft-list", kwargs={"opportunity_id": oldest.opportunity_id}),
+        {"page": 2},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["count"] == 21
+    assert [item["id"] for item in response.json()["results"]] == [oldest.pk]
+    assert response.json()["results"][0]["is_stale"] is True
+    assert evaluated_ids == [oldest.pk]
+    oldest.refresh_from_db()
+    assert oldest.is_stale is False

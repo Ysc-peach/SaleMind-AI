@@ -28,11 +28,13 @@ from apps.sales.services.solution_review_workflow import (
     SolutionWorkflowOutcome,
     SolutionWorkflowStage,
     build_solution_review_graph,
+    can_recover_terminal_review_submission,
 )
 from apps.sales.services.solution_workflow_checkpoint import (
     open_solution_workflow_checkpointer,
 )
 
+from config.throttling import ScopedActionThrottleMixin
 from .opportunity_access import visible_opportunities_for, visible_solution_drafts_for
 from .permissions import SolutionDraftPermission
 from .solution_workflow_serializers import (
@@ -77,10 +79,14 @@ class SolutionWorkflowFailed(APIException):
         )
 
 
-class SolutionWorkflowCollectionViewSet(viewsets.GenericViewSet):
+class SolutionWorkflowCollectionViewSet(
+    ScopedActionThrottleMixin,
+    viewsets.GenericViewSet,
+):
     permission_classes = (SolutionDraftPermission,)
     parser_classes = (JSONParser,)
     http_method_names = ["post", "head", "options"]
+    scoped_throttle_actions = {"start": "solution_generation"}
 
     def start(self, request, *args, **kwargs):
         serializer = SolutionWorkflowStartSerializer(data=request.data)
@@ -135,10 +141,14 @@ class SolutionWorkflowCollectionViewSet(viewsets.GenericViewSet):
         return Response(projection, status=status.HTTP_201_CREATED)
 
 
-class SolutionWorkflowDetailViewSet(viewsets.GenericViewSet):
+class SolutionWorkflowDetailViewSet(
+    ScopedActionThrottleMixin,
+    viewsets.GenericViewSet,
+):
     permission_classes = (SolutionDraftPermission,)
     parser_classes = (JSONParser,)
     http_method_names = ["get", "post", "head", "options"]
+    scoped_throttle_actions = {"resume": "solution_generation"}
 
     def retrieve_workflow(self, request, *args, **kwargs):
         workflow_id = kwargs["workflow_id"]
@@ -191,7 +201,25 @@ class SolutionWorkflowDetailViewSet(viewsets.GenericViewSet):
             if action == "REQUEST_REVISION":
                 resume["return_reason"] = serializer.validated_data["return_reason"]
                 resume["comment"] = serializer.validated_data["comment"]
-            result = graph.invoke(Command(resume=resume), config)
+            state = dict(graph.get_state(config).values)
+            draft = SolutionDraftRecord.objects.filter(pk=current["solution_draft_id"]).first()
+            if (
+                action == "SUBMIT_FOR_REVIEW" and draft is not None
+                and can_recover_terminal_review_submission(
+                    state, draft, request.user, workflow_id=workflow_id,
+                )
+            ):
+                # Append an explicit human submit to the existing thread. Never
+                # restart generation, delete the failed checkpoint or fake review.
+                resumed_config = graph.update_state(config, {
+                    "actor_id": request.user.pk, "human_action": "submit_for_review",
+                    "workflow_stage": SolutionWorkflowStage.WAITING_FOR_SALES_CONFIRMATION.value,
+                    "workflow_outcome": SolutionWorkflowOutcome.WAITING_FOR_SALES_CONFIRMATION.value,
+                    "error_code": "", "submission_error_code": "",
+                }, as_node="wait_for_sales_confirmation")
+                result = graph.invoke(None, resumed_config)
+            else:
+                result = graph.invoke(Command(resume=resume), config)
             _raise_failed_outcome(result)
             projection = _project_workflow(
                 graph,
@@ -237,10 +265,10 @@ def _project_workflow(graph, config, workflow_id: UUID, actor) -> dict:
         opportunity_id = state.get("opportunity_id")
         if not visible_opportunities_for(actor).filter(pk=opportunity_id).exists():
             raise NotFound()
-    return _business_projection(workflow_id, state, draft)
+    return _business_projection(workflow_id, state, draft, actor=actor)
 
 
-def _business_projection(workflow_id: UUID, state: dict, draft) -> dict:
+def _business_projection(workflow_id: UUID, state: dict, draft, *, actor=None) -> dict:
     review = None
     if draft is not None:
         review = draft.reviews.order_by("-submitted_at", "-id").first()
@@ -273,8 +301,14 @@ def _business_projection(workflow_id: UUID, state: dict, draft) -> dict:
                 SolutionWorkflowOutcome.FAILED.value,
             }
         ):
-            public_status = terminal_outcome.upper()
-            allowed_actions = []
+            if actor is not None and can_recover_terminal_review_submission(
+                state, draft, actor, workflow_id=workflow_id,
+            ):
+                public_status = "WAITING_FOR_SALES_CONFIRMATION"
+                allowed_actions = ["SUBMIT_FOR_REVIEW"]
+            else:
+                public_status = terminal_outcome.upper()
+                allowed_actions = []
         else:
             public_status = "WAITING_FOR_SALES_CONFIRMATION"
             allowed_actions = ["SUBMIT_FOR_REVIEW"]

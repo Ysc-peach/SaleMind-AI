@@ -21,6 +21,7 @@ from apps.knowledge.models import (
 )
 from apps.llm.base import LLMProvider
 from apps.llm.factory import get_llm_provider
+from . import grounding_fact_attempts as attempts
 
 
 # Phase 5.5h deliberately uses a controlled registry. Probabilistic subject
@@ -105,6 +106,7 @@ def extract_grounding_facts(
     document_id: int,
     *,
     llm_provider: LLMProvider | None = None,
+    managed_attempt: attempts.ExtractionBinding | None = None,
 ) -> tuple[EnterpriseGroundingFact, ...]:
     """Extract once outside a transaction, then persist PROPOSED facts atomically."""
 
@@ -117,6 +119,11 @@ def extract_grounding_facts(
             GroundingFactExtractionErrorCode.INVALID_INPUT
         )
 
+    if managed_attempt is not None:
+        attempts.require_no_outer_transaction()
+        with transaction.atomic():
+            managed_document = KnowledgeDocument.objects.select_for_update().get(pk=document_id)
+            attempts.require_binding_locked(managed_document, managed_attempt)
     document = _load_ready_document(document_id)
     run_id = document.last_index_run_id
     snapshots = _load_chunk_snapshots(document)
@@ -128,6 +135,10 @@ def extract_grounding_facts(
 
     with transaction.atomic():
         current = KnowledgeDocument.objects.select_for_update().get(pk=document_id)
+        active_attempt = (
+            attempts.require_binding_locked(current, managed_attempt)
+            if managed_attempt is not None else None
+        )
         if (
             current.status != KnowledgeDocumentStatus.READY
             or current.last_index_run_id != run_id
@@ -160,6 +171,8 @@ def extract_grounding_facts(
                 for proposal in proposals
             ]
         )
+        if active_attempt is not None:
+            attempts.mark_succeeded_locked(active_attempt, proposed_count=len(facts))
     return tuple(facts)
 
 

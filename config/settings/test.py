@@ -22,6 +22,18 @@ VERIFIER_API_KEY = ""
 VERIFIER_BASE_URL = ""
 LANGGRAPH_CHECKPOINT_DATABASE_URL = ""
 
+# Throttle counters live in the process cache and would accumulate across the
+# suite. The throttle tests override these rates with override_settings().
+REST_FRAMEWORK = {
+    **REST_FRAMEWORK,
+    # Behave like a single trusted reverse proxy so anonymous identity tests
+    # exercise the real deployment semantics.
+    "NUM_PROXIES": 1,
+    "DEFAULT_THROTTLE_RATES": {
+        scope: "100000/hour" for scope in REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]
+    },
+}
+
 DATABASES["default"].setdefault("TEST", {})["TEMPLATE"] = env(
     "TEST_DATABASE_TEMPLATE",
     default="salesmind_test_template",

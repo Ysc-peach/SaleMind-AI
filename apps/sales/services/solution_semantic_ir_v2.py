@@ -12,8 +12,9 @@ from apps.sales.services.solution_generation_contract import (
     CORE_CAPABILITY_GROUP_LIMIT, CORE_COMPONENT_FIELD_LIMITS,
     CORE_DEPLOYMENT_TOPIC_LIMITS, CORE_PROPOSED_SOLUTION_LIMIT, EDGE_KEYS,
     IMPLEMENTATION_MILESTONE_FIELD_LIMITS, IMPLEMENTATION_PHASE_FIELD_LIMITS,
-    LOCAL_REF, MAX_ARCHITECTURE_COMPONENTS, MAX_ASSURANCE_ACCEPTANCE,
-    MAX_ASSURANCE_OUT_OF_SCOPE, MAX_ASSURANCE_PHASE_ACCEPTANCE, MAX_ASSURANCE_RISKS,
+    LOCAL_REF, MANAGED_LINKAGE_PLACEMENTS, MAX_ARCHITECTURE_COMPONENTS,
+    MAX_ASSURANCE_ACCEPTANCE, MAX_ASSURANCE_OUT_OF_SCOPE,
+    MAX_ASSURANCE_PHASE_ACCEPTANCE, MAX_ASSURANCE_RISKS,
     MAX_IMPLEMENTATION_MILESTONES, MAX_IMPLEMENTATION_PHASES,
     MAX_IMPLEMENTATION_PROPOSALS, PASS_ROOT_KEYS, SEMANTIC_IR_VERSION,
     closed_object, reject_contract, validate_claim_fields, validate_citation_allowlist,
@@ -120,6 +121,17 @@ def _convert(content, *, pass_name, allowed_source_labels, max_proposals, extern
     def add(section, kind, key, field, value, *, path):
         # Same formal claim validator as the Atomic IR parser, not a mirror.
         validate_claim_fields(value, allowed_source_labels=allowed_source_labels, path=path)
+        if ((section, kind, field) in MANAGED_LINKAGE_PLACEMENTS
+                and not value["related_requirement_fields"]):
+            # An empty linkage short-circuits the unresolved policy and the
+            # unresolved-as-confirmed guard, so the deterministic defence would
+            # depend on the model volunteering the field. Reject at the contract.
+            reject_contract(
+                "invalid_requirement_link",
+                path + ".related_requirement_fields",
+                "at least one RequirementDimension",
+                "empty",
+            )
         proposals.append({
             "placement": {"section": section, "container_kind": kind,
                           "container_key": key, "field": field},

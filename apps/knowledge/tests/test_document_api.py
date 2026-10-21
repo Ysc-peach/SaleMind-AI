@@ -1008,10 +1008,10 @@ def test_document_mutation_methods_are_not_exposed(
     assert response.status_code == 405
 
 
-def test_knowledge_models_remain_unregistered_from_django_admin():
+def test_knowledge_admin_registers_documents_but_not_mutable_chunks():
     from django.contrib import admin
 
     from apps.knowledge.models import KnowledgeChunk, KnowledgeDocument
 
-    assert not admin.site.is_registered(KnowledgeDocument)
+    assert admin.site.is_registered(KnowledgeDocument)
     assert not admin.site.is_registered(KnowledgeChunk)

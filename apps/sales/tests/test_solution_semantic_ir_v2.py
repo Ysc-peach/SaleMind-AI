@@ -1,6 +1,8 @@
 """Generation-only semantic IR lowers into the unchanged V2 proposal contract."""
 
 import json
+from dataclasses import replace
+from xml.etree import ElementTree
 
 import pytest
 
@@ -19,6 +21,50 @@ from apps.sales.services.solution_prompt_v2 import (
 )
 from apps.sales.services.solution_readiness import check_solution_readiness
 from apps.sales.tests.test_solution_v2_pipeline import analysis_fixture, admission_fixture
+
+
+@pytest.mark.parametrize("pass_name", ("core", "implementation", "assurance"))
+def test_semantic_requests_and_parseable_examples_use_exact_sparse_citation_allowlist(pass_name):
+    from apps.rag.tests.test_answering import search_result
+    from apps.sales.services.solution_retrieval import merge_evidence
+
+    analysis = analysis_fixture()
+    admission = replace(admission_fixture(), allowed_proposal_source_labels=("S3", "S8"))
+    originals = merge_evidence([[search_result(chunk_id=i, content=text)
+                                for i, text in ((1, "unapproved evidence"),
+                                                (2, "approved first"), (3, "approved second"))]])
+    sources = tuple(replace(item, label=label) for item, label in zip(originals, ("S1", "S3", "S8")))
+    args = (analysis, check_solution_readiness(analysis), sources, admission)
+
+    def example(messages):
+        return messages[0]["content"].split("示例仅展示格式，不能照抄示例的技术结论：", 1)[1]
+
+    core_messages = build_solution_v2_core_messages(*args)
+    messages = core_messages
+    if pass_name != "core":
+        core = parse_solution_v2_core_output(example(core_messages), allowed_source_labels=("S3", "S8"))
+        messages = build_solution_v2_implementation_messages(*args, core)
+        if pass_name == "assurance":
+            implementation = parse_solution_v2_implementation_output(
+                example(messages), allowed_source_labels=("S3", "S8"),
+            )
+            messages = build_solution_v2_assurance_messages(*args, core, implementation)
+
+    root = ElementTree.fromstring("<root>" + messages[1]["content"] + "</root>")
+    assert json.loads(root.find("allowed_citation_ids").text) == ["S3", "S8"]
+    assert "unapproved evidence" not in messages[1]["content"]
+    assert "approved first" in messages[1]["content"]
+    assert "approved second" in messages[1]["content"]
+    if pass_name == "core":
+        proposals = parse_solution_v2_core_output(example(messages), allowed_source_labels=("S3", "S8"))
+    elif pass_name == "implementation":
+        proposals = parse_solution_v2_implementation_output(example(messages), allowed_source_labels=("S3", "S8"))
+    else:
+        proposals = parse_solution_v2_assurance_output(
+            example(messages), allowed_source_labels=("S3", "S8"), implementation=implementation,
+        )
+    assert proposals.proposals
+    assert all(p.citations == ("S3",) for p in proposals.proposals)
 
 
 def claim(text):

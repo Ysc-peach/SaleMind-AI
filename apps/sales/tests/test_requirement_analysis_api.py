@@ -11,10 +11,12 @@ from django.urls import resolve
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.llm.exceptions import LLMErrorCode, LLMProviderError
+from apps.llm.exceptions import LLMErrorCode, LLMProviderError, LLMProviderFailureKind
 from apps.sales.models import Customer, Opportunity, OpportunityRequirementAnalysis as Analysis
 from apps.sales.services import requirement_analysis, requirement_analysis_history as history
-from apps.sales.tests.requirement_fakes import AnalysisFakeLLM, valid_analysis_payload
+from apps.sales.tests.requirement_fakes import (
+    AnalysisFakeLLM, valid_analysis_payload, valid_analysis_generation_payload,
+)
 
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -85,12 +87,17 @@ def test_authorized_actor_creates_exactly_one_analysis_from_saved_facts(context,
     assert record.opportunity_id == response.data["opportunity_id"] == opportunity.pk
     assert record.created_by_id == response.data["created_by_id"] == users[actor].pk
     assert len(provider.calls) == 1
-    for field, value in valid_analysis_payload().items():
+    for field, value in valid_analysis_generation_payload().items():
         assert response.data[field] == value == getattr(record, field)
+    assert response.data["clarifying_questions"] == record.clarifying_questions
+    assert [q["field"] for q in record.clarifying_questions] == [
+        "budget", "business_goal", "use_scenario", "user_scale", "deployment_requirement",
+        "data_security_requirement", "existing_environment", "integration_requirement",
+    ]
     assert len(response.data["requirements"]) == 10
     assert response.data["source_raw_requirement"] == "最新预算最多30万元。"
     assert response.data["source_context"] == record.source_context
-    assert response.data["analysis_version"] == "v1"
+    assert response.data["analysis_version"] == "v2"
     assert response.data["llm_provider"] == "analysis-test-provider"
     assert response.data["llm_model"] == "analysis-test-model"
     assert Opportunity.objects.values().get(pk=opportunity.pk) == original_opportunity
@@ -339,6 +346,178 @@ def test_invalid_real_service_output_is_upstream_502_not_client_400(context):
     assert "raw-private-model-response" not in response.content.decode()
     assert Analysis.objects.count() == 0
     assert len(provider.calls) == 1
+
+
+@pytest.mark.parametrize("kind,status", [
+    (LLMProviderFailureKind.TIMEOUT, None),
+    (LLMProviderFailureKind.AUTH_ERROR, 401),
+    (LLMProviderFailureKind.PERMISSION_DENIED, 403),
+    (LLMProviderFailureKind.RATE_LIMITED, 429),
+    (LLMProviderFailureKind.SERVER_ERROR, 503),
+    (None, None),
+])
+def test_analysis_provider_failure_logs_only_safe_metadata(context, caplog, kind, status):
+    opportunity, users, provider = context
+    sentinel = "secret-key-Authorization-customer-raw-response"
+
+    def fail_provider():
+        raise LLMProviderError(
+            LLMErrorCode.LLM_PROVIDER_ERROR, failure_kind=kind, http_status=status,
+        ) from RuntimeError(sentinel)
+
+    provider.callback = fail_provider
+    response = client_for(users["owner"]).post(collection_url(opportunity), {}, format="json")
+    records = [r for r in caplog.records if hasattr(r, "analysis_failure")]
+    assert len(records) == 1
+    assert records[0].analysis_failure == {
+        "stage": "requirement_analysis", "code": "llm_provider_error",
+        "category": kind.value if kind else "unknown_provider_error",
+        "http_status": status,
+    }
+    assert records[0].exc_info is None
+    assert sentinel not in caplog.text + response.content.decode()
+    assert opportunity.raw_requirement not in caplog.text
+    assert response.status_code == 502
+    assert set(response.data) == {"code", "message"}
+    assert Analysis.objects.count() == 0
+    assert len(provider.calls) == 1
+
+
+def test_invalid_analysis_contract_logs_validation_stage_without_raw_output(context, caplog):
+    opportunity, users, provider = context
+    provider.content = '{"private-customer-content":"secret-provider-output"}'
+    response = client_for(users["owner"]).post(collection_url(opportunity), {}, format="json")
+    records = [r for r in caplog.records if hasattr(r, "analysis_failure")]
+    assert len(records) == 1
+    assert records[0].analysis_failure == {
+        "stage": "requirement_analysis", "code": "requirement_analysis_invalid_response",
+        "category": "invalid_analysis_response", "http_status": None,
+    }
+    assert records[0].exc_info is None
+    assert "private-customer-content" not in caplog.text + response.content.decode()
+    assert "secret-provider-output" not in caplog.text + response.content.decode()
+    assert response.status_code == 502
+    assert Analysis.objects.count() == 0
+    assert len(provider.calls) == 1
+
+
+def test_analysis_api_logs_formal_parser_path_but_keeps_public_error_unchanged(context, caplog):
+    import json
+
+    opportunity, users, provider = context
+    payload = valid_analysis_generation_payload()
+    payload["requirements"]["business_goal"]["value"] = "private-customer-text"
+    provider.content = json.dumps(payload)
+    response = client_for(users["owner"]).post(collection_url(opportunity), {}, format="json")
+    records = [r for r in caplog.records if hasattr(r, "analysis_contract_failure")]
+    assert len(records) == 1
+    assert records[0].analysis_contract_failure == {
+        "category": "status_value_mismatch", "json_path": "$.requirements.business_goal.value",
+        "expected": "null for unknown status", "actual": "string",
+    }
+    assert "$.requirements.business_goal.value" in caplog.text
+    assert "private-customer-text" not in caplog.text + response.content.decode()
+    assert records[0].exc_info is None
+    assert set(response.data) == {"code", "message"}
+    assert response.status_code == 502
+    assert Analysis.objects.count() == 0
+    assert len(provider.calls) == 1
+
+
+def test_provider_question_field_is_rejected_without_filtering_or_saving_snapshot(context, caplog):
+    import json
+
+    opportunity, users, provider = context
+    original_opportunity = Opportunity.objects.values().get(pk=opportunity.pk)
+    original_customer = Customer.objects.values().get(pk=opportunity.customer_id)
+    payload = valid_analysis_payload()
+    payload["requirements"]["business_goal"] = {
+        "status": "known", "value": "private-requirement-value",
+        "evidence": "private-requirement-evidence",
+    }
+    payload["clarifying_questions"] = [{
+        "field": "business_goal", "question": "private-customer-question",
+    }]
+    provider.content = json.dumps(payload)
+    response = client_for(users["owner"]).post(collection_url(opportunity), {}, format="json")
+    records = [r for r in caplog.records if hasattr(r, "analysis_contract_failure")]
+    assert len(records) == 1
+    assert records[0].analysis_contract_failure == {
+        "category": "unknown_key", "json_path": "$",
+        "expected": "only documented keys", "actual": "unexpected key count 1",
+    }
+    assert records[0].exc_info is None
+    assert response.status_code == 502
+    assert set(response.data) == {"code", "message"}
+    assert response.data["code"] == "requirement_analysis_invalid_response"
+    assert "question length" not in response.content.decode()
+    for secret in ("private-customer-question", "private-requirement-value", "private-requirement-evidence"):
+        assert secret not in caplog.text + response.content.decode()
+    assert Analysis.objects.count() == 0
+    assert len(provider.calls) == 1
+    assert Opportunity.objects.values().get(pk=opportunity.pk) == original_opportunity
+    assert Customer.objects.values().get(pk=opportunity.customer_id) == original_customer
+
+
+def test_truncated_analysis_logs_usage_without_saving_raw_output_or_snapshot(context, caplog, monkeypatch):
+    from apps.llm.base import LLMGeneration
+
+    opportunity, users, provider = context
+    provider.content = '{"summary":"private-truncated-output'
+    original_generate = provider.generate
+
+    def generate_with_usage(messages, *, max_output_tokens=None):
+        result = original_generate(messages, max_output_tokens=max_output_tokens)
+        return LLMGeneration(
+            content=result.content, finish_reason="length",
+            prompt_tokens=1200, completion_tokens=1500,
+        )
+
+    monkeypatch.setattr(provider, "generate", generate_with_usage)
+    response = client_for(users["owner"]).post(collection_url(opportunity), {}, format="json")
+
+    records = [r for r in caplog.records if hasattr(r, "analysis_generation")]
+    assert len(records) == 1
+    assert records[0].analysis_generation == {
+        "finish_reason": "length", "prompt_tokens": 1200, "completion_tokens": 1500,
+    }
+    assert records[0].exc_info is None
+    assert "private-truncated-output" not in caplog.text + response.content.decode()
+    assert response.status_code == 502
+    assert response.data["code"] == "requirement_analysis_invalid_response"
+    assert set(response.data) == {"code", "message"}
+    assert Analysis.objects.count() == 0
+    assert len(provider.calls) == 1
+
+
+def test_valid_analysis_logs_safe_usage_without_exposing_it_in_api(context, caplog, monkeypatch):
+    import logging
+    from apps.llm.base import LLMGeneration
+
+    opportunity, users, provider = context
+    original_generate = provider.generate
+
+    def generate_with_usage(messages, *, max_output_tokens=None):
+        result = original_generate(messages, max_output_tokens=max_output_tokens)
+        return LLMGeneration(
+            content=result.content, finish_reason="stop",
+            prompt_tokens=1200, completion_tokens=900,
+        )
+
+    monkeypatch.setattr(provider, "generate", generate_with_usage)
+    with caplog.at_level(logging.INFO, logger="apps.sales.services.requirement_analysis"):
+        response = client_for(users["owner"]).post(collection_url(opportunity), {}, format="json")
+
+    records = [r for r in caplog.records if hasattr(r, "analysis_generation")]
+    assert len(records) == 1
+    assert records[0].analysis_generation == {
+        "finish_reason": "stop", "prompt_tokens": 1200, "completion_tokens": 900,
+    }
+    assert response.status_code == 201
+    assert set(response.data) == FULL_FIELDS
+    assert "finish_reason" not in response.content.decode()
+    assert opportunity.raw_requirement not in caplog.text
+    assert Analysis.objects.count() == 1
 
 
 def test_view_uses_persistence_service_with_resolved_parent_and_actual_actor_outside_transaction(context, monkeypatch):

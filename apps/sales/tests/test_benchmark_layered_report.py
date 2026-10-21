@@ -125,15 +125,20 @@ def test_return_time_provenance_failure_is_not_reported_as_admission_pass(monkey
     assert result["persistence"]["solution_persisted"] is False
 
 
-@pytest.mark.django_db
-def test_deterministic_only_draft_reports_executed_admission_without_faking_qwen(monkeypatch):
+def test_empty_generation_reports_rejection_without_faking_admission_or_quality(monkeypatch):
     from apps.sales.services.solution_evaluation import evaluation_scope
+    from apps.sales.services.solution_errors import SolutionDraftError
     from apps.sales.tests.test_solution_v2_pipeline import _generate_v2, _VerifierProvider
     value = report()
     verifier = _VerifierProvider()
-    with evaluation_scope(value):
+    with evaluation_scope(value), pytest.raises(SolutionDraftError) as caught:
         _generate_v2(monkeypatch, [], verifier=verifier)
     result = value.to_dict()
-    assert result["deterministic_admission"]["status"] == "PASS"
+    assert caught.value.code == "solution_draft_no_proposals"
+    assert result["global_structure"]["status"] == "FAIL"
+    assert result["deterministic_admission"]["status"] == "NOT_REACHED"
     assert result["qwen_admission"]["status"] == "NOT_REACHED"
+    assert result["assembly"]["status"] == "NOT_REACHED"
+    assert result["persistence"]["solution_persisted"] is False
+    assert result["final_solution_quality"]["status"] == "NOT_EVALUATED"
     assert not verifier.calls

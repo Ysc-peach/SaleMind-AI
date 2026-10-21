@@ -1,6 +1,7 @@
 """Independent, fail-closed semantic verification for grounded drafts."""
 
 import json
+import logging
 import re
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextvars import copy_context
@@ -13,6 +14,7 @@ from django.conf import settings
 from apps.llm.base import LLMProvider
 from apps.llm.factory import get_llm_provider
 from apps.sales.services.solution_evaluation import emit_evaluation
+from apps.sales.services.solution_log_context import current_solution_workflow_id
 from apps.sales.services.requirement_analysis import (
     ClarifyingQuestion,
     OpportunityRequirementAnalysis,
@@ -40,9 +42,19 @@ from apps.sales.services.verifier_diagnostics import (
     qwen_failure_category,
 )
 from apps.llm.exceptions import LLMProviderError
+from apps.sales.services.solution_clarification_actions import (
+    clear_clarification_action, scoped_statements, conditional_parts, assertive_consequence,
+    normalized_consequence,
+)
+from apps.sales.services.solution_unresolved_policy import (
+    evaluate_unresolved_v2_policy, PolicyDecision, PolicyReason,
+)
 
 if TYPE_CHECKING:
     from apps.sales.services.solution_prompt_v2 import SolutionV2Placement
+
+
+logger = logging.getLogger(__name__)
 
 
 class GroundingRelation(StrEnum):
@@ -142,6 +154,9 @@ class SolutionGroundingErrorCode(StrEnum):
     INVALID_INPUT = "invalid_solution_grounding_input"
     INVALID_RESPONSE = "solution_grounding_invalid_response"
     NOT_GROUNDED = "solution_draft_not_grounded"
+    UNCONFIRMED_ASSERTION = "solution_draft_unconfirmed_assertion"
+    UNQUALIFIED_PRECONDITION = "solution_draft_unqualified_precondition"
+    EXPRESSION_UNCLASSIFIED = "solution_draft_expression_unclassified"
 
 
 class SolutionDraftGroundingError(Exception):
@@ -158,6 +173,9 @@ class SolutionDraftGroundingError(Exception):
             SolutionGroundingErrorCode.INVALID_INPUT: "The solution grounding input is invalid.",
             SolutionGroundingErrorCode.INVALID_RESPONSE: "The solution grounding response is invalid.",
             SolutionGroundingErrorCode.NOT_GROUNDED: "The solution draft did not pass grounding verification.",
+            SolutionGroundingErrorCode.UNCONFIRMED_ASSERTION: "The proposal asserts an unconfirmed requirement. No draft was saved.",
+            SolutionGroundingErrorCode.UNQUALIFIED_PRECONDITION: "The proposal prerequisite does not establish satisfied conditions. No draft was saved.",
+            SolutionGroundingErrorCode.EXPRESSION_UNCLASSIFIED: "The planning expression requires technical review. No draft was saved.",
         }[code]
         self.violations = violations
         super().__init__(self.safe_message)
@@ -305,6 +323,12 @@ def verify_atomic_solution_v2_proposals(
             matched_value: str | None = None,
         ) -> None:
             emit_evaluation("deterministic_admission", success=False)
+            _log_proposal_rejection(
+                proposal_index=index, placement=proposal.placement,
+                related_fields=related_fields,
+                citation_count=len(proposal.citations) if isinstance(proposal.citations, tuple) else 0,
+                stage="deterministic", reason_code=reason.value, guard_name=guard_name,
+            )
             if diagnostics is None:
                 return
             diagnostics.deterministic_rejection(
@@ -339,10 +363,41 @@ def verify_atomic_solution_v2_proposals(
                 ),
             )
             raise SolutionDraftGroundingError(SolutionGroundingErrorCode.INVALID_INPUT)
-        if _asserts_unresolved_as_confirmed(analysis, related_fields, proposal.text):
+        scoped_action = (
+            (proposal.placement.section is SolutionV2Section.IMPLEMENTATION_PLAN
+             and proposal.placement.container_kind is SolutionV2ContainerKind.IMPLEMENTATION_PHASE
+             and proposal.placement.field in {
+                 SolutionV2PlacementField.OBJECTIVE,
+                 SolutionV2PlacementField.TASKS,
+             })
+            or (proposal.placement.section is SolutionV2Section.RISKS
+                and proposal.placement.container_kind is SolutionV2ContainerKind.RISK
+                and proposal.placement.field is SolutionV2PlacementField.MITIGATION)
+        )
+        policy = evaluate_unresolved_v2_policy(
+            analysis=analysis, related_fields=related_fields, text=proposal.text,
+            placement=(proposal.placement.section.value, proposal.placement.container_kind.value,
+                       proposal.placement.field.value),
+        )
+        if policy is not None and policy.decision is not PolicyDecision.CANDIDATE:
+            reason, code = {
+                PolicyReason.INVALID_LINKAGE: (DeterministicGuardReason.INVALID_REQUIREMENT_LINKAGE, SolutionGroundingErrorCode.INVALID_INPUT),
+                PolicyReason.UNCONFIRMED_ASSERTION: (DeterministicGuardReason.UNRESOLVED_AS_CONFIRMED, SolutionGroundingErrorCode.UNCONFIRMED_ASSERTION),
+                PolicyReason.UNQUALIFIED_PRECONDITION: (DeterministicGuardReason.UNQUALIFIED_PRECONDITION, SolutionGroundingErrorCode.UNQUALIFIED_PRECONDITION),
+                PolicyReason.EXPRESSION_UNCLASSIFIED: (DeterministicGuardReason.EXPRESSION_UNCLASSIFIED, SolutionGroundingErrorCode.EXPRESSION_UNCLASSIFIED),
+            }[policy.reason]
+            record_rejection(reason, guard_name="evaluate_unresolved_v2_policy")
+            raise SolutionDraftGroundingError(code)
+        unresolved_rejected = policy is None and (
+            _blocks_scoped_unresolved_action(analysis, related_fields, proposal.text)
+            if scoped_action else
+            _asserts_unresolved_as_confirmed(analysis, related_fields, proposal.text)
+        )
+        if unresolved_rejected:
             record_rejection(
                 DeterministicGuardReason.UNRESOLVED_AS_CONFIRMED,
-                guard_name="_asserts_unresolved_as_confirmed",
+                guard_name=("_blocks_scoped_unresolved_action" if scoped_action
+                            else "_asserts_unresolved_as_confirmed"),
             )
             _proposal_not_admissible(f"proposals[{index}]")
         basis = tuple(source_by_label[label] for label in proposal.citations)
@@ -550,6 +605,41 @@ def _asserts_unresolved_as_confirmed(
     )
 
 
+def _blocks_scoped_unresolved_action(
+    analysis: OpportunityRequirementAnalysis,
+    related_fields: tuple[RequirementDimension, ...],
+    text: str,
+) -> bool:
+    """Allow clear inquiry actions to proceed, never to confirm a dimension.
+
+    A conditional marker in one sentence cannot shield a different assertion.
+    Parent phase/risk context is deliberately not an exemption here; it still
+    goes to the semantic verifier as untrusted context.
+    """
+    if all(getattr(analysis.requirements, field.value).status is RequirementStatus.KNOWN
+           for field in related_fields):
+        return False
+    statements = scoped_statements(text)
+    if not statements:
+        return True
+    for statement in statements:
+        if clear_clarification_action(statement):
+            continue
+        if _asserts_unresolved_as_confirmed(analysis, related_fields, statement):
+            return True
+        prerequisite, consequence = conditional_parts(statement)
+        confirmation = _CONFIRMATION_BOUNDARY_PATTERN.match(statement)
+        if confirmation is not None:
+            prerequisite = statement[:confirmation.end()]
+            consequence = normalized_consequence(statement[confirmation.end():])
+        if (_asserts_unresolved_as_confirmed(analysis, related_fields, prerequisite)
+                and not clear_clarification_action(prerequisite)):
+            return True
+        if not clear_clarification_action(consequence) and assertive_consequence(consequence):
+            return True
+    return False
+
+
 def _has_unsupported_precision(
     text: str,
     analysis: OpportunityRequirementAnalysis,
@@ -632,6 +722,41 @@ def _proposal_not_admissible(location: str) -> NoReturn:
     )
 
 
+def _log_proposal_rejection(
+    *, proposal_index: int, placement: "SolutionV2Placement | None",
+    related_fields: tuple[RequirementDimension, ...], citation_count: int,
+    stage: str, reason_code: str, guard_name: str,
+    decision: str | None = None, atomicity: str | None = None,
+) -> None:
+    """Fixed rule metadata only; no claim, source, container key or response."""
+    from apps.sales.services.solution_prompt_v2 import (
+        SolutionV2ContainerKind, SolutionV2PlacementField, SolutionV2Section,
+    )
+    documented_placement = {}
+    for key, enum in (("section", SolutionV2Section),
+                      ("container_kind", SolutionV2ContainerKind),
+                      ("field", SolutionV2PlacementField)):
+        value = getattr(placement, key, None)
+        if isinstance(value, enum):
+            documented_placement[key] = value.value
+    diagnostic = {
+        "stage": stage, "proposal_index": proposal_index,
+        "placement": documented_placement, "reason_code": reason_code,
+        "guard_name": guard_name,
+        "related_requirement_fields": tuple(
+            field.value for field in related_fields if isinstance(field, RequirementDimension)
+        ) if isinstance(related_fields, tuple) else (),
+        "citation_count": citation_count,
+    }
+    if decision is not None:
+        diagnostic.update(decision=decision, atomicity=atomicity)
+    workflow_id = current_solution_workflow_id()
+    if workflow_id is not None:
+        diagnostic["workflow_id"] = workflow_id
+    logger.warning("Solution admission rejected: %s", diagnostic,
+                   extra={"solution_admission_rejection": diagnostic})
+
+
 def _verify_proposal_admissibility_packet(
     packet: ProposalAdmissibilityPacket,
     provider: LLMProvider,
@@ -693,6 +818,14 @@ def _verify_proposal_admissibility_packet(
     emit_evaluation("verifier_verdict", decision=result.decision.value,
                     atomicity=result.atomicity.value, veto=veto)
     if veto:
+        _log_proposal_rejection(
+            proposal_index=call_index - 1, placement=packet.placement,
+            related_fields=packet.related_requirement_fields,
+            citation_count=len(packet.capability_basis),
+            stage="qwen", reason_code="qwen_hard_veto",
+            guard_name="proposal_admissibility_verifier",
+            decision=result.decision.value, atomicity=result.atomicity.value,
+        )
         _proposal_not_admissible(packet.location)
     return result
 

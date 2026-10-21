@@ -2,12 +2,15 @@
 
 from django.contrib import admin, messages
 
-from apps.knowledge.models import EnterpriseGroundingFact
+from apps.knowledge.models import EnterpriseGroundingFact, KnowledgeDocument
+from .admin_documents import KnowledgeDocumentAdmin
 from apps.knowledge.services.grounding_fact_approval import (
     actor_can_review_grounding_facts,
     approve_grounding_facts,
     reject_grounding_facts,
 )
+
+admin.site.register(KnowledgeDocument, KnowledgeDocumentAdmin)
 
 
 @admin.register(EnterpriseGroundingFact)
