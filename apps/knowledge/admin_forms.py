@@ -42,3 +42,9 @@ class FactExtractionConfirmationForm(DocumentIndexConfirmationForm):
 
 class ExtractionCancellationForm(forms.Form):
     confirm = forms.BooleanField(label='我确认撤销这次执行的结果写入资格', required=True)
+
+
+class StalledIndexingResetForm(forms.Form):
+    confirm = forms.BooleanField(
+        label='我确认该索引执行已中断，且重置不会补跑或恢复未完成内容', required=True,
+    )

@@ -10,9 +10,10 @@ from django.views.decorators.http import require_http_methods
 from .admin_forms import (
     KnowledgeDocumentUploadForm, DocumentIndexConfirmationForm,
     FactExtractionConfirmationForm, ExtractionCancellationForm,
+    StalledIndexingResetForm,
 )
 from .exceptions import KnowledgeDocumentError
-from .services import indexing
+from .services import indexing, indexing_recovery
 from .services.grounding_fact_attempts import (
     FactExtractionOperationError, require_actor, require_no_outer_transaction, cancel_extraction,
 )
@@ -32,6 +33,8 @@ class DocumentOperationsMixin:
                  name='knowledge_knowledgedocument_extract'),
             path('<int:object_id>/extractions/<int:attempt_id>/cancel/', operation(self.cancel_document_extraction),
                  name='knowledge_knowledgedocument_cancel_extraction'),
+            path('<int:object_id>/reset-stalled-indexing/', operation(self.reset_stalled_indexing),
+                 name='knowledge_knowledgedocument_reset_stalled_indexing'),
         ] + super().get_urls()
 
     def _actor(self, request):
@@ -167,3 +170,30 @@ class DocumentOperationsMixin:
                 return redirect(self._document_url(document))
         return self._operation_page(request, title=f'确认取消抽取执行 #{attempt.pk}', form=form, document=document,
             explanation='取消只撤销本次结果的保存资格，不保证中止外部模型请求或计费；旧结果返回也不得再写入。请先核对执行状态。')
+
+    def reset_stalled_indexing(self, request, object_id):
+        self._actor(request)
+        document = get_object_or_404(self.get_queryset(request), pk=object_id)
+        form = StalledIndexingResetForm(request.POST if request.method == 'POST' else None)
+        if request.method == 'POST' and form.is_valid():
+            try:
+                actor = self._actor(request)
+                indexing_recovery.reset_stalled_indexing(document.pk, actor_id=actor.pk)
+            except FactExtractionOperationError as error:
+                self._actor(request)
+                form.add_error(None, error.safe_message)
+            except KnowledgeDocumentError as error:
+                self._actor(request)
+                if error.code == 'indexing_already_in_progress':
+                    form.add_error(None, '该索引仍在预期执行时间内；请刷新核对，未超时不予重置。')
+                else:
+                    form.add_error(None, '当前状态没有可重置的中断索引；请刷新文档详情核对，不要连续重复提交。')
+            except Exception:
+                self._actor(request)
+                form.add_error(None, '重置未完成，请刷新文档详情核对当前状态，不要连续重复提交。')
+            else:
+                self._actor(request)
+                messages.info(request, '已按显式确认重置中断的索引；保留原执行标识，未补跑索引，也未恢复未完成内容。')
+                return redirect(self._document_url(document))
+        return self._operation_page(request, title='确认重置中断的索引', form=form, document=document,
+            explanation='仅在索引执行超过预期时间且没有结果时使用；重置不会补跑索引、不会恢复未完成内容，也不会自动重试。')

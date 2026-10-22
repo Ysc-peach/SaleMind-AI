@@ -1,4 +1,5 @@
 """Admin document UI must not create a new write/permission bypass."""
+from datetime import timedelta
 from uuid import uuid4
 
 import pytest
@@ -186,6 +187,54 @@ def test_storage_failure_does_not_echo_private_error(admin_client, monkeypatch):
     assert response.status_code == 200
     assert b'SECRET' not in response.content
     assert not KnowledgeDocument.objects.exists()
+
+
+def _stalled_document(admin_actor, *, minutes_ago=120, last_run=None):
+    return KnowledgeDocument.objects.create(
+        title='Stalled indexing', document_type='technical',
+        source_file='knowledge/documents/stalled.md', original_filename='stalled.md',
+        mime_type='text/markdown', file_size=32, checksum_sha256='d'*64,
+        status='processing', indexing_run_id=uuid4(), last_index_run_id=last_run,
+        last_indexed_at=timezone.now() if last_run else None,
+        processing_started_at=timezone.now() - timedelta(minutes=minutes_ago),
+        created_by=admin_actor,
+    )
+
+
+def test_reset_stalled_indexing_requires_an_explicit_confirmation(admin_client, admin_actor):
+    document = _stalled_document(admin_actor, last_run=uuid4())
+    url = operation_url('reset_stalled_indexing', document.pk)
+    response = admin_client.get(url)
+    assert response.status_code == 200
+    assert '不会补跑索引' in response.content.decode()
+    response = admin_client.post(url, {})
+    assert response.status_code == 200
+    document.refresh_from_db()
+    assert document.status == 'processing'
+
+
+def test_reset_stalled_indexing_keeps_the_run_id_and_does_not_reindex(admin_client, admin_actor):
+    run_id = uuid4()
+    document = _stalled_document(admin_actor, last_run=run_id)
+    interrupted = document.indexing_run_id
+    response = admin_client.post(
+        operation_url('reset_stalled_indexing', document.pk), {'confirm':'on'}, follow=True)
+    assert response.status_code == 200
+    document.refresh_from_db()
+    assert document.status == 'ready' and document.error_code == 'indexing_stalled_reset'
+    assert document.indexing_run_id == interrupted and document.last_index_run_id == run_id
+    assert not document.chunks.exists()
+    assert '未补跑索引' in response.content.decode()
+
+
+def test_reset_stalled_indexing_refuses_a_run_inside_the_window(admin_client, admin_actor):
+    document = _stalled_document(admin_actor, minutes_ago=1, last_run=uuid4())
+    response = admin_client.post(
+        operation_url('reset_stalled_indexing', document.pk), {'confirm':'on'})
+    assert response.status_code == 200
+    assert '未超时不予重置' in response.content.decode()
+    document.refresh_from_db()
+    assert document.status == 'processing'
 
 
 def test_reindex_confirmation_cannot_silently_use_a_new_run(admin_client, ready_document, local_admin_environment):
