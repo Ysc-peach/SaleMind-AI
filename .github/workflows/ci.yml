@@ -11,7 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        # The migration contract test asserts extversion 0.8.6; a floating
+        # pg16 tag ships a newer extension and would fail that assertion.
+        image: pgvector/pgvector:0.8.6-pg16-bookworm
         env:
           POSTGRES_DB: salesmind_ci
           POSTGRES_USER: salesmind
