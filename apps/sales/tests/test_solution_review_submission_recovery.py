@@ -217,6 +217,9 @@ def test_legacy_recovery_survives_real_postgres_checkpointer_reconstruction(work
             yield saver
 
     monkeypatch.setattr(solution_workflow_views, "open_solution_workflow_checkpointer", open_test_checkpointer)
+    # start() now runs inside the runner service, so it needs the same saver.
+    from apps.sales.services import solution_workflow_runner
+    monkeypatch.setattr(solution_workflow_runner, "open_solution_workflow_checkpointer", open_test_checkpointer)
     c = workflow_api_context
     started, config = _legacy_block(c)
     blocked_checkpoint = _read_state(config).config

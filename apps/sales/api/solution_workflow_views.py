@@ -26,7 +26,14 @@ from apps.sales.services.solution_review import (
 )
 from apps.sales.services.solution_generation_capacity import (
     GenerationCapacityReached,
-    generation_slot,
+)
+from apps.sales.services.solution_workflow_runner import (
+    WorkflowFailedOutcome,
+    WorkflowStateNotFound,
+    failed_outcome,
+    graph_config,
+    project_workflow,
+    start_workflow,
 )
 from apps.sales.services.solution_review_workflow import (
     SolutionWorkflowOutcome,
@@ -133,40 +140,31 @@ class SolutionWorkflowCollectionViewSet(
             opportunity_id=opportunity.pk,
             analysis_id=analysis.pk,
         )
-        config = _graph_config(workflow_id)
-        with open_solution_workflow_checkpointer() as checkpointer:
-            graph = build_solution_review_graph(checkpointer)
-            existing = checkpointer.get_tuple(config)
-            if existing is not None:
-                projection = _project_workflow(
-                    graph,
-                    config,
-                    workflow_id,
-                    request.user,
-                )
-                return Response(projection)
-            try:
-                with generation_slot():
-                    result = graph.invoke(
-                        {
-                            "workflow_run_id": str(workflow_id),
-                            "opportunity_id": opportunity.pk,
-                            "requirement_analysis_id": analysis.pk,
-                            "requested_by_id": request.user.pk,
-                            "workflow_stage": "ready",
-                        },
-                        config,
-                    )
-            except GenerationCapacityReached:
-                raise SolutionWorkflowCapacity() from None
-            _raise_failed_outcome(result)
-            projection = _project_workflow(
-                graph,
-                config,
-                workflow_id,
-                request.user,
+        try:
+            result = start_workflow(
+                workflow_id=workflow_id,
+                opportunity=opportunity,
+                analysis=analysis,
+                actor=request.user,
             )
-        return Response(projection, status=status.HTTP_201_CREATED)
+        except GenerationCapacityReached:
+            raise SolutionWorkflowCapacity() from None
+        except WorkflowStateNotFound:
+            raise NotFound() from None
+        except WorkflowFailedOutcome as error:
+            if error.outcome == "failed":
+                raise SolutionWorkflowFailed(
+                    error.error_code or "workflow_failed"
+                ) from None
+            raise SolutionWorkflowConflict(
+                error.error_code or "workflow_blocked"
+            ) from None
+        return Response(
+            result.projection,
+            status=(
+                status.HTTP_201_CREATED if result.created else status.HTTP_200_OK
+            ),
+        )
 
 
 class SolutionWorkflowDetailViewSet(
@@ -182,9 +180,9 @@ class SolutionWorkflowDetailViewSet(
         workflow_id = kwargs["workflow_id"]
         with open_solution_workflow_checkpointer() as checkpointer:
             graph = build_solution_review_graph(checkpointer)
-            projection = _project_workflow(
+            projection = _projection(
                 graph,
-                _graph_config(workflow_id),
+                graph_config(workflow_id),
                 workflow_id,
                 request.user,
             )
@@ -194,10 +192,10 @@ class SolutionWorkflowDetailViewSet(
         serializer = SolutionWorkflowResumeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         workflow_id = kwargs["workflow_id"]
-        config = _graph_config(workflow_id)
+        config = graph_config(workflow_id)
         with open_solution_workflow_checkpointer() as checkpointer:
             graph = build_solution_review_graph(checkpointer)
-            current = _project_workflow(
+            current = _projection(
                 graph,
                 config,
                 workflow_id,
@@ -213,7 +211,7 @@ class SolutionWorkflowDetailViewSet(
             )
             if recovered:
                 return Response(
-                    _project_workflow(
+                    _projection(
                         graph,
                         config,
                         workflow_id,
@@ -249,7 +247,7 @@ class SolutionWorkflowDetailViewSet(
             else:
                 result = graph.invoke(Command(resume=resume), config)
             _raise_failed_outcome(result)
-            projection = _project_workflow(
+            projection = _projection(
                 graph,
                 config,
                 workflow_id,
@@ -277,85 +275,25 @@ def _workflow_id_for_request(request, *, opportunity_id: int, analysis_id: int) 
     )
 
 
-def _graph_config(workflow_id: UUID) -> dict:
-    return {"configurable": {"thread_id": str(workflow_id)}}
+def _projection(graph, config, workflow_id: UUID, actor) -> dict:
+    """Translate the domain "not visible" signal into an HTTP 404."""
+
+    try:
+        return project_workflow(graph, config, workflow_id, actor)
+    except WorkflowStateNotFound:
+        raise NotFound() from None
 
 
-def _project_workflow(graph, config, workflow_id: UUID, actor) -> dict:
-    snapshot = graph.get_state(config)
-    state = dict(snapshot.values)
-    if not state:
-        raise NotFound()
-    draft = None
-    draft_id = state.get("solution_draft_id")
-    if draft_id is not None:
-        draft = visible_solution_drafts_for(actor).filter(pk=draft_id).first()
-        if draft is None:
-            raise NotFound()
-    else:
-        opportunity_id = state.get("opportunity_id")
-        if not visible_opportunities_for(actor).filter(pk=opportunity_id).exists():
-            raise NotFound()
-    return _business_projection(workflow_id, state, draft, actor=actor)
+def _raise_failed_outcome(result: dict) -> None:
+    """Translate a terminal graph outcome into the matching HTTP error."""
 
-
-def _business_projection(workflow_id: UUID, state: dict, draft, *, actor=None) -> dict:
-    review = None
-    if draft is not None:
-        review = draft.reviews.order_by("-submitted_at", "-id").first()
-    if draft is not None and draft.review_status == SolutionReviewStatus.APPROVED:
-        public_status = "APPROVED"
-        allowed_actions = []
-    elif draft is not None and draft.review_status == SolutionReviewStatus.NEEDS_REVISION:
-        public_status = (
-            review.return_reason.upper()
-            if review is not None and review.return_reason
-            else "BLOCKED"
-        )
-        allowed_actions = []
-    elif draft is not None and draft.review_status == SolutionReviewStatus.PENDING_REVIEW:
-        public_status = "WAITING_FOR_PRESALES_REVIEW"
-        allowed_actions = ["APPROVE", "REQUEST_REVISION"]
-        pending = draft.reviews.filter(
-            status=SolutionReviewDecisionStatus.PENDING
-        ).first()
-        if pending is not None:
-            review = pending
-    elif draft is not None and draft.review_status == SolutionReviewStatus.DRAFT:
-        terminal_outcome = str(state.get("workflow_outcome", "")).lower()
-        if (
-            state.get("workflow_stage") == SolutionWorkflowStage.TERMINAL.value
-            and terminal_outcome
-            in {
-                SolutionWorkflowOutcome.BLOCKED.value,
-                SolutionWorkflowOutcome.CONFLICT.value,
-                SolutionWorkflowOutcome.FAILED.value,
-            }
-        ):
-            if actor is not None and can_recover_terminal_review_submission(
-                state, draft, actor, workflow_id=workflow_id,
-            ):
-                public_status = "WAITING_FOR_SALES_CONFIRMATION"
-                allowed_actions = ["SUBMIT_FOR_REVIEW"]
-            else:
-                public_status = terminal_outcome.upper()
-                allowed_actions = []
-        else:
-            public_status = "WAITING_FOR_SALES_CONFIRMATION"
-            allowed_actions = ["SUBMIT_FOR_REVIEW"]
-    else:
-        public_status = str(state.get("workflow_outcome", "FAILED")).upper()
-        allowed_actions = []
-    return {
-        "workflow_id": str(workflow_id),
-        "status": public_status,
-        "solution_draft_id": draft.pk if draft is not None else state.get("solution_draft_id"),
-        "solution_version": draft.version if draft is not None else state.get("solution_version"),
-        "solution_review_id": review.pk if review is not None else state.get("solution_review_id"),
-        "reviewer_id": review.reviewer_id if review is not None else state.get("reviewer_id"),
-        "allowed_actions": allowed_actions,
-        "error_code": state.get("error_code", ""),
-    }
+    failure = failed_outcome(result)
+    if failure is None:
+        return
+    outcome, error_code = failure
+    if outcome == "failed":
+        raise SolutionWorkflowFailed(error_code or "workflow_failed")
+    raise SolutionWorkflowConflict(error_code or "workflow_blocked")
 
 
 def _recover_committed_http_replay(
@@ -410,11 +348,4 @@ def _recover_committed_http_replay(
     return False
 
 
-def _raise_failed_outcome(result: dict) -> None:
-    outcome = result.get("workflow_outcome")
-    if outcome == "blocked":
-        raise SolutionWorkflowConflict(result.get("error_code") or "workflow_blocked")
-    if outcome == "conflict":
-        raise SolutionWorkflowConflict(result.get("error_code") or "workflow_conflict")
-    if outcome == "failed":
-        raise SolutionWorkflowFailed(result.get("error_code") or "workflow_failed")
+

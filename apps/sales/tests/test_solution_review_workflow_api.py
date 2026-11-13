@@ -126,9 +126,17 @@ def workflow_api_context(make_user, monkeypatch):
     # the external PostgreSQL storage with the real LangGraph memory saver;
     # graph execution and Django business services remain real.
     import apps.sales.api.solution_workflow_views as workflow_views
+    from apps.sales.services import solution_workflow_runner
 
+    # start() runs inside the runner service, while retrieve/resume still own
+    # their checkpointer in the view. Both must use the in-memory saver.
     monkeypatch.setattr(
         workflow_views,
+        "open_solution_workflow_checkpointer",
+        open_checkpointer,
+    )
+    monkeypatch.setattr(
+        solution_workflow_runner,
         "open_solution_workflow_checkpointer",
         open_checkpointer,
     )
@@ -404,7 +412,7 @@ def test_start_response_exposes_no_checkpoint_or_solution_payload(workflow_api_c
 def test_start_returns_429_when_every_generation_slot_is_busy(
     workflow_api_context, monkeypatch,
 ):
-    from apps.sales.api import solution_workflow_views
+    from apps.sales.services import solution_workflow_runner
     from apps.sales.services.solution_generation_capacity import (
         GenerationCapacityReached,
     )
@@ -414,7 +422,7 @@ def test_start_returns_429_when_every_generation_slot_is_busy(
         raise GenerationCapacityReached()
         yield  # pragma: no cover - unreachable, keeps the contextmanager shape
 
-    monkeypatch.setattr(solution_workflow_views, "generation_slot", busy)
+    monkeypatch.setattr(solution_workflow_runner, "generation_slot", busy)
 
     response = _start(workflow_api_context)
 
