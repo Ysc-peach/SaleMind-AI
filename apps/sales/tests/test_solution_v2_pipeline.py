@@ -299,6 +299,7 @@ def _proposal(text, *, section="architecture", kind="architecture_component", ke
         },
         "text": text,
         "citations": ["S1"],
+        "related_requirement_fields": ["business_goal"],
     }
 
 

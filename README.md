@@ -127,7 +127,9 @@ git diff --check
 
 前端在 `frontend/` 中运行 `npm test`、`npm run type-check`、`npm run build`。普通自动化使用 fake/deterministic providers，不应调用真实 API。
 
-冻结基线提交前记录的后端验证为 **1,904 passed**。这是一次离线回归结果，不是线上可用性指标；本次文档整理不会重新宣称全套测试已运行。
+在具备 bash 的环境中可用 `DATABASE_URL=... bash scripts/verify.sh` 一次跑完上述检查；CI 定义见 `.github/workflows/ci.yml`。若在 Gitee Go 上使用，把 `scripts/verify.sh` 的 `backend` 与 `frontend` 两个入口分别配到流水线步骤即可。
+
+冻结基线提交前记录的后端验证为 **1,904 passed**。这是一次离线回归结果，不是线上可用性指标；本次文档整理不会重新宣称全套测试已运行。此后各轮验证结果以 [技术债实时账本](docs/technical-debt.md) 与 CI 记录为准。
 
 ## 真实 benchmark 证据
 

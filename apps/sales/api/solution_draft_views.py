@@ -25,7 +25,9 @@ from apps.sales.services.solution_review import (
     submit_solution_draft_for_review,
 )
 
-from .opportunity_access import OpportunityVisibilityMixin, visible_solution_drafts_for
+from apps.sales.services.visibility import visible_solution_drafts_for
+
+from .opportunity_access import OpportunityVisibilityMixin
 from .pagination import DefaultPageNumberPagination
 from .permissions import SolutionDraftPermission
 from .solution_draft_serializers import (

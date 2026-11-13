@@ -718,6 +718,24 @@ def test_invalid_idempotency_key_is_a_safe_request_error(workflow_api_context):
     assert "traceback" not in repr(response.json()).lower()
 
 
+@pytest.mark.parametrize("header", [None, "", "   "])
+def test_start_requires_an_explicit_idempotency_key(workflow_api_context, header):
+    client = _client(workflow_api_context["sales"])
+    extra = {} if header is None else {"HTTP_IDEMPOTENCY_KEY": header}
+
+    response = client.post(
+        _start_url(workflow_api_context),
+        {"analysis_id": workflow_api_context["analysis"].pk},
+        format="json",
+        **extra,
+    )
+
+    assert response.status_code == 400
+    assert "idempotency_key" in repr(response.json()).lower()
+    assert not SolutionDraftRecord.objects.exists()
+    assert not workflow_api_context["generation_calls"]
+
+
 def test_business_database_approved_state_overrides_checkpoint(workflow_api_context):
     pending = _reach_presales(workflow_api_context)
     draft = SolutionDraftRecord.objects.get(pk=pending["solution_draft_id"])

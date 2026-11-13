@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pytest
 from django.db import close_old_connections, connection
+from django.db.utils import OperationalError
 from django.utils import timezone
 
 from apps.knowledge.models import EnterpriseGroundingFact, KnowledgeChunk, KnowledgeDocument
@@ -733,3 +734,57 @@ def test_unsuccessful_generation_creates_no_persistence(
 
     assert SolutionDraftRecord.objects.count() == 0
     assert SolutionDraftProvenance.objects.count() == 0
+
+
+class _RecordingCursor:
+    def __init__(self, *, fail_lock=False):
+        self.statements = []
+        self.fail_lock = fail_lock
+
+    def execute(self, sql, params=None):
+        self.statements.append((sql, params))
+        if self.fail_lock and "pg_advisory_lock(" in sql and "try" not in sql:
+            raise OperationalError("canceling statement due to lock timeout")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+
+def _patch_cursor(monkeypatch, cursor):
+    from apps.sales.services import solution_persistence
+
+    monkeypatch.setattr(solution_persistence.connection, "cursor", lambda: cursor)
+
+
+def test_generation_lock_bounds_wait_and_restores_session(monkeypatch):
+    from apps.sales.services.solution_persistence import _generation_idempotency_lock
+
+    cursor = _RecordingCursor()
+    _patch_cursor(monkeypatch, cursor)
+
+    with _generation_idempotency_lock(uuid4()):
+        pass
+
+    assert any("SET lock_timeout" in sql for sql, _ in cursor.statements)
+    assert any("RESET lock_timeout" in sql for sql, _ in cursor.statements)
+    assert any("pg_advisory_unlock(" in sql for sql, _ in cursor.statements)
+
+
+def test_generation_lock_timeout_fails_closed_without_unlock(monkeypatch):
+    from apps.sales.services.solution_persistence import (
+        SolutionPersistenceError,
+        _generation_idempotency_lock,
+    )
+
+    cursor = _RecordingCursor(fail_lock=True)
+    _patch_cursor(monkeypatch, cursor)
+
+    with pytest.raises(SolutionPersistenceError):
+        with _generation_idempotency_lock(uuid4()):
+            pass
+
+    assert not any("pg_advisory_unlock(" in sql for sql, _ in cursor.statements)
+    assert any("RESET lock_timeout" in sql for sql, _ in cursor.statements)

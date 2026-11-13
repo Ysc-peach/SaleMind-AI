@@ -20,7 +20,7 @@ from apps.knowledge.models import (
     KnowledgeDocument,
     KnowledgeDocumentStatus,
 )
-from apps.sales.api.opportunity_access import visible_opportunities_for
+from apps.sales.services.visibility import visible_opportunities_for
 from apps.sales.models import (
     Customer,
     Opportunity,

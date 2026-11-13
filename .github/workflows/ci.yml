@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  backend:
+    name: Django checks and pytest
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: salesmind_ci
+          POSTGRES_USER: salesmind
+          POSTGRES_PASSWORD: salesmind
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U salesmind -d salesmind_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://salesmind:salesmind@localhost:5432/salesmind_ci
+      DJANGO_SETTINGS_MODULE: config.settings.test
+      TEST_DATABASE_TEMPLATE: salesmind_test_template
+      PYTHON: python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Prepare the pgvector test template
+        env:
+          PGPASSWORD: salesmind
+        run: |
+          psql -h localhost -U salesmind -d salesmind_ci -c "CREATE EXTENSION IF NOT EXISTS vector;"
+          psql -h localhost -U salesmind -d postgres -c "CREATE DATABASE salesmind_test_template;"
+          psql -h localhost -U salesmind -d salesmind_test_template -c "CREATE EXTENSION IF NOT EXISTS vector;"
+      - name: Verify backend
+        run: bash scripts/verify.sh backend
+
+  frontend:
+    name: Vitest and Vite build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Verify frontend
+        run: bash scripts/verify.sh frontend

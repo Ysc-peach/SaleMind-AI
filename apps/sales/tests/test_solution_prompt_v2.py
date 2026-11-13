@@ -163,6 +163,7 @@ def test_timing_can_only_arrive_as_a_cited_proposal_candidate():
                 },
                 "text": "建议实施周期为两周。",
                 "citations": ["S1"],
+                "related_requirement_fields": [RequirementDimension.TIMELINE.value],
             }
         ]
     }
@@ -170,6 +171,9 @@ def test_timing_can_only_arrive_as_a_cited_proposal_candidate():
     result = parse(payload)
 
     assert result.proposals[0].placement.field.value == "timing"
+    assert result.proposals[0].related_requirement_fields == (
+        RequirementDimension.TIMELINE,
+    )
     assert not hasattr(result.proposals[0], "timing_classification")
 
 

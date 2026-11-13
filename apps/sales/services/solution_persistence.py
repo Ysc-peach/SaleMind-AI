@@ -12,6 +12,7 @@ from uuid import UUID
 from django.contrib.auth import get_user_model
 from django.db import connection, models, transaction
 from django.db.transaction import TransactionManagementError
+from django.db.utils import OperationalError
 from django.utils import timezone
 
 from apps.knowledge.embeddings.base import EmbeddingProvider
@@ -286,7 +287,17 @@ def _generation_idempotency_lock(idempotency_key: UUID):
         signed=True,
     )
     with connection.cursor() as cursor:
-        cursor.execute("SELECT pg_advisory_lock(%s)", [lock_id])
+        cursor.execute("SET lock_timeout = '5s'")
+        try:
+            cursor.execute("SELECT pg_advisory_lock(%s)", [lock_id])
+        except OperationalError as exc:
+            # A concurrent run holds the lock: fail closed instead of blocking a
+            # worker until the other generation finishes.
+            raise SolutionPersistenceError(
+                "The same generation is already in progress; retry later."
+            ) from exc
+        finally:
+            cursor.execute("RESET lock_timeout")
     try:
         yield
     finally:

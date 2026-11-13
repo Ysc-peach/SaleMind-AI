@@ -196,3 +196,69 @@ def test_all_managed_placements_convert_when_linkage_is_present():
     assert core.proposals
     assert len(implementation.proposals) == 6
     assert len(assurance.proposals) == 6
+
+
+LEGACY_MANAGED_CASES = [
+    ("implementation_plan", "implementation_phase", "phase_one", "objective"),
+    ("implementation_plan", "implementation_phase", "phase_one", "tasks"),
+    ("implementation_plan", "implementation_phase", "phase_one", "deliverables"),
+    ("implementation_plan", "implementation_phase", "phase_one", "timing"),
+    ("risks", "risk", "interface_change", "condition"),
+    ("risks", "risk", "interface_change", "impact"),
+    ("risks", "risk", "interface_change", "mitigation"),
+    ("milestones", "milestone", "ready", "outcome"),
+]
+
+
+def _legacy_proposal(section, kind, key, field, *, related=("business_goal",)):
+    return {
+        "placement": {
+            "section": section,
+            "container_kind": kind,
+            "container_key": key,
+            "field": field,
+        },
+        "text": "Confirm the condition before build.",
+        "citations": ["S1"],
+        "related_requirement_fields": list(related),
+    }
+
+
+def _parse_legacy(proposal):
+    from apps.sales.services.solution_prompt_v2 import parse_atomic_solution_v2_proposals
+
+    return parse_atomic_solution_v2_proposals(
+        json.dumps({"proposals": [proposal], "structure_relations": []}),
+        allowed_source_labels=("S1",),
+    )
+
+
+@pytest.mark.parametrize("section,kind,key,field", LEGACY_MANAGED_CASES)
+def test_legacy_atomic_parser_rejects_empty_managed_linkage(section, kind, key, field):
+    with pytest.raises(SolutionDraftError) as caught:
+        _parse_legacy(_legacy_proposal(section, kind, key, field, related=()))
+
+    evidence = caught.value.contract_failure
+    assert evidence.category == "invalid_requirement_link"
+    assert evidence.json_path == "$.proposals[0].related_requirement_fields"
+    assert evidence.actual == "empty"
+
+
+@pytest.mark.parametrize("section,kind,key,field", LEGACY_MANAGED_CASES)
+def test_legacy_atomic_parser_rejects_missing_managed_linkage(section, kind, key, field):
+    proposal = _legacy_proposal(section, kind, key, field)
+    del proposal["related_requirement_fields"]
+
+    with pytest.raises(SolutionDraftError) as caught:
+        _parse_legacy(proposal)
+
+    assert caught.value.contract_failure.category == "missing_required_key"
+
+
+def test_legacy_atomic_parser_keeps_unmanaged_linkage_optional():
+    proposal = _legacy_proposal(
+        "proposed_solution", "root", None, "overview", related=(),
+    )
+    del proposal["related_requirement_fields"]
+
+    assert _parse_legacy(proposal).proposals

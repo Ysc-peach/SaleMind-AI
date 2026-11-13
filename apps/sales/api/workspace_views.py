@@ -12,7 +12,7 @@ from apps.sales.models import (
     SolutionReviewStatus,
 )
 
-from .opportunity_access import visible_opportunities_for
+from apps.sales.services.visibility import visible_opportunities_for
 from .permissions import ReviewerInboxPermission, SalesWorkspacePermission
 from .serializers import OpportunityListSerializer, user_display_name
 

@@ -1,5 +1,38 @@
 # Technical Debt Register
 
+## Live status ledger (2026-11-12)
+
+`docs/code-review-2026-10-21.md` is a dated snapshot, not a live register.
+Several findings in it have since been fixed, and one was re-checked and found
+to be a deliberate boundary. When this table and that report disagree, the
+current source code and tests are authoritative.
+
+| ID | Issue | Status | Evidence |
+| --- | --- | --- | --- |
+| P1-1 | Empty `requirement linkage` disables the unresolved guard | **FIXED** | Semantic IR already used `MANAGED_LINKAGE_PLACEMENTS`; the legacy Atomic parser was the last gap. `solution_prompt_v2.py` now requires a non-empty link for the eight managed placements, and the prompt says so. 17 new tests, mutation-verified. |
+| P1-2 | No global rate limiting | **FIXED** | `config/settings/base.py` declares the throttle classes and nine scoped rates; `production.py` refuses to start without them. |
+| P2-1 | Optional idempotency key allows duplicate generation | **FIXED** | `solution_workflow_views.py` rejects a missing or blank `Idempotency-Key` instead of generating a server-side `uuid4()`. Three regression tests. The model field stays nullable for historical rows. |
+| P2-2 | Advisory lock has no timeout | **FIXED** | `solution_persistence.py` sets `lock_timeout = '5s'`, fails closed with `SolutionPersistenceError` on timeout, and resets the session setting. Two regression tests, mutation-verified. |
+| P2-3 | Non-atomic provenance revalidation could persist a false stale verdict | **FIXED** | `refresh_solution_draft_staleness` locks draft, provenance, document and fact rows in document-then-fact order inside one transaction. |
+| P2-4 | No explicit request-body limit on upload | **OPEN, DOWNGRADED** | The 20 MB business limit is checked after parsing; Django's default thresholds spool larger files to disk, so the risk is disk I/O rather than memory exhaustion. |
+| P2-5 | Every export error reported as 503 | **OPEN** | `solution_export_views.py` still maps all render exceptions to `solution_export_unavailable`. |
+| P2-6 | Export object URL revoked too early | **FIXED** | `frontend/src/utils/download.ts` delays `revokeObjectURL`. |
+| P2-7 | Refresh-token race logs out a new session | **NOT APPLICABLE** | `ROTATE_REFRESH_TOKENS = False` and the refresh endpoint has its own throttle scope; there is no rotation race in the current configuration. |
+| P2-8 | JWT tokens cannot be revoked | **OPEN** | No `token_blacklist` app, `BLACKLIST_AFTER_ROTATION = False`; an access token stays valid until it expires. |
+| P2-9 | No document-level visibility in the knowledge base | **OPEN** | `KnowledgeDocument` has no visibility field and search does not filter by role. |
+| P2-10 | Knowledge API and Admin use different permission gates | **REVIEWED / BY DESIGN** | The API exposes list/create/retrieve/reindex only; no approval endpoint exists. `IsBusinessAdmin` checks the business role, and a dedicated test proves `is_staff`/`is_superuser` cannot bypass it. Requiring `is_staff` in the API would make business authority depend on a technical flag. |
+| P3-1 | Initial indexing has no crash takeover | **PARTIAL** | The manual `reset_stalled_indexing` Admin operation exists; automatic takeover does not. |
+| P3-2 | Unique-constraint conflicts return 500 | **PARTIAL** | `solution_review.py` and `grounding_fact_attempts.py` handle `IntegrityError`; there is no global 409 mapping for other paths. |
+| P3-3 | Oversized single file | **OPEN** | `solution_prompt_v2.py` is 1,625 lines, `solution_schema_v2.py` 1,225, `solution_grounding.py` 1,051. |
+| P3-4 | Default verifier is not independent | **OPEN / DOCUMENTED** | An empty `VERIFIER_PROVIDER` falls back to the generation provider for backwards compatibility. |
+| P3-5 | Stale historical review reports | **ADDRESSED HERE** | `docs/code-review-2026-08-29.md` remains protected and unmodified; this ledger supersedes the 2026-10-21 snapshot. |
+| P3-6 | Uncommitted workspace changes | **OPEN** | The fixes above are not committed yet. |
+
+Additional changes in this cycle: object visibility now lives in
+`apps/sales/services/visibility.py` (services no longer import from the API
+layer), and `scripts/verify.sh` plus `.github/workflows/ci.yml` provide one
+reproducible verification entrypoint.
+
 ## Reading this historical register at the frozen delivery baseline
 
 At `1141281c07b2f5f92d51151fc9b2f0803814ef60`, Solution V2 uses three-pass

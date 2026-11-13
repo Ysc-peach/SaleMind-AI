@@ -8,7 +8,7 @@ from django.contrib.auth import get_user_model
 from rest_framework.exceptions import NotFound, PermissionDenied
 
 from apps.accounts.models import UserRole
-from apps.sales.api.opportunity_access import visible_solution_drafts_for
+from apps.sales.services.visibility import visible_solution_drafts_for
 from apps.sales.models import SolutionReviewDecisionStatus, SolutionReviewStatus
 from apps.sales.services.solution_payloads import deserialize_solution_payload, SolutionPayloadError
 from apps.sales.services.solution_persistence import evaluate_solution_draft_stale_reasons, _iter_cited_statements

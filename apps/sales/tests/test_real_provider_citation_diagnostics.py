@@ -26,6 +26,7 @@ def _implementation_payload(citations):
             },
             "text": "Sensitive customer text must not enter diagnostics.",
             "citations": citations,
+            "related_requirement_fields": ["business_goal"],
         }],
         "structure_relations": [],
     })

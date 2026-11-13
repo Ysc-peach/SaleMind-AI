@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from uuid import UUID, uuid4, uuid5
+from uuid import UUID, uuid5
 
 from django.core.exceptions import ObjectDoesNotExist
 from langgraph.types import Command
@@ -35,7 +35,10 @@ from apps.sales.services.solution_workflow_checkpoint import (
 )
 
 from config.throttling import ScopedActionThrottleMixin
-from .opportunity_access import visible_opportunities_for, visible_solution_drafts_for
+from apps.sales.services.visibility import (
+    visible_opportunities_for,
+    visible_solution_drafts_for,
+)
 from .permissions import SolutionDraftPermission
 from .solution_workflow_serializers import (
     SolutionWorkflowResumeSerializer,
@@ -232,8 +235,11 @@ class SolutionWorkflowDetailViewSet(
 
 def _workflow_id_for_request(request, *, opportunity_id: int, analysis_id: int) -> UUID:
     raw_key = request.headers.get("Idempotency-Key")
-    if raw_key is None:
-        return uuid4()
+    if raw_key is None or not raw_key.strip():
+        # A server-generated key would make every replay a new paid generation.
+        raise ValidationError(
+            {"idempotency_key": "Idempotency-Key is required."}
+        )
     try:
         key = UUID(raw_key)
     except (TypeError, ValueError, AttributeError) as exc:

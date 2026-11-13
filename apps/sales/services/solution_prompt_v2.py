@@ -46,6 +46,7 @@ from apps.sales.services.solution_generation_contract import (
     IMPLEMENTATION_SECTION_PROPOSAL_LIMITS,
     ASSURANCE_SECTION_PROPOSAL_LIMITS,
     LOCAL_REF,
+    MANAGED_LINKAGE_PLACEMENTS,
     SEMANTIC_IR_VERSION,
     SEMANTIC_ROOT_KEYS,
     validate_claim_fields,
@@ -304,7 +305,7 @@ placement 只用于把 proposal 放入程序控制的结构，不得在 containe
 - out_of_scope/scope/scope
 root 的 container_key 必须为 null；其他 container_key 只能是简短的小写结构标识符。
 
-每条 proposal 必须输出 related_requirement_fields，表示该 proposal 直接回应的客户需求或约束维度。只能使用程序提供的 RequirementDimension 合法值：__REQUIREMENT_DIMENSIONS__。不得为了凑关联而乱填；若没有直接对应的已知 requirement，必须输出空数组 []。
+每条 proposal 必须输出 related_requirement_fields，表示该 proposal 直接回应的客户需求或约束维度。只能使用程序提供的 RequirementDimension 合法值：__REQUIREMENT_DIMENSIONS__。不得为了凑关联而乱填；若没有直接对应的已知 requirement，输出空数组 []。但 implementation_plan 的 objective、tasks、deliverables、timing，risks 的 condition、impact、mitigation，以及 milestones 的 outcome 属于受管关联位置，必须至少给出一个维度；确实没有可对应维度时不要生成该条 proposal。
 
 structure_relations 只声明结构容器之间的关系，不承载新的业务文本。仅允许 component_dependency、component_request_flow、component_data_flow、phase_dependency、phase_acceptance、milestone_phase。每条关系必须包含 relation_type、source_container_kind、source_container_key、target_container_kind、target_container_key，并且只能引用 proposals 中已声明的 container_key。component_dependency 和 phase_dependency 表示 source 依赖 target；依赖不得重复、自引用或形成环。component_request_flow 表示请求从 source 进入 target，component_data_flow 表示数据从 source 传递、读取或写入 target；flow 不得重复或自引用，但允许相反方向的边和合法循环。interface proposal 表达交互语义，dependency、request flow、data flow 三者不得混淆。
 
@@ -1239,10 +1240,22 @@ def parse_atomic_solution_v2_proposals(
                 _invalid()
         elif not isinstance(container_key, str) or _CONTAINER_KEY.fullmatch(container_key) is None:
             _invalid()
+        managed_linkage = (
+            (section.value, container_kind.value, field.value)
+            in MANAGED_LINKAGE_PLACEMENTS
+        )
         claim_text, citations, related_requirement_fields = validate_claim_fields(
             {key: value for key, value in item.items() if key != "placement"},
-            allowed_source_labels=allowed_source_labels, path=path, require_linkage=False,
+            allowed_source_labels=allowed_source_labels, path=path,
+            require_linkage=managed_linkage,
         )
+        if managed_linkage and not related_requirement_fields:
+            # Same contract as the Semantic IR parser: an empty linkage would
+            # leave the unresolved policy and its guard with nothing to inspect.
+            reject_contract(
+                "invalid_requirement_link", path + ".related_requirement_fields",
+                "at least one RequirementDimension for this placement", "empty",
+            )
         proposals.append(AtomicSolutionProposalV2(
             placement=SolutionV2Placement(section, container_kind, container_key, field),
             text=claim_text,

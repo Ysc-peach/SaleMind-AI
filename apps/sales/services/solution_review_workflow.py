@@ -21,7 +21,7 @@ from langgraph.types import interrupt
 from apps.accounts.models import UserRole
 from apps.knowledge.exceptions import KnowledgeDocumentError
 from apps.llm.exceptions import LLMErrorCode, LLMProviderError
-from apps.sales.api.opportunity_access import visible_opportunities_for
+from apps.sales.services.visibility import visible_opportunities_for
 from apps.sales.models import (
     Opportunity,
     OpportunityRequirementAnalysis,
