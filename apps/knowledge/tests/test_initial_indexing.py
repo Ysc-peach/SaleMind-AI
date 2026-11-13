@@ -1,5 +1,6 @@
 """Initial knowledge indexing orchestration contracts."""
 
+from datetime import timedelta
 from hashlib import sha256
 from uuid import uuid4
 
@@ -214,16 +215,17 @@ def test_pending_document_is_indexed_into_ready_traceable_chunks(make_document):
 
 
 @pytest.mark.parametrize(
-    ("status", "state_fields"),
+    ("status", "state_fields", "expected_code"),
     [
-        ("ready", {"last_indexed_at": timezone.now()}),
-        ("failed", {}),
+        ("ready", {"last_indexed_at": timezone.now()}, "invalid_indexing_state"),
+        ("failed", {}, "invalid_indexing_state"),
         (
             "processing",
             {
                 "indexing_run_id": uuid4(),
                 "processing_started_at": timezone.now(),
             },
+            "indexing_already_in_progress",
         ),
     ],
 )
@@ -231,6 +233,7 @@ def test_initial_indexing_rejects_non_pending_state(
     make_document,
     status,
     state_fields,
+    expected_code,
 ):
     from apps.knowledge.services.indexing import index_document
 
@@ -243,7 +246,7 @@ def test_initial_indexing_rejects_non_pending_state(
         )
 
     document.refresh_from_db()
-    assert exc_info.value.code == "invalid_indexing_state"
+    assert exc_info.value.code == expected_code
     assert document.status == status
     assert document.chunks.count() == 0
 
@@ -623,3 +626,45 @@ def test_default_provider_is_resolved_by_factory_without_network(
     assert document.embedding_provider == provider.provider_name
     assert document.embedding_model == provider.model_name
     assert document.embedding_dimensions == provider.dimensions
+
+
+def test_stalled_initial_indexing_can_be_taken_over(make_document, settings):
+    from apps.knowledge.services import indexing
+
+    settings.KNOWLEDGE_INDEXING_STALE_TIMEOUT_SECONDS = 3600
+    document = make_document(
+        status="processing",
+        indexing_run_id=uuid4(),
+        processing_started_at=timezone.now() - timedelta(hours=2),
+    )
+
+    indexing.index_document(document.pk, provider=DeterministicEmbeddingProvider())
+
+    document.refresh_from_db()
+    assert document.status == "ready"
+    assert document.indexing_run_id is None
+    assert document.processing_started_at is None
+    assert document.chunk_count > 0
+
+
+def test_fresh_processing_document_is_not_taken_over(make_document, settings):
+    from apps.knowledge.services import indexing
+
+    settings.KNOWLEDGE_INDEXING_STALE_TIMEOUT_SECONDS = 3600
+    document = make_document(
+        status="processing",
+        indexing_run_id=uuid4(),
+        processing_started_at=timezone.now(),
+    )
+
+    with pytest.raises(KnowledgeDocumentError) as exc_info:
+        indexing.index_document(
+            document.pk, provider=DeterministicEmbeddingProvider(),
+        )
+
+    assert (
+        exc_info.value.code
+        == KnowledgeDocumentErrorCode.INDEXING_ALREADY_IN_PROGRESS
+    )
+    document.refresh_from_db()
+    assert document.status == "processing"

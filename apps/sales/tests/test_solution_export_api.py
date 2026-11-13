@@ -80,15 +80,28 @@ def test_change_document_title_during_render_returns_changed(make_export_case,mo
     assert response.json()['code'] == 'solution_export_changed'
 
 
-def test_render_failure_is_safe_json_without_payload(make_export_case,monkeypatch):
+def test_render_failure_is_reported_as_invalid_payload_not_outage(make_export_case,monkeypatch):
     from apps.sales.api import solution_export_views
     case = make_export_case()
     def failed(*args,**kwargs):
         raise RuntimeError('PRIVATE_BODY_DO_NOT_LOG')
     monkeypatch.setattr(solution_export_views,'render_export',failed)
     response = client(case.owner).get(url(case))
+    assert response.status_code == 422
+    assert response.json() == {'code':'solution_export_invalid_payload'}
+    assert 'PRIVATE_BODY_DO_NOT_LOG' not in response.content.decode()
+
+
+def test_snapshot_failure_remains_a_service_outage(make_export_case,monkeypatch):
+    from apps.sales.api import solution_export_views
+    case = make_export_case()
+    def failed(*args,**kwargs):
+        raise RuntimeError('PRIVATE_BODY_DO_NOT_LOG')
+    monkeypatch.setattr(solution_export_views,'load_export_snapshot',failed)
+    response = client(case.owner).get(url(case))
     assert response.status_code == 503
     assert response.json() == {'code':'solution_export_unavailable'}
+    assert 'PRIVATE_BODY_DO_NOT_LOG' not in response.content.decode()
 
 
 def test_export_does_not_refresh_or_mutate_stale_metadata(make_export_case,monkeypatch):

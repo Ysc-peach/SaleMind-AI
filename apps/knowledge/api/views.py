@@ -1,5 +1,6 @@
 """Views for Knowledge Document management and authenticated search."""
 
+from django.conf import settings
 from rest_framework import mixins, status, viewsets
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
@@ -13,7 +14,7 @@ from apps.knowledge.exceptions import (
 from apps.knowledge.models import KnowledgeDocument
 from apps.knowledge.services import indexing, search
 
-from .errors import KnowledgeAPIError
+from .errors import KnowledgeAPIError, PayloadTooLargeError
 from .pagination import KnowledgeDocumentPagination
 from .permissions import IsBusinessAdmin, IsKnowledgeSearchUser
 from .serializers import (
@@ -31,12 +32,34 @@ _REINDEX_CONFLICT_CODES = {
 }
 _INITIAL_INDEX_CONFLICT_CODES = {
     KnowledgeDocumentErrorCode.INVALID_INDEXING_STATE.value,
+    KnowledgeDocumentErrorCode.INDEXING_ALREADY_IN_PROGRESS.value,
     KnowledgeDocumentErrorCode.INDEXING_RUN_CONFLICT.value,
 }
 _EMBEDDING_CONFIGURATION_CODES = {
     KnowledgeDocumentErrorCode.EMBEDDING_NOT_CONFIGURED.value,
     KnowledgeDocumentErrorCode.UNSUPPORTED_EMBEDDING_PROVIDER.value,
 }
+# Multipart boundaries, filenames and form fields travel with the file itself.
+_MAX_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
+
+
+def enforce_body_limit(request) -> None:
+    """Reject an oversized upload from Content-Length before any parsing.
+
+    The serializer's own limit is checked only after the body was received, so
+    without this a caller could make the server spool an arbitrary file to disk.
+    """
+
+    raw_length = request.META.get("CONTENT_LENGTH")
+    if not raw_length:
+        return
+    try:
+        length = int(raw_length)
+    except (TypeError, ValueError):
+        return
+    limit = settings.KNOWLEDGE_MAX_FILE_SIZE_BYTES + _MAX_MULTIPART_OVERHEAD_BYTES
+    if length > limit:
+        raise PayloadTooLargeError()
 
 
 class KnowledgeDocumentViewSet(
@@ -64,6 +87,7 @@ class KnowledgeDocumentViewSet(
         return KnowledgeDocumentReadSerializer
 
     def create(self, request, *args, **kwargs):
+        enforce_body_limit(request)
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         document = serializer.save(created_by=request.user)

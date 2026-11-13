@@ -36,4 +36,5 @@ def render_export(document: ExportDocument, *, file_type: Literal['docx','pdf'])
         raise
     except Exception:
         # Never log the renderer's message/stack: it can contain document text.
-        raise SolutionExportError('solution_export_unavailable') from None
+        # A renderer defect is a payload problem, not an infrastructure outage.
+        raise SolutionExportError('solution_export_invalid_payload') from None

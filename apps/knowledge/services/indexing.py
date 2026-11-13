@@ -130,7 +130,23 @@ def _start_indexing(document_id: int) -> tuple[KnowledgeDocument, UUID]:
     run_id = uuid4()
     with transaction.atomic():
         document = KnowledgeDocument.objects.select_for_update().get(pk=document_id)
-        if document.status != KnowledgeDocument.Status.PENDING:
+        if document.status == KnowledgeDocument.Status.PROCESSING:
+            started_at = timezone.now()
+            stale_timeout = timedelta(
+                seconds=settings.KNOWLEDGE_INDEXING_STALE_TIMEOUT_SECONDS
+            )
+            if (
+                document.processing_started_at is not None
+                and started_at - document.processing_started_at < stale_timeout
+            ):
+                raise KnowledgeDocumentError(
+                    KnowledgeDocumentErrorCode.INDEXING_ALREADY_IN_PROGRESS
+                )
+            # Past the timeout the worker is presumed gone. The run id is
+            # replaced here, so a late completion from the old worker fails
+            # closed with INDEXING_RUN_CONFLICT instead of writing a second
+            # index; a document without a heartbeat is treated the same way.
+        elif document.status != KnowledgeDocument.Status.PENDING:
             raise KnowledgeDocumentError(
                 KnowledgeDocumentErrorCode.INVALID_INDEXING_STATE
             )

@@ -46,7 +46,9 @@ def render_pdf(document) -> bytes:
 
     def paragraph(text,style=normal):
         if any(ord(c) not in glyphs and c not in '\n\r\t' for c in text):
-            raise SolutionExportError('solution_export_unavailable')
+            # The bundled font cannot draw this content: a payload defect, not
+            # a service outage.
+            raise SolutionExportError('solution_export_invalid_payload')
         return Paragraph(escape(text).replace('\n','<br/>'),style)
 
     story = [paragraph(document.title,title_style)]

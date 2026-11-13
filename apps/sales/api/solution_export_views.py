@@ -32,8 +32,15 @@ class SolutionExportAPIView(APIView):
             version = snapshot.version
             if len(request.query_params.getlist('file_type')) != 1 or file_type not in MIMES:
                 raise SolutionExportError('solution_export_unsupported_format')
-            document = build_export_document(snapshot)
-            content = render_export(document,file_type=file_type)
+            try:
+                document = build_export_document(snapshot)
+                content = render_export(document,file_type=file_type)
+            except SolutionExportError:
+                raise
+            except Exception as error:
+                # A payload or template defect is not an infrastructure outage.
+                # Never surface the renderer's message: it can contain正文.
+                raise SolutionExportError('solution_export_invalid_payload') from error
             with transaction.atomic():
                 revalidate_export_snapshot(snapshot,actor_id=request.user.pk)
             response = HttpResponse(content,content_type=MIMES[file_type])

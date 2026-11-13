@@ -1008,6 +1008,41 @@ def test_document_mutation_methods_are_not_exposed(
     assert response.status_code == 405
 
 
+def test_oversized_request_is_rejected_before_parsing(
+    api_client, user_factory, settings, monkeypatch,
+):
+    from apps.knowledge.api import views
+
+    settings.KNOWLEDGE_MAX_FILE_SIZE_BYTES = 16
+    monkeypatch.setattr(views, "_MAX_MULTIPART_OVERHEAD_BYTES", 0)
+    api_client.force_authenticate(user=user_factory(UserRole.ADMIN))
+
+    response = api_client.post(
+        DOCUMENTS_URL,
+        {
+            "title": "Oversized document",
+            "document_type": "technical",
+            "file": SimpleUploadedFile(
+                "big.txt", b"x" * 4096, content_type="text/plain",
+            ),
+        },
+        format="multipart",
+    )
+
+    assert response.status_code == 413
+    assert response.json()["code"] == "payload_too_large"
+
+
+def test_body_limit_ignores_missing_or_invalid_content_length():
+    from types import SimpleNamespace
+
+    from apps.knowledge.api.views import enforce_body_limit
+
+    enforce_body_limit(SimpleNamespace(META={}))
+    enforce_body_limit(SimpleNamespace(META={"CONTENT_LENGTH": ""}))
+    enforce_body_limit(SimpleNamespace(META={"CONTENT_LENGTH": "not-a-number"}))
+
+
 def test_knowledge_admin_registers_documents_but_not_mutable_chunks():
     from django.contrib import admin
 
