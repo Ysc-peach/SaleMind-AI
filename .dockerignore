@@ -1,0 +1,14 @@
+.git
+.venv
+.env
+.workbuddy
+.github
+**/__pycache__
+**/*.pyc
+frontend/node_modules
+frontend/dist
+media
+staticfiles
+docs
+.pytest_cache
+*.log

@@ -131,6 +131,50 @@ git diff --check
 
 冻结基线提交前记录的后端验证为 **1,904 passed**。这是一次离线回归结果，不是线上可用性指标；本次文档整理不会重新宣称全套测试已运行。此后各轮验证结果以 [技术债实时账本](docs/technical-debt.md) 与 CI 记录为准。
 
+## 内网部署（Docker Compose）
+
+适用场景：公司内网单机部署，用户通过浏览器访问。
+
+```powershell
+# 1. 准备 .env（见下方必需变量），然后启动
+$env:POSTGRES_PASSWORD = '<强密码>'
+docker compose up -d --build
+```
+
+启动顺序由 compose 保证：`db` 健康后才启动 `web`，`web` 的 `/healthz` 通过后才启动 `nginx`。`web` 的入口脚本会先执行 `migrate` 与 `collectstatic`，再启动 gunicorn。默认入口是 `http://<主机>:8080`。
+
+`production.py` 是 fail-closed 的，缺失以下任一变量会直接启动失败，这是有意设计：
+
+| 变量 | 说明 |
+|---|---|
+| `DJANGO_SECRET_KEY` / `JWT_SIGNING_KEY` | 签名密钥，必须足够长且不入库 |
+| `DJANGO_ALLOWED_HOSTS` | 例：`salesmind.internal,10.0.0.12` |
+| `DJANGO_CSRF_TRUSTED_ORIGINS` | 必须带 scheme，例：`http://salesmind.internal:8080` |
+| `DRF_NUM_PROXIES` | 本进程之前的可信反代层数；compose 里是 nginx 一层，填 `1` |
+| 8 个 `THROTTLE_*_RATE` | 缺失即启动失败，防止默认值被当成有意配置 |
+| `EMBEDDING_*` / `LLM_*` / `VERIFIER_*` | provider 凭据与模型名 |
+
+内网若没有 TLS，必须显式声明，Django 才会关闭 HTTPS 跳转：
+
+```powershell
+DJANGO_INSECURE_HTTP=true
+```
+
+不设置时 `SECURE_SSL_REDIRECT` 保持开启，内网 HTTP 访问会被重定向到 `https://`。上 TLS 后请删除该变量。
+
+备份与恢复：
+
+```powershell
+$env:POSTGRES_PASSWORD = '<强密码>'
+sh scripts/backup.sh          # 生成 backups/db-*.dump 与 media-*.tar.gz
+```
+
+```powershell
+docker compose exec -T db pg_restore -U salesmind -d salesmind --clean --if-exists < backups/db-<时间>.dump
+```
+
+已知限制：生成链路目前是同步的，单次 95–98 秒；nginx 已把 `proxy_read_timeout` 放到 300 秒，但并发生成会占用 worker。异步化是下一阶段的必做项，见 [技术债](docs/technical-debt.md)。
+
 ## 真实 benchmark 证据
 
 后台资料管理的新源码入口与部署前提见 [Admin 知识文档与企业事实操作](docs/admin-knowledge-workflow.md)。

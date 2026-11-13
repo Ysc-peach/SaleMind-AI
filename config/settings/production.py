@@ -50,3 +50,14 @@ SECURE_HSTS_SECONDS = 31536000
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+# An intranet deployment without TLS is a supported but explicitly opt-in
+# mode. It must be requested by name, so a missing proxy or certificate can
+# never silently downgrade transport security.
+if os.environ.get("DJANGO_INSECURE_HTTP", "").strip().lower() in {"1", "true", "yes"}:
+    SECURE_SSL_REDIRECT = False
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SECURE = False
+    SECURE_HSTS_SECONDS = 0
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+    SECURE_HSTS_PRELOAD = False

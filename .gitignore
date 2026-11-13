@@ -19,6 +19,9 @@ venv/
 staticfiles/
 media/
 
+# Local database and media backups
+backups/
+
 # IDE and OS
 .idea/
 .vscode/
