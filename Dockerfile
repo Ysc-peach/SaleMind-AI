@@ -12,7 +12,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements ./requirements
-RUN pip install -r requirements/prod.txt
+
+# Intranets often reach PyPI slowly. The index is a build argument so a
+# deployment can point at an internal mirror without editing this file.
+ARG PIP_INDEX_URL=https://pypi.org/simple
+RUN pip install --timeout 120 --retries 5 --index-url "$PIP_INDEX_URL" \
+    -r requirements/prod.txt
 
 COPY . .
 

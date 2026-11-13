@@ -136,12 +136,24 @@ git diff --check
 适用场景：公司内网单机部署，用户通过浏览器访问。
 
 ```powershell
-# 1. 准备 .env（见下方必需变量），然后启动
-$env:POSTGRES_PASSWORD = '<强密码>'
-docker compose up -d --build
+# 1. 准备部署变量文件（不要提交），见下方必需变量
+#    .env.production.local 会覆盖 .env 中的同名配置
+# 2. 启动
+docker compose --env-file .env.production.local up -d --build
 ```
 
 启动顺序由 compose 保证：`db` 健康后才启动 `web`，`web` 的 `/healthz` 通过后才启动 `nginx`。`web` 的入口脚本会先执行 `migrate` 与 `collectstatic`，再启动 gunicorn。默认入口是 `http://<主机>:8080`。
+
+网络受限时可用镜像源，无需改代码：
+
+```powershell
+# .env.production.local
+PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+NPM_REGISTRY=https://registry.npmmirror.com
+PGVECTOR_IMAGE=docker.m.daocloud.io/pgvector/pgvector:0.8.6-pg16-bookworm
+```
+
+`PGVECTOR_IMAGE` 用于 Docker Hub 不可达的网络；本地可先 `docker pull` 镜像站地址再打标签。
 
 `production.py` 是 fail-closed 的，缺失以下任一变量会直接启动失败，这是有意设计：
 

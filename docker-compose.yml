@@ -2,7 +2,8 @@ name: salesmind
 
 services:
   db:
-    image: pgvector/pgvector:0.8.6-pg16-bookworm
+    # Override with a mirror prefix on networks that cannot reach Docker Hub.
+    image: ${PGVECTOR_IMAGE:-pgvector/pgvector:0.8.6-pg16-bookworm}
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-salesmind}
       POSTGRES_USER: ${POSTGRES_USER:-salesmind}
@@ -17,9 +18,17 @@ services:
     restart: unless-stopped
 
   web:
-    build: .
+    build:
+      context: .
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     env_file:
-      - .env
+      # Local developer settings first, then the deployment overrides. Both are
+      # optional so a fresh server can run from .env.production.local alone.
+      - path: .env
+        required: false
+      - path: .env.production.local
+        required: false
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.production
       DATABASE_URL: postgres://${POSTGRES_USER:-salesmind}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-salesmind}
@@ -39,6 +48,8 @@ services:
   nginx:
     build:
       context: ./frontend
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
     depends_on:
       web:
         condition: service_healthy
