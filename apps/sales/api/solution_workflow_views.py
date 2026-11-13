@@ -24,6 +24,10 @@ from apps.sales.services.solution_review import (
     recover_completed_solution_review,
     recover_pending_solution_review,
 )
+from apps.sales.services.solution_generation_capacity import (
+    GenerationCapacityReached,
+    generation_slot,
+)
 from apps.sales.services.solution_review_workflow import (
     SolutionWorkflowOutcome,
     SolutionWorkflowStage,
@@ -82,6 +86,23 @@ class SolutionWorkflowFailed(APIException):
         )
 
 
+class SolutionWorkflowCapacity(APIException):
+    """Every generation slot is busy; retrying later is the only safe action."""
+
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    default_code = "workflow_capacity_reached"
+
+    def __init__(self):
+        super().__init__(
+            {
+                "code": "workflow_capacity_reached",
+                "message": (
+                    "Another generation is already running. Retry in a minute."
+                ),
+            }
+        )
+
+
 class SolutionWorkflowCollectionViewSet(
     ScopedActionThrottleMixin,
     viewsets.GenericViewSet,
@@ -124,16 +145,20 @@ class SolutionWorkflowCollectionViewSet(
                     request.user,
                 )
                 return Response(projection)
-            result = graph.invoke(
-                {
-                    "workflow_run_id": str(workflow_id),
-                    "opportunity_id": opportunity.pk,
-                    "requirement_analysis_id": analysis.pk,
-                    "requested_by_id": request.user.pk,
-                    "workflow_stage": "ready",
-                },
-                config,
-            )
+            try:
+                with generation_slot():
+                    result = graph.invoke(
+                        {
+                            "workflow_run_id": str(workflow_id),
+                            "opportunity_id": opportunity.pk,
+                            "requirement_analysis_id": analysis.pk,
+                            "requested_by_id": request.user.pk,
+                            "workflow_stage": "ready",
+                        },
+                        config,
+                    )
+            except GenerationCapacityReached:
+                raise SolutionWorkflowCapacity() from None
             _raise_failed_outcome(result)
             projection = _project_workflow(
                 graph,

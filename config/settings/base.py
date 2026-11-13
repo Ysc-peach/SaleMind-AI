@@ -117,6 +117,13 @@ LANGGRAPH_CHECKPOINT_DATABASE_URL = env(
 # Structured solution drafts need more output space than ordinary LLM tasks.
 SOLUTION_DRAFT_MAX_OUTPUT_TOKENS = env.int("SOLUTION_DRAFT_MAX_OUTPUT_TOKENS", default=6000)
 
+# Generation is synchronous: one request holds a worker for 95-98 seconds. Keep
+# this below the gunicorn worker count so normal requests still get a worker.
+SOLUTION_GENERATION_MAX_CONCURRENT = env.int(
+    "SOLUTION_GENERATION_MAX_CONCURRENT",
+    default=2,
+)
+
 KNOWLEDGE_MAX_FILE_SIZE_BYTES = env.int(
     "KNOWLEDGE_MAX_FILE_SIZE_BYTES",
     default=20 * 1024 * 1024,

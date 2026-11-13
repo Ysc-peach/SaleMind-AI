@@ -401,6 +401,29 @@ def test_start_response_exposes_no_checkpoint_or_solution_payload(workflow_api_c
         assert forbidden not in serialized
 
 
+def test_start_returns_429_when_every_generation_slot_is_busy(
+    workflow_api_context, monkeypatch,
+):
+    from apps.sales.api import solution_workflow_views
+    from apps.sales.services.solution_generation_capacity import (
+        GenerationCapacityReached,
+    )
+
+    @contextmanager
+    def busy():
+        raise GenerationCapacityReached()
+        yield  # pragma: no cover - unreachable, keeps the contextmanager shape
+
+    monkeypatch.setattr(solution_workflow_views, "generation_slot", busy)
+
+    response = _start(workflow_api_context)
+
+    assert response.status_code == 429
+    assert response.json()["code"] == "workflow_capacity_reached"
+    assert not SolutionDraftRecord.objects.exists()
+    assert not workflow_api_context["generation_calls"]
+
+
 def test_duplicate_start_key_reuses_workflow_and_solution(workflow_api_context):
     key = uuid4()
 

@@ -173,7 +173,7 @@ sh scripts/backup.sh          # 生成 backups/db-*.dump 与 media-*.tar.gz
 docker compose exec -T db pg_restore -U salesmind -d salesmind --clean --if-exists < backups/db-<时间>.dump
 ```
 
-已知限制：生成链路目前是同步的，单次 95–98 秒；nginx 已把 `proxy_read_timeout` 放到 300 秒，但并发生成会占用 worker。异步化是下一阶段的必做项，见 [技术债](docs/technical-debt.md)。
+已知限制：生成链路目前是同步的，单次 95–98 秒；nginx 已把 `proxy_read_timeout` 放到 300 秒，但并发生成会占用 worker。`SOLUTION_GENERATION_MAX_CONCURRENT`（默认 2）通过 PostgreSQL advisory lock 限制同时生成数，超出的请求返回 429 `workflow_capacity_reached`，不会拖垮整个实例。它是止血措施，不是队列；异步化是下一阶段的必做项，见 [技术债](docs/technical-debt.md)。
 
 ## 真实 benchmark 证据
 

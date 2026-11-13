@@ -33,6 +33,13 @@ Additional changes in this cycle: object visibility now lives in
 layer), and `scripts/verify.sh` plus `.github/workflows/ci.yml` provide one
 reproducible verification entrypoint.
 
+Generation concurrency is now bounded by `SOLUTION_GENERATION_MAX_CONCURRENT`
+(default 2) through PostgreSQL advisory-lock slots. This is a stop-gap for the
+synchronous 95-98 second chain: a fourth simultaneous request receives 429
+`workflow_capacity_reached` instead of occupying the last worker. It is not a
+queue and does not shorten a single run; asynchronous generation remains the
+planned fix.
+
 ## Reading this historical register at the frozen delivery baseline
 
 At `1141281c07b2f5f92d51151fc9b2f0803814ef60`, Solution V2 uses three-pass
