@@ -48,6 +48,8 @@ export type ReturnReason = 'customer_info_required'|'technical_revision_required
 export interface Review {id:number;solution_draft:number;submitted_by:number;reviewer:number;status:string;return_reason:ReturnReason|'';comment:string;submitted_at:string;decided_at:string|null}
 
 export type SolutionWorkflowStatus =
+  | 'QUEUED'
+  | 'RUNNING'
   | 'GENERATING'
   | 'WAITING_FOR_SALES_CONFIRMATION'
   | 'WAITING_FOR_PRESALES_REVIEW'

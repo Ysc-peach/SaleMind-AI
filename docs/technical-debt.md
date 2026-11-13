@@ -33,12 +33,21 @@ Additional changes in this cycle: object visibility now lives in
 layer), and `scripts/verify.sh` plus `.github/workflows/ci.yml` provide one
 reproducible verification entrypoint.
 
-Generation concurrency is now bounded by `SOLUTION_GENERATION_MAX_CONCURRENT`
-(default 2) through PostgreSQL advisory-lock slots. This is a stop-gap for the
-synchronous 95-98 second chain: a fourth simultaneous request receives 429
-`workflow_capacity_reached` instead of occupying the last worker. It is not a
-queue and does not shorten a single run; asynchronous generation remains the
-planned fix.
+Generation concurrency is bounded by `SOLUTION_GENERATION_MAX_CONCURRENT`
+(default 2) through PostgreSQL advisory-lock slots: a fourth simultaneous
+request receives 429 `workflow_capacity_reached` instead of occupying the last
+worker.
+
+Asynchronous generation is implemented behind `SOLUTION_GENERATION_ASYNC`
+(default `false`). When enabled, `POST /solution-workflows/` writes a
+`SolutionGenerationJob` and answers 202 with the queue state; `GET` reports
+`QUEUED`/`RUNNING` until a draft exists, and `manage.py run_generation_worker`
+(or the compose `worker` service) executes the run. The synchronous path is
+unchanged and remains the default, so the switch is the rollback plan.
+
+Still open in this area: a stuck `RUNNING` job whose worker died keeps the row
+until an operator requeues it (`heartbeat_at` is recorded but not yet swept), and
+the verifier cost per draft is unchanged.
 
 ## Reading this historical register at the frozen delivery baseline
 

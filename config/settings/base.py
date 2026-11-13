@@ -124,6 +124,10 @@ SOLUTION_GENERATION_MAX_CONCURRENT = env.int(
     default=2,
 )
 
+# When enabled, the start endpoint enqueues a job and returns 202 instead of
+# holding the request for the whole chain. Requires run_generation_worker.
+SOLUTION_GENERATION_ASYNC = env.bool("SOLUTION_GENERATION_ASYNC", default=False)
+
 KNOWLEDGE_MAX_FILE_SIZE_BYTES = env.int(
     "KNOWLEDGE_MAX_FILE_SIZE_BYTES",
     default=20 * 1024 * 1024,

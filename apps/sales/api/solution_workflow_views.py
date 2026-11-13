@@ -11,9 +11,13 @@ from rest_framework.exceptions import APIException, NotFound, ValidationError
 from rest_framework.parsers import JSONParser
 from rest_framework.response import Response
 
+from django.conf import settings
+
 from apps.sales.models import (
     OpportunityRequirementAnalysis,
     SolutionDraftRecord,
+    SolutionGenerationJob,
+    SolutionGenerationJobStatus,
     SolutionReview,
     SolutionReviewDecisionStatus,
     SolutionReviewStatus,
@@ -140,6 +144,32 @@ class SolutionWorkflowCollectionViewSet(
             opportunity_id=opportunity.pk,
             analysis_id=analysis.pk,
         )
+        if settings.SOLUTION_GENERATION_ASYNC:
+            job, created = SolutionGenerationJob.objects.get_or_create(
+                workflow_id=workflow_id,
+                defaults={
+                    "opportunity": opportunity,
+                    "requirement_analysis": analysis,
+                    "requested_by": request.user,
+                },
+            )
+            if (
+                job.opportunity_id != opportunity.pk
+                or job.requirement_analysis_id != analysis.pk
+                or job.requested_by_id != request.user.pk
+            ):
+                raise SolutionWorkflowConflict("workflow_input_mismatch")
+            if job.status in _ACTIVE_JOB_STATUSES or (
+                job.status == SolutionGenerationJobStatus.FAILED
+            ):
+                return Response(
+                    _job_projection(job),
+                    status=(
+                        status.HTTP_202_ACCEPTED if created else status.HTTP_200_OK
+                    ),
+                )
+            # A succeeded job falls through: the draft exists, so the normal
+            # projection answers with the real version and review state.
         try:
             result = start_workflow(
                 workflow_id=workflow_id,
@@ -178,6 +208,20 @@ class SolutionWorkflowDetailViewSet(
 
     def retrieve_workflow(self, request, *args, **kwargs):
         workflow_id = kwargs["workflow_id"]
+        if settings.SOLUTION_GENERATION_ASYNC:
+            job = SolutionGenerationJob.objects.filter(
+                workflow_id=workflow_id
+            ).first()
+            if job is not None and (
+                job.status != SolutionGenerationJobStatus.SUCCEEDED
+            ):
+                # The worker has not produced a draft yet, so there is no
+                # checkpoint to project. Visibility follows the opportunity.
+                if not visible_opportunities_for(request.user).filter(
+                    pk=job.opportunity_id
+                ).exists():
+                    raise NotFound()
+                return Response(_job_projection(job))
         with open_solution_workflow_checkpointer() as checkpointer:
             graph = build_solution_review_graph(checkpointer)
             projection = _projection(
@@ -282,6 +326,31 @@ def _projection(graph, config, workflow_id: UUID, actor) -> dict:
         return project_workflow(graph, config, workflow_id, actor)
     except WorkflowStateNotFound:
         raise NotFound() from None
+
+
+_ACTIVE_JOB_STATUSES = frozenset({
+    SolutionGenerationJobStatus.QUEUED,
+    SolutionGenerationJobStatus.RUNNING,
+})
+
+
+def _job_projection(job) -> dict:
+    """Public shape while the worker still owns the run.
+
+    It mirrors the synchronous projection so a client can poll the same endpoint
+    and only has to watch for ``solution_draft_id`` becoming present.
+    """
+
+    return {
+        "workflow_id": str(job.workflow_id),
+        "status": str(job.status).upper(),
+        "solution_draft_id": None,
+        "solution_version": None,
+        "solution_review_id": None,
+        "reviewer_id": None,
+        "allowed_actions": [],
+        "error_code": job.error_code,
+    }
 
 
 def _raise_failed_outcome(result: dict) -> None:

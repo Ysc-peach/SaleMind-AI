@@ -185,7 +185,16 @@ sh scripts/backup.sh          # 生成 backups/db-*.dump 与 media-*.tar.gz
 docker compose exec -T db pg_restore -U salesmind -d salesmind --clean --if-exists < backups/db-<时间>.dump
 ```
 
-已知限制：生成链路目前是同步的，单次 95–98 秒；nginx 已把 `proxy_read_timeout` 放到 300 秒，但并发生成会占用 worker。`SOLUTION_GENERATION_MAX_CONCURRENT`（默认 2）通过 PostgreSQL advisory lock 限制同时生成数，超出的请求返回 429 `workflow_capacity_reached`，不会拖垮整个实例。它是止血措施，不是队列；异步化是下一阶段的必做项，见 [技术债](docs/technical-debt.md)。
+已知限制：生成链路目前**默认仍是同步的**，单次 95–98 秒；nginx 已把 `proxy_read_timeout` 放到 300 秒。`SOLUTION_GENERATION_MAX_CONCURRENT`（默认 2）通过 PostgreSQL advisory lock 限制同时生成数，超出的请求返回 429 `workflow_capacity_reached`，不会拖垮整个实例。
+
+要开启异步生成（`POST` 立即返回 `202`，前端轮询状态）：
+
+```powershell
+# .env.production.local
+SOLUTION_GENERATION_ASYNC=true
+```
+
+compose 里的 `worker` 服务会消费 `SolutionGenerationJob` 队列；它依赖 `web` 健康启动，以保证迁移已完成。该开关默认关闭，出问题可改回 `false` 并重启 `web`，立即退回同步模式。
 
 ## 真实 benchmark 证据
 

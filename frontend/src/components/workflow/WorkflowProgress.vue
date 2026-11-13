@@ -4,6 +4,8 @@ import type { SolutionWorkflow } from '../../types/workflow'
 defineProps<{workflow:SolutionWorkflow}>()
 
 const labels:Record<SolutionWorkflow['status'],string> = {
+  QUEUED:'已排队，等待后台开始生成',
+  RUNNING:'AI 方案正在后台生成',
   GENERATING:'AI 方案正在生成',
   WAITING_FOR_SALES_CONFIRMATION:'方案已生成，等待提交售前审核',
   WAITING_FOR_PRESALES_REVIEW:'等待售前审核',

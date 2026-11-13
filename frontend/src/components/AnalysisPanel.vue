@@ -2,7 +2,7 @@
 import { ref, watch, computed, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { analysisHistory, getAnalysis, latestAnalysis, createAnalysis } from '../api/analysis'
-import { newWorkflowRequestKey, startSolutionWorkflow } from '../api/workflows'
+import { newWorkflowRequestKey, startSolutionWorkflow, waitForSolutionDraft } from '../api/workflows'
 import type { Analysis, AnalysisSummary } from '../types/workflow'
 import { safeError, generationNextAction } from '../utils/errors'
 import { label, dateTime } from '../utils/labels'
@@ -51,9 +51,11 @@ async function generate(){
   busy.value=true; clearError()
   try {
     pendingWorkflowKey.value ||= newWorkflowRequestKey()
-    const result=await startSolutionWorkflow(props.opportunityId,detail.value.id,pendingWorkflowKey.value)
+    const started=await startSolutionWorkflow(props.opportunityId,detail.value.id,pendingWorkflowKey.value)
+    // Async mode answers 202 with no draft yet; the worker fills it in later.
+    const result=await waitForSolutionDraft(started)
     if(!result.solution_draft_id){
-      if(alive)reportError({response:{status:422,data:{code:result.error_code}}})
+      if(alive)reportError({response:{status:422,data:{code:result.error_code||'workflow_failed'}}})
       return
     }
     if(alive){pendingWorkflowKey.value='';await router.push(`/solutions/${result.solution_draft_id}`)}
