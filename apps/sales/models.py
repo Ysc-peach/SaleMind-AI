@@ -578,3 +578,81 @@ class SolutionDraftProvenance(models.Model):
             "Solution Draft provenance is immutable.",
             code="immutable_solution_provenance",
         )
+
+
+class SolutionGenerationJobStatus(models.TextChoices):
+    QUEUED = "queued", _("排队中")
+    RUNNING = "running", _("执行中")
+    SUCCEEDED = "succeeded", _("已成功")
+    FAILED = "failed", _("已失败")
+
+
+class SolutionGenerationJob(models.Model):
+    """Durable queue entry for one asynchronous Solution generation.
+
+    The LangGraph checkpoint stays the source of truth for workflow state; this
+    row only records who asked for a run, whether a worker claimed it, and why it
+    stopped. It exists so an HTTP request no longer waits 95-98 seconds.
+    """
+
+    workflow_id = models.UUIDField(_("工作流标识"), unique=True)
+    opportunity = models.ForeignKey(
+        Opportunity,
+        on_delete=models.PROTECT,
+        related_name="generation_jobs",
+        verbose_name=_("商机"),
+    )
+    requirement_analysis = models.ForeignKey(
+        OpportunityRequirementAnalysis,
+        on_delete=models.PROTECT,
+        related_name="generation_jobs",
+        verbose_name=_("需求分析"),
+    )
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="generation_jobs",
+        verbose_name=_("发起人"),
+    )
+    status = models.CharField(
+        _("状态"),
+        max_length=16,
+        choices=SolutionGenerationJobStatus.choices,
+        default=SolutionGenerationJobStatus.QUEUED,
+    )
+    attempts = models.PositiveSmallIntegerField(_("已尝试次数"), default=0)
+    error_code = models.CharField(
+        _("错误代码"), max_length=64, blank=True, default="",
+    )
+    created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
+    started_at = models.DateTimeField(_("开始时间"), null=True, blank=True)
+    finished_at = models.DateTimeField(_("结束时间"), null=True, blank=True)
+    heartbeat_at = models.DateTimeField(_("心跳时间"), null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                # A claimed job must record when it started, otherwise a crashed
+                # worker cannot be distinguished from a job nobody picked up.
+                condition=(
+                    models.Q(status="queued")
+                    | models.Q(started_at__isnull=False)
+                ),
+                name="sales_genjob_started_when_claimed",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(status__in=["queued", "running"])
+                    | models.Q(finished_at__isnull=False)
+                ),
+                name="sales_genjob_finished_when_terminal",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["status", "created_at"],
+                name="sales_genjob_pick_idx",
+            ),
+        ]
+        verbose_name = _("方案生成任务")
+        verbose_name_plural = _("方案生成任务")
