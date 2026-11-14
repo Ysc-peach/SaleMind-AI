@@ -9,6 +9,7 @@ export const router = createRouter({ history: createWebHistory(), routes: [
     { path: 'reviews', component: () => import('../views/PresalesWorkspaceView.vue') },
     { path: 'customers', component: () => import('../views/CustomerDirectoryView.vue') },
     { path: 'opportunities', component: () => import('../views/OpportunityListView.vue') },
+    { path: 'audit', component: () => import('../views/AuditView.vue') },
     { path: 'opportunities/:id(\\d+)', component: () => import('../views/OpportunityWorkspaceView.vue') },
     { path: 'solutions/:id(\\d+)', component: () => import('../views/SolutionDetailView.vue') },
   ] },

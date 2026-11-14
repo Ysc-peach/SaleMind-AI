@@ -12,6 +12,7 @@ from .solution_workflow_views import (
     SolutionWorkflowCollectionViewSet,
     SolutionWorkflowDetailViewSet,
 )
+from .audit_views import AuditEventsAPIView
 from .workspace_views import (
     ReviewSummaryAPIView,
     ReviewerInboxAPIView,
@@ -77,6 +78,11 @@ urlpatterns = [
         "reviews/summary/",
         ReviewSummaryAPIView.as_view(),
         name="review-summary",
+    ),
+    path(
+        "audit/events/",
+        AuditEventsAPIView.as_view(),
+        name="audit-events",
     ),
     path(
         "opportunities/<int:opportunity_id>/solution-workflows/",
