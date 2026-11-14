@@ -22,10 +22,13 @@ while :; do
     media_tmp="$BACKUP_DIR/.media-$stamp.tar.gz.tmp"
 
     if pg_dump -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc \
-        > "$db_tmp"; then
+        > "$db_tmp" && pg_restore -l "$db_tmp" > /dev/null 2>&1; then
+        # Only a dump whose table of contents can be read becomes a named
+        # backup. A corrupt or truncated archive never overwrites good history
+        # and is never picked up by the offsite sync script.
         mv "$db_tmp" "$BACKUP_DIR/db-$stamp.dump"
     else
-        echo "backup $stamp: database dump failed" >&2
+        echo "backup $stamp: dump failed or is unreadable" >&2
         rm -f "$db_tmp"
         sleep "$INTERVAL_SECONDS"
         continue

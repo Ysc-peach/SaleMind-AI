@@ -70,10 +70,15 @@ database dump plus a media archive on an interval with retention pruning, and
 and recent failures as one JSON line with a non-zero exit code on threshold
 breaches. Both were exercised against the running stack.
 
-Still open: backups live on the same disk as the database (off-host replication
-is a deployment task), alert delivery depends on the operator's scheduler, and
-no real provider success path has been validated because the demo stack has no
-LLM credentials.
+Still open: off-host replication remains a deployment task. `scripts/offsite-sync.ps1`
+now provides the verified transfer (integrity gate, remote-target validation,
+non-zero exit on failure), but the destination host and SSH key must be supplied
+by the operator; without them every backup still sits on the database disk.
+Alert delivery likewise depends on the operator's scheduler.
+
+No real provider success path has been validated: provider credentials exist in
+the local `.env` but were deliberately not loaded into the compose stack, since
+a real generation call spends money and requires explicit approval.
 
 ## Reading this historical register at the frozen delivery baseline
 

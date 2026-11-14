@@ -225,6 +225,25 @@ crontab 示例（每 5 分钟，非零退出码发邮件）：
 
 三个阈值分别对应：排队任务数、最老排队任务等待秒数、近一小时失败数。命令只读，不碰 provider、不改任务状态。
 
+### 异地备份
+
+`backup` 服务在把 dump 命名为正式文件前会先用 `pg_restore -l` 读一遍目录表；读不通的归档会被丢弃，不会覆盖历史好备份，也不会被同步脚本选中。
+
+把最新一组同步到另一台机器（依赖运维侧已配置好的 SSH key，脚本不读取或保存任何凭据）：
+
+```powershell
+$env:OFFSITE_TARGET = 'backup@nas.internal:/srv/salesmind-backups'
+powershell -NoProfile -File scripts\offsite-sync.ps1
+```
+
+目标必须是 `user@host:/path` 形式。脚本会先在 backup 容器里复核 dump 完整性，再用系统 `scp` 复制 `db-*.dump` 与 `media-*.tar.gz`，任一步失败都返回非零退出码。Linux 部署可直接用等价命令：
+
+```bash
+scp backups/db-<时间>.dump backups/media-<时间>.tar.gz backup@nas.internal:/srv/salesmind-backups
+```
+
+把这条命令接在调度器里（例如每天备份后半小时），就完成了「数据库与备份不在同一块磁盘」。目标机器与 SSH 账号属于部署环境，仓库不预置。
+
 已知限制：生成链路目前**默认仍是同步的**，单次 95–98 秒；nginx 已把 `proxy_read_timeout` 放到 300 秒。`SOLUTION_GENERATION_MAX_CONCURRENT`（默认 2）通过 PostgreSQL advisory lock 限制同时生成数，超出的请求返回 429 `workflow_capacity_reached`，不会拖垮整个实例。
 
 要开启异步生成（`POST` 立即返回 `202`，前端轮询状态）：
