@@ -170,6 +170,8 @@ PGVECTOR_IMAGE=docker.m.daocloud.io/pgvector/pgvector:0.8.6-pg16-bookworm
 
 登出调用 `POST /api/auth/logout/` 撤销 refresh token；已撤销的 token 不能再换发 access token。当前 access token 最多还有 15 分钟有效期（`ACCESS_TOKEN_LIFETIME`），这是 SimpleJWT 的标准行为。
 
+用户自助改密：页面右上角「修改密码」调用 `POST /api/auth/password/`（需当前密码）。改密成功后该账号**所有** refresh token 立即失效，本人也需要重新登录。账号由管理员在 Django Admin 创建与停用，停用后即时生效。
+
 内网若没有 TLS，必须显式声明，Django 才会关闭 HTTPS 跳转：
 
 ```powershell
