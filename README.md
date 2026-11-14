@@ -205,6 +205,24 @@ cmd /c "docker compose --env-file .env.production.local exec -T db pg_dump -U sa
 
 演练还暴露并修复了两个部署缺陷：`backup.sh` 的 media 打包命令被镜像 ENTRYPOINT 吞掉（已改为 `--entrypoint sh`）；nginx 在启动时缓存后端容器 IP，重启 `web` 后返回 502（已改为 Docker DNS `resolver` + 变量式 `proxy_pass`）。
 
+### 部署后自检
+
+`/healthz` 只说明数据库通路正常，不代表登录和业务接口可用。部署或升级后跑一次冒烟检查：
+
+```powershell
+$env:SMOKE_USERNAME = 'admin'
+$env:SMOKE_PASSWORD = '<该账号的密码>'
+powershell -NoProfile -File scripts\smoke.ps1
+```
+
+```bash
+SMOKE_USERNAME=admin SMOKE_PASSWORD='...' sh scripts/smoke.sh
+```
+
+它只做只读检查：`/healthz`、未带令牌必须 401、登录、`/api/auth/me/`、商机列表、知识库列表（管理员 200、非管理员 403 都算通过），最后用登录拿到的 refresh token 主动登出并确认它已失效。**不写数据、不打印密码或 token**，任一检查不符即退出码 1。
+
+在容器网络内探测（例如从 web 容器打 `http://nginx`）时，请求的 `Host` 是容器名，会被 `ALLOWED_HOSTS` 拒绝并返回 400。这时加 `SMOKE_HOST`（Linux 用 `-e SMOKE_HOST=<对外域名>`，PowerShell 用参数 `-SmokeHost <对外域名>`）。
+
 ### 定时备份与队列监控
 
 compose 的 `backup` 服务默认启动，在 compose 网络内直连数据库，**不需要宿主机 cron、也不挂载 Docker socket**：
