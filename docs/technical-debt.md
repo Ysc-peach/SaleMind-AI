@@ -45,9 +45,15 @@ Asynchronous generation is implemented behind `SOLUTION_GENERATION_ASYNC`
 (or the compose `worker` service) executes the run. The synchronous path is
 unchanged and remains the default, so the switch is the rollback plan.
 
-Still open in this area: a stuck `RUNNING` job whose worker died keeps the row
-until an operator requeues it (`heartbeat_at` is recorded but not yet swept), and
-the verifier cost per draft is unchanged.
+A job whose worker stopped heartbeating is now recovered on the worker's idle
+tick: past `SOLUTION_GENERATION_JOB_STALE_SECONDS` (default 600) it returns to
+the queue, and once `SOLUTION_GENERATION_JOB_MAX_ATTEMPTS` (default 2) is spent
+it fails visibly as `workflow_worker_lost`. The lost attempt is not refunded, so
+a repeatedly crashing job cannot loop forever.
+
+Still open in this area: `heartbeat_at` is written on claim only, not refreshed
+during a long run, so the stale window must stay above one generation (95-98s);
+and the verifier cost per draft is unchanged.
 
 ## Reading this historical register at the frozen delivery baseline
 

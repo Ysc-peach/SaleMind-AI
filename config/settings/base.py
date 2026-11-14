@@ -128,6 +128,17 @@ SOLUTION_GENERATION_MAX_CONCURRENT = env.int(
 # holding the request for the whole chain. Requires run_generation_worker.
 SOLUTION_GENERATION_ASYNC = env.bool("SOLUTION_GENERATION_ASYNC", default=False)
 
+# A claimed job whose worker stopped heartbeating is presumed lost. The window
+# must stay well above one generation (95-98s) so a slow run is never stolen.
+SOLUTION_GENERATION_JOB_STALE_SECONDS = env.int(
+    "SOLUTION_GENERATION_JOB_STALE_SECONDS",
+    default=600,
+)
+SOLUTION_GENERATION_JOB_MAX_ATTEMPTS = env.int(
+    "SOLUTION_GENERATION_JOB_MAX_ATTEMPTS",
+    default=2,
+)
+
 KNOWLEDGE_MAX_FILE_SIZE_BYTES = env.int(
     "KNOWLEDGE_MAX_FILE_SIZE_BYTES",
     default=20 * 1024 * 1024,

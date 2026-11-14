@@ -1,8 +1,10 @@
 """The worker claims queued rows and records exactly one terminal state."""
 
+from datetime import timedelta
 from uuid import uuid4
 
 import pytest
+from django.utils import timezone
 
 from apps.sales.models import SolutionGenerationJob, SolutionGenerationJobStatus
 from apps.sales.services import solution_generation_jobs as jobs
@@ -95,6 +97,77 @@ def test_execute_requeues_when_every_slot_is_busy(monkeypatch, queued_job):
     assert job.status == SolutionGenerationJobStatus.QUEUED
     assert job.started_at is None
     assert job.attempts == 0
+
+
+def _running_job(queued_job, *, attempts, heartbeat_delta):
+    now = timezone.now()
+    SolutionGenerationJob.objects.filter(pk=queued_job.pk).update(
+        status=SolutionGenerationJobStatus.RUNNING,
+        attempts=attempts,
+        started_at=now - timedelta(minutes=30),
+        heartbeat_at=(
+            None if heartbeat_delta is None else now - heartbeat_delta
+        ),
+    )
+    queued_job.refresh_from_db()
+    return queued_job
+
+
+def test_a_lost_worker_requeues_the_job_and_keeps_the_attempt(settings, queued_job):
+    settings.SOLUTION_GENERATION_JOB_STALE_SECONDS = 600
+    settings.SOLUTION_GENERATION_JOB_MAX_ATTEMPTS = 2
+    job = _running_job(queued_job, attempts=1, heartbeat_delta=timedelta(hours=1))
+
+    assert jobs.reclaim_stale_jobs() == 1
+
+    job.refresh_from_db()
+    assert job.status == SolutionGenerationJobStatus.QUEUED
+    assert job.started_at is None and job.heartbeat_at is None
+    # The attempt was really spent by the dead worker.
+    assert job.attempts == 1
+
+
+def test_a_job_that_keeps_losing_its_worker_fails_visibly(settings, queued_job):
+    settings.SOLUTION_GENERATION_JOB_STALE_SECONDS = 600
+    settings.SOLUTION_GENERATION_JOB_MAX_ATTEMPTS = 2
+    job = _running_job(queued_job, attempts=2, heartbeat_delta=timedelta(hours=1))
+
+    jobs.reclaim_stale_jobs()
+
+    job.refresh_from_db()
+    assert job.status == SolutionGenerationJobStatus.FAILED
+    assert job.error_code == "workflow_worker_lost"
+    assert job.finished_at is not None
+
+
+def test_a_fresh_heartbeat_is_left_alone(settings, queued_job):
+    settings.SOLUTION_GENERATION_JOB_STALE_SECONDS = 600
+    job = _running_job(queued_job, attempts=1, heartbeat_delta=timedelta(seconds=5))
+
+    assert jobs.reclaim_stale_jobs() == 0
+
+    job.refresh_from_db()
+    assert job.status == SolutionGenerationJobStatus.RUNNING
+
+
+def test_a_row_without_a_heartbeat_falls_back_to_started_at(settings, queued_job):
+    settings.SOLUTION_GENERATION_JOB_STALE_SECONDS = 600
+    settings.SOLUTION_GENERATION_JOB_MAX_ATTEMPTS = 2
+    job = _running_job(queued_job, attempts=1, heartbeat_delta=None)
+
+    assert jobs.reclaim_stale_jobs() == 1
+
+    job.refresh_from_db()
+    assert job.status == SolutionGenerationJobStatus.QUEUED
+
+
+def test_queued_jobs_are_never_reclaimed(settings, queued_job):
+    settings.SOLUTION_GENERATION_JOB_STALE_SECONDS = 0
+
+    assert jobs.reclaim_stale_jobs() == 0
+
+    queued_job.refresh_from_db()
+    assert queued_job.status == SolutionGenerationJobStatus.QUEUED
 
 
 def test_unexpected_errors_do_not_leak_into_the_row(monkeypatch, queued_job):

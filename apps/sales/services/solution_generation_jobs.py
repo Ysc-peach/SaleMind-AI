@@ -8,8 +8,11 @@ queue lives in the same PostgreSQL database the project already depends on, and
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 
+from django.conf import settings
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.sales.models import (
@@ -63,6 +66,68 @@ def _requeue(job: SolutionGenerationJob) -> None:
     job.heartbeat_at = None
     job.attempts = max(0, job.attempts - 1)
     job.save(update_fields=["status", "started_at", "heartbeat_at", "attempts"])
+
+
+def _requeue_lost(job: SolutionGenerationJob) -> None:
+    """Return a lost job to the queue without refunding the attempt.
+
+    Unlike the capacity requeue, this attempt was really spent: the worker died
+    while owning it. Keeping the counter is what eventually turns a repeatedly
+    crashing job into a visible failure instead of an endless retry loop.
+    """
+
+    job.status = SolutionGenerationJobStatus.QUEUED
+    job.started_at = None
+    job.heartbeat_at = None
+    job.save(update_fields=["status", "started_at", "heartbeat_at"])
+
+
+def reclaim_stale_jobs(*, now=None) -> int:
+    """Requeue or fail jobs whose worker stopped heartbeating.
+
+    A worker killed mid-run leaves its row in RUNNING forever: the client polls
+    until its own timeout and the job never completes. Liveness is judged from
+    ``heartbeat_at``, falling back to ``started_at`` for rows written before the
+    heartbeat column was populated.
+    """
+
+    now = now or timezone.now()
+    cutoff = now - timedelta(
+        seconds=settings.SOLUTION_GENERATION_JOB_STALE_SECONDS
+    )
+    max_attempts = settings.SOLUTION_GENERATION_JOB_MAX_ATTEMPTS
+    reclaimed = 0
+
+    with transaction.atomic():
+        stale = (
+            SolutionGenerationJob.objects.select_for_update(skip_locked=True)
+            .filter(status=SolutionGenerationJobStatus.RUNNING)
+            .filter(
+                Q(heartbeat_at__lt=cutoff)
+                | Q(heartbeat_at__isnull=True, started_at__lt=cutoff)
+            )
+            .order_by("started_at", "id")
+        )
+        for job in stale:
+            if job.attempts >= max_attempts:
+                _finish(
+                    job,
+                    status=SolutionGenerationJobStatus.FAILED,
+                    error_code="workflow_worker_lost",
+                )
+                logger.warning(
+                    "generation job %s failed: worker lost after %s attempts",
+                    job.pk, job.attempts,
+                )
+            else:
+                _requeue_lost(job)
+                logger.info(
+                    "generation job %s requeued: worker stopped heartbeating",
+                    job.pk,
+                )
+            reclaimed += 1
+
+    return reclaimed
 
 
 def execute_job(job: SolutionGenerationJob) -> str:

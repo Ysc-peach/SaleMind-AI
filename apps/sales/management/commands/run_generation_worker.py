@@ -12,6 +12,7 @@ from django.db import close_old_connections
 from apps.sales.services.solution_generation_jobs import (
     claim_next_job,
     execute_job,
+    reclaim_stale_jobs,
 )
 
 
@@ -38,6 +39,13 @@ class Command(BaseCommand):
                 close_old_connections()
                 job = claim_next_job()
                 if job is None:
+                    # Nothing to run: use the idle tick to recover jobs whose
+                    # worker died, otherwise they stay RUNNING forever.
+                    reclaimed = reclaim_stale_jobs()
+                    if reclaimed:
+                        self.stdout.write(
+                            f"reclaimed {reclaimed} stale job(s)"
+                        )
                     if options["once"]:
                         self.stdout.write("no queued job")
                         return
