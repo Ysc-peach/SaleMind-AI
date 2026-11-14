@@ -174,16 +174,28 @@ DJANGO_INSECURE_HTTP=true
 
 不设置时 `SECURE_SSL_REDIRECT` 保持开启，内网 HTTP 访问会被重定向到 `https://`。上 TLS 后请删除该变量。
 
-备份与恢复：
+备份与恢复（Linux / macOS / Git Bash）：
 
-```powershell
-$env:POSTGRES_PASSWORD = '<强密码>'
-sh scripts/backup.sh          # 生成 backups/db-*.dump 与 media-*.tar.gz
+```bash
+COMPOSE_ENV_FILE=.env.production.local sh scripts/backup.sh
+# 生成 backups/db-*.dump 与 backups/media-*.tar.gz
 ```
 
-```powershell
-docker compose exec -T db pg_restore -U salesmind -d salesmind --clean --if-exists < backups/db-<时间>.dump
+```bash
+docker compose --env-file .env.production.local exec -T db \
+    pg_restore -U salesmind -d salesmind --clean --if-exists \
+    < backups/db-<时间>.dump
 ```
+
+Windows PowerShell 的 `>` / `<` 会把二进制流转成文本，**不要用**；改用 `cmd /c` 做字节级重定向：
+
+```powershell
+cmd /c "docker compose --env-file .env.production.local exec -T db pg_dump -U salesmind -d salesmind -Fc > backups\db.dump"
+```
+
+恢复演练（2026-11-14，演示库）：备份后停 `web`/`worker`，故意改坏一条商机并清空任务表，再 `pg_restore`，六项校验值（用户 / 商机 / 方案 / 任务行数与两组内容 MD5）全部回到原值，随后服务健康、登录与商机列表均为 200。
+
+演练还暴露并修复了两个部署缺陷：`backup.sh` 的 media 打包命令被镜像 ENTRYPOINT 吞掉（已改为 `--entrypoint sh`）；nginx 在启动时缓存后端容器 IP，重启 `web` 后返回 502（已改为 Docker DNS `resolver` + 变量式 `proxy_pass`）。
 
 已知限制：生成链路目前**默认仍是同步的**，单次 95–98 秒；nginx 已把 `proxy_read_timeout` 放到 300 秒。`SOLUTION_GENERATION_MAX_CONCURRENT`（默认 2）通过 PostgreSQL advisory lock 限制同时生成数，超出的请求返回 429 `workflow_capacity_reached`，不会拖垮整个实例。
 

@@ -55,6 +55,15 @@ Still open in this area: `heartbeat_at` is written on claim only, not refreshed
 during a long run, so the stale window must stay above one generation (95-98s);
 and the verifier cost per draft is unchanged.
 
+Backup/restore is no longer unproven: a 2026-11-14 drill on the compose demo
+database took a `pg_dump` plus a media archive, deliberately corrupted a row and
+emptied the job table, then restored. Six snapshot values (table counts and two
+content MD5s) all returned to their original values, and health, login and
+business endpoints were 200 afterwards. The drill also exposed two deploy
+defects that are now fixed: the media archive command was swallowed by the web
+image ENTRYPOINT, and nginx cached the backend container IP so restarting `web`
+produced 502 until nginx was restarted too.
+
 ## Reading this historical register at the frozen delivery baseline
 
 At `1141281c07b2f5f92d51151fc9b2f0803814ef60`, Solution V2 uses three-pass
