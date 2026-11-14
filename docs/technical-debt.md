@@ -76,21 +76,26 @@ non-zero exit on failure), but the destination host and SSH key must be supplied
 by the operator; without them every backup still sits on the database disk.
 Alert delivery likewise depends on the operator's scheduler.
 
-A real provider run was executed after explicit approval (2026-11-14). Login
-and start returned `202 QUEUED`, the worker reached `RUNNING`, and the run ended
-`FAILED solution_draft_insufficient_approved_evidence`. The real embedding API
-answered; the LLM and verifier were never called because deterministic guards
-stopped before generation. No draft or provenance was written.
-
-Root cause is knowledge preparation, not a code defect: the seeded demo
-documents are indexed as `salesmind_demo_offline / deterministic-1024-v1`,
+**Real provider acceptance completed on 2026-11-14.** The first run ended
+`FAILED solution_draft_insufficient_approved_evidence`: the seeded demo
+documents were indexed as `salesmind_demo_offline / deterministic-1024-v1`,
 while the configured provider is `openai_compatible / BAAI/bge-m3`, so
-`search_knowledge` filters out every chunk on provider/model/dimensions.
-Reindexing with the real provider would also mark all 13 approved facts stale
-(by design at `_complete_reindexing`), so a successful run requires the full
-Admin knowledge workflow: reindex, re-extract and re-approve facts. That was not
-done: no approval was bypassed, no fact flags were edited directly, and no
-second paid call was made.
+`search_knowledge` filtered out every chunk. The guards stopped before any LLM
+or verifier call, and no draft or provenance was written.
+
+The full Admin knowledge workflow was then followed, without bypassing approval:
+all three documents were reindexed with the real embedding provider (which
+marked the 13 old facts stale by design), 13 new candidates were extracted with
+the real LLM, and an authorised business admin approved the 9
+`confirmed_supported` ones through `approve_grounding_facts`. The 4
+`unconfirmed` candidates were left `proposed` rather than approved.
+
+The second real generation then succeeded in 40 seconds: `202 QUEUED ->
+RUNNING -> WAITING_FOR_SALES_CONFIRMATION`, producing V2 draft id 6 with 282
+provenance rows, `is_stale=False` and `review_status=draft`; the queue job was
+marked `succeeded` with `attempts=1`. This is one successful run on fixed demo
+material with an independently configured verifier, not a quality or repeatability
+claim for arbitrary customer documents (see `known-limitations.md` section 7).
 
 ## Reading this historical register at the frozen delivery baseline
 
