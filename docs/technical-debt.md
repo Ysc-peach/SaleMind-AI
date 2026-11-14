@@ -76,9 +76,21 @@ non-zero exit on failure), but the destination host and SSH key must be supplied
 by the operator; without them every backup still sits on the database disk.
 Alert delivery likewise depends on the operator's scheduler.
 
-No real provider success path has been validated: provider credentials exist in
-the local `.env` but were deliberately not loaded into the compose stack, since
-a real generation call spends money and requires explicit approval.
+A real provider run was executed after explicit approval (2026-11-14). Login
+and start returned `202 QUEUED`, the worker reached `RUNNING`, and the run ended
+`FAILED solution_draft_insufficient_approved_evidence`. The real embedding API
+answered; the LLM and verifier were never called because deterministic guards
+stopped before generation. No draft or provenance was written.
+
+Root cause is knowledge preparation, not a code defect: the seeded demo
+documents are indexed as `salesmind_demo_offline / deterministic-1024-v1`,
+while the configured provider is `openai_compatible / BAAI/bge-m3`, so
+`search_knowledge` filters out every chunk on provider/model/dimensions.
+Reindexing with the real provider would also mark all 13 approved facts stale
+(by design at `_complete_reindexing`), so a successful run requires the full
+Admin knowledge workflow: reindex, re-extract and re-approve facts. That was not
+done: no approval was bypassed, no fact flags were edited directly, and no
+second paid call was made.
 
 ## Reading this historical register at the frozen delivery baseline
 
