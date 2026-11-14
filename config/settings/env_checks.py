@@ -22,3 +22,42 @@ def require_proxy_hops(name: str = "DRF_NUM_PROXIES") -> int:
             "large reads the client-supplied X-Forwarded-For segment."
         )
     return int(raw)
+
+
+def require_independent_verifier(
+    *,
+    verifier_provider: str,
+    verifier_model: str,
+    verifier_base_url: str,
+    llm_provider: str,
+    llm_model: str,
+) -> None:
+    """Fail closed when production would silently reuse the generation model.
+
+    ``VERIFIER_API_KEY`` is deliberately not checked here: a fresh deployment
+    must be able to start with an empty credential set while an operator loads
+    the knowledge base. Generation still fails closed at the provider boundary
+    until the key is supplied.
+    """
+
+    configured = (
+        ("VERIFIER_PROVIDER", verifier_provider),
+        ("VERIFIER_MODEL", verifier_model),
+        ("VERIFIER_BASE_URL", verifier_base_url),
+    )
+    missing = [
+        name for name, value in configured
+        if not str(value or "").strip()
+    ]
+    if missing:
+        raise ImproperlyConfigured(
+            "Production requires an explicitly configured independent verifier: "
+            + ", ".join(missing)
+        )
+    if (
+        str(verifier_provider).strip() == str(llm_provider).strip()
+        and str(verifier_model).strip() == str(llm_model).strip()
+    ):
+        raise ImproperlyConfigured(
+            "The verifier must not reuse the generation provider and model."
+        )

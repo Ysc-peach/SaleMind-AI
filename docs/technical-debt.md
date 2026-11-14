@@ -18,15 +18,15 @@ current source code and tests are authoritative.
 | P2-5 | Every export error reported as 503 | **FIXED** | Render and payload defects now return 422 `solution_export_invalid_payload`; only snapshot/load failures still return 503. Tests assert the renderer message never reaches the response. |
 | P2-6 | Export object URL revoked too early | **FIXED** | `frontend/src/utils/download.ts` delays `revokeObjectURL`. |
 | P2-7 | Refresh-token race logs out a new session | **NOT APPLICABLE** | `ROTATE_REFRESH_TOKENS = False` and the refresh endpoint has its own throttle scope; there is no rotation race in the current configuration. |
-| P2-8 | JWT tokens cannot be revoked | **OPEN** | No `token_blacklist` app, `BLACKLIST_AFTER_ROTATION = False`; an access token stays valid until it expires. |
-| P2-9 | No document-level visibility in the knowledge base | **OPEN** | `KnowledgeDocument` has no visibility field and search does not filter by role. |
+| P2-8 | JWT tokens cannot be revoked | **FIXED** | `rest_framework_simplejwt.token_blacklist` is installed and `POST /api/auth/logout/` blacklists the refresh token; the frontend calls it on every logout. A revoked token can no longer mint access tokens. Access tokens still live at most 15 minutes (SimpleJWT design), which is the documented residual window. |
+| P2-9 | No document-level visibility in the knowledge base | **BOUNDED / BY DESIGN** | For an intranet, single-company deployment the knowledge base is meant to hold the company's own capability material, so all business roles may read it. Uploading customer-confidential documents is out of scope for this deployment; if that changes, document-level visibility becomes mandatory before any such upload. |
 | P2-10 | Knowledge API and Admin use different permission gates | **REVIEWED / BY DESIGN** | The API exposes list/create/retrieve/reindex only; no approval endpoint exists. `IsBusinessAdmin` checks the business role, and a dedicated test proves `is_staff`/`is_superuser` cannot bypass it. Requiring `is_staff` in the API would make business authority depend on a technical flag. |
 | P3-1 | Initial indexing has no crash takeover | **FIXED** | `_start_indexing` now takes over a document stuck in `PROCESSING` past `KNOWLEDGE_INDEXING_STALE_TIMEOUT_SECONDS`; a fresh run still returns `indexing_already_in_progress`, and a late old run fails closed on the run-id check. The manual Admin reset remains. |
 | P3-2 | Unique-constraint conflicts return 500 | **FIXED** | The global exception handler maps `IntegrityError` to a 409 `conflict` envelope without exposing the constraint name; the two service-level handlers remain. |
-| P3-3 | Oversized single file | **OPEN** | `solution_prompt_v2.py` is 1,625 lines, `solution_schema_v2.py` 1,225, `solution_grounding.py` 1,051. |
-| P3-4 | Default verifier is not independent | **OPEN / DOCUMENTED** | An empty `VERIFIER_PROVIDER` falls back to the generation provider for backwards compatibility. |
+| P3-3 | Oversized single file | **OPEN** | `solution_prompt_v2.py` is 1,625 lines, `solution_schema_v2.py` 1,225, `solution_grounding.py` 1,051. Pure refactoring; no runtime impact. |
+| P3-4 | Default verifier is not independent | **FIXED** | `production.py` refuses to start unless `VERIFIER_PROVIDER`, `VERIFIER_MODEL` and `VERIFIER_BASE_URL` are explicit and the verifier pair differs from the generation provider/model. `VERIFIER_API_KEY` is not required at startup so a fresh deployment can load knowledge before credentials are injected; generation still fails closed at the provider boundary. |
 | P3-5 | Stale historical review reports | **ADDRESSED HERE** | `docs/code-review-2026-08-29.md` remains protected and unmodified; this ledger supersedes the 2026-10-21 snapshot. |
-| P3-6 | Uncommitted workspace changes | **OPEN** | The fixes above are not committed yet. |
+| P3-6 | Uncommitted workspace changes | **FIXED** | Every fix has its own commit; the working tree contains only the protected historical report. |
 
 Additional changes in this cycle: object visibility now lives in
 `apps/sales/services/visibility.py` (services no longer import from the API

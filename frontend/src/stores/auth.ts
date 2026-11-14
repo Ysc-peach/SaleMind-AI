@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { bindAuth } from '../api/http'
-import { loginRequest, meRequest, refreshRequest } from '../api/auth'
+import { loginRequest, logoutRequest, meRequest, refreshRequest } from '../api/auth'
 import type { User } from '../types/domain'
 
 const storageKey = 'salesmind.refresh'
@@ -14,6 +14,10 @@ export const useAuthStore = defineStore('auth', () => {
   const epoch = ref(0)
   function sessionEpoch() { return epoch.value }
   function logout() {
+    // Revoke the refresh token server-side too. Fire-and-forget: a network
+    // failure must never keep the user stuck on a page they asked to leave.
+    const refreshToken = sessionStorage.getItem(storageKey)
+    if (refreshToken) void logoutRequest(refreshToken).catch(() => {})
     epoch.value++; accessToken.value = ''; user.value = null
     sessionStorage.removeItem(storageKey)
     // A refresh started by the previous session must not be reused by the next

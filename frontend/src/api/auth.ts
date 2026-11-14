@@ -6,4 +6,6 @@ export const loginRequest = async (username: string, password: string) =>
   (await axios.post<{access: string; refresh: string}>('/api/auth/login/', { username, password })).data
 export const refreshRequest = async (refresh: string) =>
   (await axios.post<{access: string}>('/api/auth/refresh/', { refresh })).data
+export const logoutRequest = async (refresh: string) =>
+  axios.post('/api/auth/logout/', { refresh })
 export const meRequest = async () => (await http.get<User>('/auth/me/')).data

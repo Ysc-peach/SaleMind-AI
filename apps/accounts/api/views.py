@@ -1,9 +1,15 @@
 """Views for account APIs."""
 
 from django.contrib.auth import get_user_model
+from rest_framework import status
+from rest_framework.exceptions import ValidationError
 from rest_framework.generics import ListAPIView, RetrieveAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
+from rest_framework.views import APIView
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from apps.accounts.models import UserRole
@@ -26,6 +32,30 @@ class RefreshView(TokenRefreshView):
     permission_classes = (AllowAny,)
     throttle_classes = (ScopedRateThrottle,)
     throttle_scope = "token_refresh"
+
+
+class LogoutView(APIView):
+    """Revoke a refresh token so a logout cannot be undone with a stale copy.
+
+    ``AllowAny`` is intentional: an access token may already have expired when
+    the user clicks logout, and the refresh token itself is the credential. The
+    endpoint shares the refresh throttle scope and never reveals why a token was
+    rejected.
+    """
+
+    permission_classes = (AllowAny,)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = "token_refresh"
+
+    def post(self, request):
+        raw = request.data.get("refresh")
+        if not isinstance(raw, str) or not raw.strip():
+            raise ValidationError({"refresh": "A refresh token is required."})
+        try:
+            RefreshToken(raw).blacklist()
+        except TokenError:
+            raise ValidationError({"refresh": "Invalid refresh token."}) from None
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class CurrentUserView(RetrieveAPIView):

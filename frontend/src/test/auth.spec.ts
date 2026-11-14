@@ -17,6 +17,7 @@ const adapter: AxiosAdapter = async config => {
   if (url === '/auth/login/') { if (failLogin) reject(); data = { access: 'test-access', refresh: 'test-refresh' } }
   else if (url === '/auth/refresh/') { await new Promise(r => setTimeout(r, 10)); if (failRefresh) reject(); data = { access: 'new-access' } }
   else if (url === '/auth/me/') data = user
+  else if (url === '/auth/logout/') data = {}
   else { if (always401 || config.headers.Authorization !== 'Bearer new-access') reject(); data = { ok: true } }
   return { data, status: 200, statusText: 'OK', headers: {}, config }
 }
@@ -32,6 +33,14 @@ describe('authentication', () => {
     expect(auth.user).toEqual(user); expect(auth.accessToken).toBe('test-access')
     expect(sessionStorage.getItem('salesmind.refresh')).toBe('test-refresh')
     expect(sessionStorage.getItem('access')).toBeNull()
+  })
+  it('revokes the refresh token on logout', async () => {
+    const auth = useAuthStore(); await auth.login('sales', 'synthetic')
+    calls = []
+    auth.logout()
+    expect(calls).toContain('/auth/logout/')
+    expect(sessionStorage.getItem('salesmind.refresh')).toBeNull()
+    expect(auth.user).toBeNull()
   })
   it('rejects failed login and clears authentication', async () => {
     failLogin = true; const auth = useAuthStore()

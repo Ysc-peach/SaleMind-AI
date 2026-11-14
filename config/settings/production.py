@@ -5,7 +5,7 @@ import os
 from django.core.exceptions import ImproperlyConfigured
 
 from .base import *  # noqa: F401,F403
-from .env_checks import require_proxy_hops
+from .env_checks import require_independent_verifier, require_proxy_hops
 
 
 DEBUG = False
@@ -42,6 +42,14 @@ if _missing_throttle_rates:
 # Anonymous buckets key on the client address, so the proxy hop count decides
 # which X-Forwarded-For segment is trusted. It has no safe default.
 require_proxy_hops()
+
+require_independent_verifier(
+    verifier_provider=VERIFIER_PROVIDER,
+    verifier_model=VERIFIER_MODEL,
+    verifier_base_url=VERIFIER_BASE_URL,
+    llm_provider=LLM_PROVIDER,
+    llm_model=LLM_MODEL,
+)
 
 SECURE_SSL_REDIRECT = True
 SESSION_COOKIE_SECURE = True

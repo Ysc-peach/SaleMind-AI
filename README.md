@@ -164,7 +164,11 @@ PGVECTOR_IMAGE=docker.m.daocloud.io/pgvector/pgvector:0.8.6-pg16-bookworm
 | `DJANGO_CSRF_TRUSTED_ORIGINS` | 必须带 scheme，例：`http://salesmind.internal:8080` |
 | `DRF_NUM_PROXIES` | 本进程之前的可信反代层数；compose 里是 nginx 一层，填 `1` |
 | 8 个 `THROTTLE_*_RATE` | 缺失即启动失败，防止默认值被当成有意配置 |
-| `EMBEDDING_*` / `LLM_*` / `VERIFIER_*` | provider 凭据与模型名 |
+| `EMBEDDING_*` / `LLM_*` | embedding 与生成 provider 的凭据、模型与地址 |
+| `VERIFIER_PROVIDER` / `VERIFIER_MODEL` / `VERIFIER_BASE_URL` | **生产必填**：独立审查不得回退到生成模型；三者缺失，或 verifier 的 provider + model 与生成完全相同，启动时直接报 `ImproperlyConfigured` |
+| `VERIFIER_API_KEY` | 只在真正生成时才需要；允许为空启动，便于先加载知识资料，生成仍会在 provider 边界失败关闭 |
+
+登出调用 `POST /api/auth/logout/` 撤销 refresh token；已撤销的 token 不能再换发 access token。当前 access token 最多还有 15 分钟有效期（`ACCESS_TOKEN_LIFETIME`），这是 SimpleJWT 的标准行为。
 
 内网若没有 TLS，必须显式声明，Django 才会关闭 HTTPS 跳转：
 
