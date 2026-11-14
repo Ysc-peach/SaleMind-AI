@@ -64,6 +64,17 @@ defects that are now fixed: the media archive command was swallowed by the web
 image ENTRYPOINT, and nginx cached the backend container IP so restarting `web`
 produced 502 until nginx was restarted too.
 
+Unattended operation now has two controls: the compose `backup` service takes a
+database dump plus a media archive on an interval with retention pruning, and
+`manage.py check_generation_health` reports queued/running counts, oldest wait
+and recent failures as one JSON line with a non-zero exit code on threshold
+breaches. Both were exercised against the running stack.
+
+Still open: backups live on the same disk as the database (off-host replication
+is a deployment task), alert delivery depends on the operator's scheduler, and
+no real provider success path has been validated because the demo stack has no
+LLM credentials.
+
 ## Reading this historical register at the frozen delivery baseline
 
 At `1141281c07b2f5f92d51151fc9b2f0803814ef60`, Solution V2 uses three-pass

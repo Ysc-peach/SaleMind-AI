@@ -74,6 +74,27 @@ services:
     entrypoint: ["python", "manage.py", "run_generation_worker", "--poll-seconds", "3"]
     restart: unless-stopped
 
+  backup:
+    # Reuse the PostgreSQL image already required by db: pg_dump must match the
+    # server major version, and this avoids a second registry pull.
+    image: ${PGVECTOR_IMAGE:-pgvector/pgvector:0.8.6-pg16-bookworm}
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_HOST: db
+      POSTGRES_USER: ${POSTGRES_USER:-salesmind}
+      POSTGRES_DB: ${POSTGRES_DB:-salesmind}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      RETENTION_DAYS: ${RETENTION_DAYS:-14}
+    volumes:
+      - ./backups:/backups
+      - media:/data/media:ro
+      - ./scripts/backup-loop.sh:/backup-loop.sh:ro
+    entrypoint: ["sh", "/backup-loop.sh"]
+    restart: unless-stopped
+
   nginx:
     build:
       context: ./frontend

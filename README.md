@@ -197,6 +197,34 @@ cmd /c "docker compose --env-file .env.production.local exec -T db pg_dump -U sa
 
 演练还暴露并修复了两个部署缺陷：`backup.sh` 的 media 打包命令被镜像 ENTRYPOINT 吞掉（已改为 `--entrypoint sh`）；nginx 在启动时缓存后端容器 IP，重启 `web` 后返回 502（已改为 Docker DNS `resolver` + 变量式 `proxy_pass`）。
 
+### 定时备份与队列监控
+
+compose 的 `backup` 服务默认启动，在 compose 网络内直连数据库，**不需要宿主机 cron、也不挂载 Docker socket**：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `BACKUP_INTERVAL_SECONDS` | `86400` | 备份间隔（秒） |
+| `RETENTION_DAYS` | `14` | 保留天数，过期文件自动删除 |
+
+产物写到宿主机 `./backups/`（`db-*.dump` + `media-*.tar.gz`）。`scripts/backup.sh` 仍可随时手动执行一次。恢复演练与 Windows 二进制重定向注意事项见上文。**备份仍在该磁盘上，生产环境请把 `backups/` 再同步到另一台机器或对象存储**，否则磁盘故障会同时丢库和备份。
+
+队列健康检查输出一行 JSON，超阈值时返回非零退出码，交给调度器告警即可：
+
+```bash
+docker compose --env-file .env.production.local exec -T web \
+    python manage.py check_generation_health
+# {"health": {"queued": 0, "running": 0, "oldest_queued_wait_seconds": 0.0,
+#             "failed_last_hour": 0}, "thresholds": {...}, "breaches": []}
+```
+
+crontab 示例（每 5 分钟，非零退出码发邮件）：
+
+```cron
+*/5 * * * * cd /srv/salesmind && docker compose --env-file .env.production.local exec -T web python manage.py check_generation_health --max-queued 10 --max-wait-seconds 600 --max-failed-last-hour 5
+```
+
+三个阈值分别对应：排队任务数、最老排队任务等待秒数、近一小时失败数。命令只读，不碰 provider、不改任务状态。
+
 已知限制：生成链路目前**默认仍是同步的**，单次 95–98 秒；nginx 已把 `proxy_read_timeout` 放到 300 秒。`SOLUTION_GENERATION_MAX_CONCURRENT`（默认 2）通过 PostgreSQL advisory lock 限制同时生成数，超出的请求返回 429 `workflow_capacity_reached`，不会拖垮整个实例。
 
 要开启异步生成（`POST` 立即返回 `202`，前端轮询状态）：
