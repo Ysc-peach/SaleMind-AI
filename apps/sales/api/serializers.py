@@ -116,6 +116,20 @@ class RejectForbiddenFieldsMixin:
         return super().to_internal_value(data)
 
 
+class CustomerUpdateSerializer(RejectForbiddenFieldsMixin, serializers.ModelSerializer):
+    """Accept only the shared descriptive fields of an existing Customer.
+
+    ``created_by`` and the timestamps stay server-controlled, so renaming a
+    customer can never transfer its ownership or rewrite history.
+    """
+
+    forbidden_fields = ("created_by", "created_at", "updated_at")
+
+    class Meta:
+        model = Customer
+        fields = ("name", "industry", "company_size", "basic_info")
+
+
 class OpportunityListSerializer(OpportunityDisplaySerializer):
     """Compact safe representation for an Opportunity collection."""
 

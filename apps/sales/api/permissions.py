@@ -6,7 +6,12 @@ from apps.accounts.models import UserRole
 
 
 class CustomerPermission(BasePermission):
-    """Allow authenticated Admin and Sales users to use Customer APIs."""
+    """Allow authenticated Admin and Sales users to use Customer APIs.
+
+    Customer records are shared company data, so any seller may correct them;
+    only the owner of an *opportunity* is restricted. ``created_by`` stays
+    immutable, so "who added this customer" cannot be rewritten.
+    """
 
     def has_permission(self, request, view):
         return bool(

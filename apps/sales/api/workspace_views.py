@@ -165,3 +165,33 @@ class ReviewerInboxAPIView(APIView):
                 ],
             }
         )
+
+
+class ReviewSummaryAPIView(APIView):
+    """Counters for the navigation badge.
+
+    The inbox caps every section at ten items, so its length cannot answer "how
+    many are waiting". This endpoint runs two COUNT queries and returns nothing
+    the caller would otherwise have to download.
+    """
+
+    permission_classes = (ReviewerInboxPermission,)
+    http_method_names = ["get", "head", "options"]
+
+    def get(self, request):
+        pending = SolutionReview.objects.filter(
+            reviewer=request.user,
+            status=SolutionReviewDecisionStatus.PENDING,
+        ).count()
+        revisions = _drafts_with_latest_review().filter(
+            opportunity__presales_owner=request.user,
+            review_status=SolutionReviewStatus.NEEDS_REVISION,
+            latest_return_reason=SolutionReturnReason.TECHNICAL_REVISION_REQUIRED,
+        ).count()
+        return Response(
+            {
+                "pending_reviews": pending,
+                "technical_revisions": revisions,
+                "total": pending + revisions,
+            }
+        )

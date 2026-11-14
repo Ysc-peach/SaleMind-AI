@@ -16,3 +16,6 @@ export const searchCustomers = async (query:string,page=1) => {
 
 export const createCustomer = async (input:CustomerInput) =>
   (await http.post<Customer>('/customers/',input)).data
+
+export const updateCustomer = async (id:number, input:Partial<CustomerInput>) =>
+  (await http.patch<Customer>(`/customers/${id}/`,input)).data

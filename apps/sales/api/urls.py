@@ -12,12 +12,19 @@ from .solution_workflow_views import (
     SolutionWorkflowCollectionViewSet,
     SolutionWorkflowDetailViewSet,
 )
-from .workspace_views import ReviewerInboxAPIView, SalesWorkspaceAPIView
+from .workspace_views import (
+    ReviewSummaryAPIView,
+    ReviewerInboxAPIView,
+    SalesWorkspaceAPIView,
+)
 from .solution_export_views import SolutionExportAPIView
 
 
 customer_create_view = CustomerViewSet.as_view({"post": "create"})
-customer_detail_view = CustomerViewSet.as_view({"get": "retrieve"})
+customer_detail_view = CustomerViewSet.as_view({
+    "get": "retrieve",
+    "patch": "partial_update",
+})
 customer_search_view = CustomerViewSet.as_view({"get": "search"})
 opportunity_collection_view = OpportunityViewSet.as_view(
     {"get": "list", "post": "create"}
@@ -65,6 +72,11 @@ urlpatterns = [
         "reviews/inbox/",
         ReviewerInboxAPIView.as_view(),
         name="reviewer-inbox",
+    ),
+    path(
+        "reviews/summary/",
+        ReviewSummaryAPIView.as_view(),
+        name="review-summary",
     ),
     path(
         "opportunities/<int:opportunity_id>/solution-workflows/",

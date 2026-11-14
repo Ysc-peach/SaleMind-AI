@@ -282,7 +282,7 @@ def test_customer_search_uses_the_same_safe_active_summary_contract(
     ]
 
 
-def test_customer_collection_and_mutating_detail_methods_are_not_exposed(
+def test_customer_collection_put_and_delete_stay_unavailable(
     api_client, user_factory, customer_factory
 ):
     actor = user_factory(UserRole.SALES)
@@ -290,16 +290,114 @@ def test_customer_collection_and_mutating_detail_methods_are_not_exposed(
     api_client.force_authenticate(user=actor)
 
     collection_response = api_client.get(CUSTOMERS_URL)
-    patch_response = api_client.patch(
-        f"{CUSTOMERS_URL}{customer.id}/", {"name": "Changed"}, format="json"
-    )
     put_response = api_client.put(
         f"{CUSTOMERS_URL}{customer.id}/", {"name": "Changed"}, format="json"
     )
     delete_response = api_client.delete(f"{CUSTOMERS_URL}{customer.id}/")
 
     assert collection_response.status_code == 405
-    assert patch_response.status_code == 405
     assert put_response.status_code == 405
     assert delete_response.status_code == 405
+    assert Customer.objects.get(pk=customer.id).name == "Acme"
+
+
+def test_the_owner_can_correct_a_customer_record(
+    api_client, user_factory, customer_factory
+):
+    actor = user_factory(UserRole.SALES)
+    customer = customer_factory(
+        created_by=actor, industry="Manufacturing", company_size="200-500",
+    )
+    api_client.force_authenticate(user=actor)
+
+    response = api_client.patch(
+        f"{CUSTOMERS_URL}{customer.id}/",
+        {
+            "name": "Acme Industrial",
+            "industry": "Industrial equipment",
+            "basic_info": "Corrected after the kickoff call.",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.data["name"] == "Acme Industrial"
+    assert response.data["industry"] == "Industrial equipment"
+    # Untouched fields keep their previous value on a partial update.
+    assert response.data["company_size"] == "200-500"
+    customer.refresh_from_db()
+    assert customer.name == "Acme Industrial"
+    assert customer.created_by_id == actor.pk
+
+
+def test_another_seller_can_correct_a_shared_customer_record(
+    api_client, user_factory, customer_factory
+):
+    owner = user_factory(UserRole.SALES)
+    colleague = user_factory(UserRole.SALES)
+    customer = customer_factory(created_by=owner)
+    api_client.force_authenticate(user=colleague)
+
+    response = api_client.patch(
+        f"{CUSTOMERS_URL}{customer.id}/", {"industry": "Finance"}, format="json",
+    )
+
+    assert response.status_code == 200
+    customer.refresh_from_db()
+    assert customer.industry == "Finance"
+    # Correction does not transfer ownership.
+    assert customer.created_by_id == owner.pk
+
+
+def test_an_admin_can_correct_any_customer(
+    api_client, user_factory, customer_factory
+):
+    owner = user_factory(UserRole.SALES)
+    admin = user_factory(UserRole.ADMIN)
+    customer = customer_factory(created_by=owner)
+    api_client.force_authenticate(user=admin)
+
+    response = api_client.patch(
+        f"{CUSTOMERS_URL}{customer.id}/", {"industry": "Public sector"}, format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.data["industry"] == "Public sector"
+
+
+def test_customer_ownership_and_timestamps_cannot_be_rewritten(
+    api_client, user_factory, customer_factory
+):
+    actor = user_factory(UserRole.SALES)
+    other = user_factory(UserRole.SALES)
+    customer = customer_factory(created_by=actor)
+    original_created_at = customer.created_at
+    api_client.force_authenticate(user=actor)
+
+    response = api_client.patch(
+        f"{CUSTOMERS_URL}{customer.id}/",
+        {"created_by": other.pk, "created_at": "2020-01-01T00:00:00Z"},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert set(response.data) == {"created_by", "created_at"}
+    customer.refresh_from_db()
+    assert customer.created_by_id == actor.pk
+    assert customer.created_at == original_created_at
+
+
+def test_a_presales_user_cannot_edit_a_customer(
+    api_client, user_factory, customer_factory
+):
+    owner = user_factory(UserRole.SALES)
+    presales = user_factory(UserRole.PRESALES)
+    customer = customer_factory(created_by=owner)
+    api_client.force_authenticate(user=presales)
+
+    response = api_client.patch(
+        f"{CUSTOMERS_URL}{customer.id}/", {"name": "Changed"}, format="json",
+    )
+
+    assert response.status_code == 403
     assert Customer.objects.get(pk=customer.id).name == "Acme"

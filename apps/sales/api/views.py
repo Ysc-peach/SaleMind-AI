@@ -12,6 +12,7 @@ from .serializers import (
     CustomerCreateSerializer,
     CustomerDetailSerializer,
     CustomerSearchSerializer,
+    CustomerUpdateSerializer,
     OpportunityCreateSerializer,
     OpportunityDetailSerializer,
     OpportunityListSerializer,
@@ -24,19 +25,28 @@ CUSTOMER_SEARCH_MAX_LENGTH = 200
 
 
 class CustomerViewSet(
-    mixins.CreateModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
+    mixins.CreateModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
+    viewsets.GenericViewSet,
 ):
-    """Expose only Customer creation, retrieval, and explicit search."""
+    """Expose Customer creation, retrieval, editing, and explicit search.
+
+    There is deliberately no delete: historical solutions and reviews point at
+    the customer, so removing the row would either cascade or orphan evidence.
+    """
 
     queryset = Customer.objects.all()
     permission_classes = (CustomerPermission,)
     pagination_class = DefaultPageNumberPagination
-    http_method_names = ["get", "post", "head", "options"]
+    http_method_names = ["get", "post", "patch", "head", "options"]
 
     def get_serializer_class(self):
         action = getattr(self, "action", None)
         if action == "create":
             return CustomerCreateSerializer
+        if action == "partial_update":
+            return CustomerUpdateSerializer
         if action == "search":
             return CustomerSearchSerializer
         return CustomerDetailSerializer

@@ -24,6 +24,7 @@ pytestmark = pytest.mark.django_db
 
 SALES_WORKSPACE_URL = "/api/workspaces/sales/"
 REVIEW_INBOX_URL = "/api/reviews/inbox/"
+REVIEW_SUMMARY_URL = "/api/reviews/summary/"
 
 
 @pytest.fixture
@@ -340,6 +341,81 @@ def test_reviewer_inbox_rejects_sales_even_with_technical_admin_flags(
     api_client.force_authenticate(user=actor)
 
     assert api_client.get(REVIEW_INBOX_URL).status_code == 403
+    assert api_client.get(REVIEW_SUMMARY_URL).status_code == 403
+
+
+def test_review_summary_counts_pending_reviews_and_technical_revisions(
+    api_client, user_factory
+):
+    sales = user_factory(UserRole.SALES, username="summary.sales")
+    reviewer = user_factory(UserRole.PRESALES, username="summary.presales")
+
+    pending_opp, pending_analysis = create_opportunity(
+        sales=sales, presales=reviewer,
+        name="Waiting review", customer_name="Hotel Corp",
+    )
+    pending = create_draft(
+        opportunity=pending_opp, analysis=pending_analysis, creator=sales,
+        status=SolutionReviewStatus.PENDING_REVIEW,
+    )
+    create_review(
+        draft=pending, submitter=sales, reviewer=reviewer,
+        status=SolutionReviewDecisionStatus.PENDING,
+    )
+
+    revision_opp, revision_analysis = create_opportunity(
+        sales=sales, presales=reviewer,
+        name="Needs technical work", customer_name="India Corp",
+    )
+    revision = create_draft(
+        opportunity=revision_opp, analysis=revision_analysis, creator=sales,
+        status=SolutionReviewStatus.NEEDS_REVISION,
+    )
+    create_review(
+        draft=revision, submitter=sales, reviewer=reviewer,
+        status=SolutionReviewDecisionStatus.RETURNED,
+        reason=SolutionReturnReason.TECHNICAL_REVISION_REQUIRED,
+        comment="Revise the HA design.",
+    )
+
+    api_client.force_authenticate(user=reviewer)
+    response = api_client.get(REVIEW_SUMMARY_URL)
+
+    assert response.status_code == 200
+    assert response.data == {
+        "pending_reviews": 1,
+        "technical_revisions": 1,
+        "total": 2,
+    }
+
+
+def test_review_summary_counts_past_the_inbox_page_limit(
+    api_client, user_factory
+):
+    sales = user_factory(UserRole.SALES, username="bulk.sales")
+    reviewer = user_factory(UserRole.PRESALES, username="bulk.presales")
+    opportunity, analysis = create_opportunity(
+        sales=sales, presales=reviewer,
+        name="Bulk queue", customer_name="Juliet Corp",
+    )
+    for version in range(1, 13):
+        draft = create_draft(
+            opportunity=opportunity, analysis=analysis, creator=sales,
+            version=version, status=SolutionReviewStatus.PENDING_REVIEW,
+        )
+        create_review(
+            draft=draft, submitter=sales, reviewer=reviewer,
+            status=SolutionReviewDecisionStatus.PENDING,
+        )
+
+    api_client.force_authenticate(user=reviewer)
+    summary = api_client.get(REVIEW_SUMMARY_URL)
+    inbox = api_client.get(REVIEW_INBOX_URL)
+
+    assert summary.data["pending_reviews"] == 12
+    assert summary.data["total"] == 12
+    # The inbox is capped, which is exactly why a separate counter exists.
+    assert len(inbox.data["pending_reviews"]) == 10
 
 
 def test_opportunity_list_and_detail_include_safe_display_names(
