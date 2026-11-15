@@ -40,7 +40,10 @@ def test_missing_policy_input_guidance_mutation_is_detected(monkeypatch):
 
 
 def test_system_prerequisite_guidance_removal_is_detected_and_restored(monkeypatch):
-    from apps.sales.services import solution_prompt_v2 as prompt
+    # _pass_system_prompt resolves _semantic_pass_prompt in its own module, so
+    # the mutation has to be applied where the lookup happens. Patching the
+    # parsing module silently does nothing.
+    from apps.sales.services import solution_prompt_v2_passes as prompt
     required = "核验完成不等于核验通过或条件满足"
     def check():
         for phase in ("implementation", "assurance"):
