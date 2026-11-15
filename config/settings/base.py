@@ -92,7 +92,11 @@ LLM_PROVIDER = env("LLM_PROVIDER", default="deepseek")
 LLM_MODEL = env("LLM_MODEL", default="deepseek-v4-flash")
 LLM_API_KEY = env("LLM_API_KEY", default="")
 LLM_BASE_URL = env("LLM_BASE_URL", default="https://api.deepseek.com")
-LLM_TIMEOUT_SECONDS = env.int("LLM_TIMEOUT_SECONDS", default=60)
+# Solution generation asks for up to SOLUTION_DRAFT_MAX_OUTPUT_TOKENS in one
+# call. At 60 seconds a full-length answer times out before it is complete,
+# which surfaced as LLMProviderError(timeout) on a real corpus. The default is
+# sized for a full-length answer; slower models should raise it further.
+LLM_TIMEOUT_SECONDS = env.int("LLM_TIMEOUT_SECONDS", default=180)
 LLM_MAX_RETRIES = env.int("LLM_MAX_RETRIES", default=2)
 LLM_MAX_OUTPUT_TOKENS = env.int("LLM_MAX_OUTPUT_TOKENS", default=1024)
 LLM_THINKING_ENABLED = env.bool("LLM_THINKING_ENABLED", default=False)
