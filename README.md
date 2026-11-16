@@ -310,7 +310,7 @@ compose 里的 `worker` 服务会消费 `SolutionGenerationJob` 队列；它依�
 
 | 想做的事 | 位置 |
 |---|---|
-| 看谁提交、谁审核、谁发起了生成 | 侧边栏「审计」（最近 50 条，只读） |
+| 看谁提交、谁审核、谁发起了生成 | 侧边栏「审计」：只读，可按操作人、状态、日期筛选，每页 20 条 |
 | 知识库上传、重新索引、事实审批 | `/admin/` → 知识库 |
 | 队列是否积压 / 近期失败 | `manage.py check_generation_health`（见上文） |
 | 备份是否正常 | `docker compose logs backup`、`backups/` 目录 |
