@@ -23,7 +23,6 @@ from apps.knowledge.exceptions import KnowledgeDocumentError
 from apps.llm.exceptions import LLMErrorCode, LLMProviderError
 from apps.sales.services.visibility import visible_opportunities_for
 from apps.sales.models import (
-    Opportunity,
     OpportunityRequirementAnalysis,
     SolutionDraftRecord,
     SolutionReturnReason,

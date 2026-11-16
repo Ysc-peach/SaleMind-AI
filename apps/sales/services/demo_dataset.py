@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 from dataclasses import dataclass
-from decimal import Decimal
-from uuid import UUID
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
@@ -15,12 +12,10 @@ from django.core.files.base import ContentFile
 from django.db import models, transaction
 from langgraph.types import Command
 
-from apps.accounts.models import UserRole
 from apps.knowledge.models import (
     EnterpriseGroundingFact,
     EnterpriseGroundingFactApprovalStatus,
     EnterpriseGroundingFactStatus,
-    KnowledgeChunk,
     KnowledgeDocument,
     KnowledgeDocumentStatus,
 )
@@ -67,7 +62,6 @@ from apps.sales.services.solution_persistence import (
 )
 from apps.sales.services.solution_review_workflow import (
     SolutionHumanAction,
-    SolutionWorkflowOutcome,
     build_solution_review_graph,
 )
 from apps.sales.services.solution_workflow_checkpoint import (
@@ -658,7 +652,6 @@ def _collect_demo_graph(*, require_complete: bool = False) -> _DemoGraph:
     analyses = {}
     solutions = {}
     reviews = {}
-    scenario_by_key = {item.key: item for item in DEMO_SCENARIOS}
     for scenario in DEMO_SCENARIOS:
         customer_rows = Customer.objects.filter(name=scenario.customer_name)
         if customer_rows.count() > 1:

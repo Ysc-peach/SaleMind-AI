@@ -27,15 +27,7 @@ from apps.sales.services.solution_retrieval import SolutionSource
 from apps.sales.services.solution_schema import SolutionStatementType
 from apps.sales.services.solution_prompt_v2_helpers import _invalid
 from apps.sales.services.solution_prompt_v2_semantic import _semantic_pass_prompt
-from apps.sales.services.solution_prompt_v2_text import (
-    _ASSURANCE_PASS_CONTRACT,
-    _ASSURANCE_PASS_EXAMPLE,
-    _CORE_PASS_CONTRACT,
-    _CORE_PASS_EXAMPLE,
-    _IMPLEMENTATION_PASS_CONTRACT,
-    _IMPLEMENTATION_PASS_EXAMPLE,
-    _SYSTEM_PROMPT,
-)
+from apps.sales.services.solution_prompt_v2_text import _SYSTEM_PROMPT
 
 
 from apps.sales.services.solution_generation_contract import (
@@ -92,9 +84,6 @@ from apps.sales.services.solution_prompt_v2_types import (
 )
 
 
-
-
-
 def build_solution_v2_messages(
     analysis: OpportunityRequirementAnalysis,
     readiness: SolutionReadiness,
@@ -132,8 +121,6 @@ def build_solution_v2_messages(
             f"<allowed_enterprise_capabilities>\n{evidence}\n</allowed_enterprise_capabilities>"
         )},
     ]
-
-
 
 
 def _solution_v2_input_context(
@@ -207,33 +194,6 @@ def _solution_v2_input_context(
     )
 
 
-def _pass_system_prompt(contract: str, example: str) -> str:
-    prompt = _SYSTEM_PROMPT.replace(
-            "__REQUIREMENT_DIMENSIONS__",
-            ", ".join(item.value for item in RequirementDimension),
-        )
-    prompt = prompt.replace(
-        "顶层恰好只有 proposals、structure_relations；proposals 数量为 0 至 38，绝对不得超过 38，这是最大上限而不是目标数量；只生成完成当前方案真正需要的 proposal。",
-        "顶层恰好只有 proposals、structure_relations；只生成完成当前 pass 真正需要的 proposal，并严格遵守下方当前 pass 上限。",
-    ).replace(
-        "使用 4 个组件时，identity、responsibility、rationale、interface 至少占用 16 条 proposal，其余所有 section 必须共享剩余最多 22 条，不得通过增加低价值 claim 挤占预算。",
-        "使用 4 个组件时，identity、responsibility、rationale、interface 至少占用 16 条 proposal，不得通过增加低价值 claim 挤占当前 pass 预算。",
-    ).replace(
-        "proposal 总数不超过 38；组件不超过 4；",
-        "proposal 总数不超过当前 pass 的明确上限；组件不超过 4；",
-    )
-    example_start = "只返回一个 JSON 对象，不含 Markdown 或解释：\n"
-    example_end = "\n顶层恰好只有 proposals、structure_relations；"
-    prefix, marker, remainder = prompt.partition(example_start)
-    _old_example, suffix_marker, suffix = remainder.partition(example_end)
-    if not marker or not suffix_marker:
-        _invalid(SolutionDraftErrorCode.INVALID_INPUT)
-    prompt = prefix + example_start + example + example_end + suffix
-    return prompt + contract
-
-
-
-
 def build_solution_v2_core_messages(
     analysis: OpportunityRequirementAnalysis,
     readiness: SolutionReadiness,
@@ -292,9 +252,8 @@ def build_solution_v2_implementation_messages(
     )
     runtime_budget = implementation_runtime_proposal_budget(len(core.proposals))
     budget_options = json.dumps(_implementation_budget_options(runtime_budget), separators=(",", ":"))
-    contract = _IMPLEMENTATION_PASS_CONTRACT.replace(
-        "__IMPLEMENTATION_RUNTIME_BUDGET__", str(runtime_budget)
-    )
+    # The system prompt is built by _semantic_pass_prompt, which applies the
+    # contract and the runtime budget itself.
     return [
         {
             "role": "system",
@@ -355,9 +314,6 @@ def build_solution_v2_assurance_messages(
     )
     runtime_budget = assurance_runtime_proposal_budget(
         len(core.proposals), len(implementation.proposals)
-    )
-    contract = _ASSURANCE_PASS_CONTRACT.replace(
-        "__ASSURANCE_RUNTIME_BUDGET__", str(runtime_budget)
     )
     return [
         {

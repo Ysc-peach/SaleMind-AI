@@ -8,7 +8,7 @@ background process can reuse it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from uuid import UUID
 
 from apps.sales.models import (

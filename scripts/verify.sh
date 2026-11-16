@@ -24,6 +24,9 @@ verify_backend() {
     export TEST_DATABASE_TEMPLATE="${TEST_DATABASE_TEMPLATE:-salesmind_test_template}"
 
     "$PYTHON" -m pip install -r requirements/dev.txt
+    # Lint first: an undefined or unused name is cheaper to report before a
+    # twenty-minute suite than after it.
+    "$PYTHON" -m ruff check .
     "$PYTHON" manage.py check
     "$PYTHON" manage.py makemigrations --check --dry-run
     "$PYTHON" -m pytest -q

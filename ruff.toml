@@ -1,0 +1,35 @@
+# Minimal lint contract: only rules that catch defects, not style preferences.
+# Line length, import order and lambda-vs-def stay out, because reformatting the
+# whole tree in the same change would bury the review of any real fix.
+target-version = "py312"
+line-length = 100
+
+[lint]
+select = [
+    "E4",  # duplicate imports, wildcard imports
+    "E7",  # statements that cannot do what they look like they do
+    "E9",  # syntax-level errors
+    "F",   # pyflakes: undefined names, unused imports/variables
+]
+ignore = [
+    # Long lines are reviewed by eye; enforcing them here would only produce a
+    # formatting-only diff across the whole repository.
+    "E501",
+    # Style, not a defect: `handler = lambda ...` in a test is not a bug.
+    "E731",
+]
+
+[lint.per-file-ignores]
+# pytest fixtures are shared by importing them into the test module, so an
+# imported name that also appears as a parameter is intentional, not a duplicate,
+# and the import is the registration rather than dead code.
+"apps/**/tests/*.py" = ["F811", "F401"]
+# Settings modules extend base.py with a wildcard import by design.
+"config/settings/*.py" = ["F405"]
+# These two are the re-export facade for the prompt layer: they import names
+# that other modules read from them, so nothing inside the file uses them.
+"apps/sales/services/solution_prompt_v2.py" = ["F401"]
+"apps/sales/services/solution_prompt_v2_passes.py" = ["F401"]
+
+[format]
+quote-style = "double"

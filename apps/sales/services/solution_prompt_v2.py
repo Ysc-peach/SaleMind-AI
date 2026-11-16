@@ -85,14 +85,9 @@ from apps.sales.services.solution_prompt_v2_types import (
     _ASSURANCE_RELATIONS,
     _CONTAINER_KEY,
 )
-
-_MAX_LEGACY_SINGLE_PASS_PROPOSALS = 38
-
-
 from apps.sales.services.solution_prompt_v2_passes import (
     build_solution_v2_messages,
     _solution_v2_input_context,
-    _pass_system_prompt,
     build_solution_v2_core_messages,
     _clarification_action_style_context,
     build_solution_v2_implementation_messages,
@@ -107,6 +102,8 @@ from apps.sales.services.solution_prompt_v2_passes import (
     _validate_section_budgets,
     _validate_pass_contract,
 )
+
+_MAX_LEGACY_SINGLE_PASS_PROPOSALS = 38
 
 
 

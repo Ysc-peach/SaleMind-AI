@@ -20,7 +20,6 @@ from apps.sales.models import (
     SolutionGenerationJobStatus,
     SolutionReview,
     SolutionReviewDecisionStatus,
-    SolutionReviewStatus,
 )
 from apps.sales.services.solution_review import (
     SolutionReviewPermissionError,
@@ -52,7 +51,6 @@ from apps.sales.services.solution_workflow_checkpoint import (
 from config.throttling import ScopedActionThrottleMixin
 from apps.sales.services.visibility import (
     visible_opportunities_for,
-    visible_solution_drafts_for,
 )
 from .permissions import SolutionDraftPermission
 from .solution_workflow_serializers import (

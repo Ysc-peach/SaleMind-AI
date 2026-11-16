@@ -39,12 +39,8 @@ from apps.sales.services.solution_draft import (
     SolutionGenerationStatus,
     generate_grounded_solution_draft,
 )
-from apps.sales.services.requirement_analysis import RequirementDimension
 from apps.sales.services.solution_schema import (
-    SECTION_DEFINITIONS,
-    SolutionAssumption,
     SolutionDraft,
-    SolutionSection,
     SolutionStatement,
     SolutionStatementType,
 )

@@ -6,7 +6,7 @@ from django.db.models import Count, F, OuterRef, Q, Subquery
 from django.urls import reverse
 from django.utils.html import format_html
 
-from .models import GroundingFactExtractionAttempt, KnowledgeDocument
+from .models import GroundingFactExtractionAttempt
 from .admin_document_operations import DocumentOperationsMixin
 from .exceptions import KnowledgeDocumentError, KnowledgeDocumentErrorCode
 from .services.grounding_fact_attempts import SAFE_MESSAGES
