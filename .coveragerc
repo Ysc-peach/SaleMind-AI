@@ -1,0 +1,13 @@
+# Coverage measures shipped code only. Counting the test modules themselves
+# pushed the reported total to 98%, which says nothing about the product; with
+# them and the migrations excluded the number means what a reader expects.
+[run]
+source = apps
+omit =
+    */tests/*
+    */migrations/*
+
+[report]
+exclude_lines =
+    pragma: no cover
+    raise NotImplementedError

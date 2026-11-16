@@ -28,6 +28,12 @@ backups/
 .DS_Store
 Thumbs.db
 
+# Coverage artefacts (produced by COVERAGE=1 bash scripts/verify.sh backend)
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
 # Superpowers execution workspace
 .superpowers/
 .worktrees/

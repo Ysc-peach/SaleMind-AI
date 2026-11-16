@@ -30,6 +30,9 @@ jobs:
       DJANGO_SETTINGS_MODULE: config.settings.test
       TEST_DATABASE_TEMPLATE: salesmind_test_template
       PYTHON: python
+      # Ask verify.sh for the coverage report so the artifact is produced here
+      # rather than on every local run.
+      COVERAGE: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -48,6 +51,14 @@ jobs:
           psql -h localhost -U salesmind -d salesmind_test_template -c "CREATE EXTENSION IF NOT EXISTS vector;"
       - name: Verify backend
         run: bash scripts/verify.sh backend
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: coverage.xml
+          if-no-files-found: warn
+          retention-days: 14
 
   frontend:
     name: Vitest and Vite build

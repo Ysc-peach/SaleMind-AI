@@ -29,7 +29,16 @@ verify_backend() {
     "$PYTHON" -m ruff check .
     "$PYTHON" manage.py check
     "$PYTHON" manage.py makemigrations --check --dry-run
-    "$PYTHON" -m pytest -q
+    if [ -n "${COVERAGE:-}" ]; then
+        # Opt-in: measuring costs roughly a tenth of the runtime, so a local run
+        # keeps the plain command while CI asks for the report.
+        "$PYTHON" -m pytest -q \
+            --cov=apps \
+            --cov-report=term-missing:skip-covered \
+            --cov-report=xml:coverage.xml
+    else
+        "$PYTHON" -m pytest -q
+    fi
 }
 
 verify_frontend() {
