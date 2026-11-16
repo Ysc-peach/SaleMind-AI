@@ -1,7 +1,10 @@
-"""Static prompt contracts and examples for Solution Domain V2.
+"""The shared system prompt for Solution Domain V2 generation.
 
-These strings are data, not logic. Keeping them apart makes the parser,
-budget and assembly code in solution_prompt_v2.py readable.
+Only the prompt every pass starts from lives here. The per-pass contracts and
+examples this module used to carry were superseded by
+``solution_prompt_v2_semantic``, which builds each pass prompt from the
+validated inputs instead of a static template, so they were deleted rather than
+kept as unreferenced strings.
 """
 
 _SYSTEM_PROMPT = """你是企业售前解决方案助手。你只能生成待验证的原子 proposal，不能生成或重分类客户事实、企业事实、假设、待确认事项。
@@ -45,111 +48,3 @@ structure_relations 只声明结构容器之间的关系，不承载新的业务
 
 输出必须是紧凑 JSON：不缩进、不返回 Markdown fence、不在 JSON 前后输出 prose、不复述 schema。所有 atomic claim 保持简洁，避免重复 rationale、重复背景和相同结论。输出前必须逐项检查：proposal 总数不超过 38；组件不超过 4；每个组件恰好一条 identity 且至少一条 responsibility、rationale、interface；两个以上组件时至少一条 component_request_flow；所有 enum 拼写、container_key 和 relation 引用严格合法。任何必需项放不下时，应减少不必要组件或重复 proposal，而不是输出半截 JSON。
 """
-
-_CORE_PASS_CONTRACT = """
-
-当前任务是两阶段生成中的 Pass 1 — Technical Core。上面的规则描述最终 V2 的完整语义；本次输出必须进一步严格收窄为：
-- proposals 最多 46 条；这是硬上限而不是目标数量。
-- 只允许 proposed_solution、architecture、deployment_and_integration placement。
-- proposed_solution 的单条 proposal 只能包含一个可独立批准或否决的技术决策；不得在单条 proposal 中合并部署边界、技术选型、外部集成等多个独立技术决策。
-- 只允许 component_dependency、component_request_flow、component_data_flow relation。
-- architecture component 最多 4 个，且每个组件必须恰好一条 identity，并至少一条 responsibilities、rationale、interfaces。
-- 两个以上组件时必须输出至少一条 component_request_flow；存在真实数据读写/传递时输出 component_data_flow。
-- 禁止输出 implementation_plan、risks、acceptance_criteria、milestones、out_of_scope，以及 phase_dependency、phase_acceptance、milestone_phase。
-- 优先架构分组而不是扩张组件；不得为了接近 46 条而拆出低价值 proposal。
-只返回紧凑 JSON，不得输出 Markdown、解释或 schema 复述。输出前重新检查 proposal 数量、组件完整性、relation 引用和本 pass 的 allowed placement。
-"""
-
-
-_IMPLEMENTATION_PASS_CONTRACT = """
-
-当前任务是三阶段生成中的 Pass 2 — Implementation Planning，只回答“已确定的技术方案应该怎样实施”。本次输出必须严格收窄为：
-- 本次 runtime proposal 总预算最多 __IMPLEMENTATION_RUNTIME_BUDGET__ 条；这是由已验证 Core 实际数量计算出的硬上限，不是生成目标。
-- section maximum：implementation_plan 最多 16 条；milestones 最多 4 条。
-- 只允许 implementation_plan、milestones placement；只允许 phase_dependency、milestone_phase relation。
-- 禁止输出 proposed_solution、architecture、deployment_and_integration、risks、acceptance_criteria、out_of_scope placement。
-- 禁止输出 component_dependency、component_request_flow、component_data_flow、phase_acceptance relation。
-- <validated_technical_core> 已通过严格校验，只能作为实施设计上下文；不得重写架构、重新做技术推荐或新增架构组件。
-- 实施阶段应表达 objective、tasks、deliverables、dependency 和合理的 exit sequencing；milestone 必须引用本 pass 已存在的 phase。
-- 优先高价值 atomic proposal，避免重复语义和不必要拆分，不得为了接近上限制造内容。
-只返回紧凑 JSON，不得输出 Markdown、解释或 schema 复述。输出前检查 runtime/section 数量、relation 引用和 allowed placement。
-"""
-
-_ASSURANCE_PASS_CONTRACT = """
-
-当前任务是三阶段生成中的 Pass 3 — Assurance & Boundaries，只回答“方案有哪些风险、边界，以及如何证明实施成功”。本次输出必须严格收窄为：
-- 本次 runtime proposal 总预算最多 __ASSURANCE_RUNTIME_BUDGET__ 条；这是由已验证 Core 与 Implementation 实际数量计算出的硬上限，不是生成目标。
-- section maximum：risks 最多 12 条；acceptance_criteria 最多 6 条；assumptions 最多 2 条；open_questions 最多 2 条；out_of_scope 最多 2 条。
-- 只允许 risks、acceptance_criteria、out_of_scope placement；只允许 phase_acceptance relation。
-- assumptions 与 unresolved/open questions 继续由程序从 Requirement Analysis 确定性保留，provider 不得生成、改写或重分类它们。
-- 禁止输出 proposed_solution、architecture、deployment_and_integration、implementation_plan、milestones placement。
-- 禁止输出 component_dependency、component_request_flow、component_data_flow、phase_dependency、milestone_phase relation。
-- <validated_technical_core> 与 <validated_implementation_plan> 均已通过严格校验；不得修改它们，也不得引用不存在的组件或 phase。
-- phase_acceptance 的 source 必须引用已验证 Implementation Plan 中真实存在的 phase key，target 必须引用本 pass 的 acceptance criterion。
-- 优先高价值 atomic proposal，避免重复语义和不必要拆分，不得为了接近上限制造内容。
-只返回紧凑 JSON，不得输出 Markdown、解释或 schema 复述。输出前检查 runtime/section 数量、跨 pass relation 引用和 allowed placement。
-"""
-
-_CORE_PASS_EXAMPLE = (
-    '{"proposals":['
-    '{"placement":{"section":"architecture","container_kind":"architecture_component",'
-    '"container_key":"application_service","field":"identity"},'
-    '"text":"企业应用服务","citations":["S1"],'
-    '"related_requirement_fields":["business_goal"]},'
-    '{"placement":{"section":"architecture","container_kind":"architecture_component",'
-    '"container_key":"application_service","field":"responsibilities"},'
-    '"text":"应用服务负责组织业务请求。","citations":["S1"],'
-    '"related_requirement_fields":["business_goal"]},'
-    '{"placement":{"section":"architecture","container_kind":"architecture_component",'
-    '"container_key":"application_service","field":"rationale"},'
-    '"text":"独立应用边界便于隔离业务入口。","citations":["S1"],'
-    '"related_requirement_fields":["business_goal"]},'
-    '{"placement":{"section":"architecture","container_kind":"architecture_component",'
-    '"container_key":"application_service","field":"interfaces"},'
-    '"text":"应用服务通过受控接口调用知识服务。","citations":["S1"],'
-    '"related_requirement_fields":["business_goal"]}'
-    '],"structure_relations":[]}'
-)
-
-_IMPLEMENTATION_PASS_EXAMPLE = (
-    '{"proposals":['
-    '{"placement":{"section":"implementation_plan","container_kind":"implementation_phase",'
-    '"container_key":"validation","field":"objective"},'
-    '"text":"验证核心业务链路和访问边界。","citations":["S1"],'
-    '"related_requirement_fields":["business_goal"]},'
-    '{"placement":{"section":"implementation_plan","container_kind":"implementation_phase",'
-    '"container_key":"validation","field":"tasks"},'
-    '"text":"执行端到端业务场景验证。","citations":["S1"],'
-    '"related_requirement_fields":["business_goal"]},'
-    '{"placement":{"section":"implementation_plan","container_kind":"implementation_phase",'
-    '"container_key":"validation","field":"deliverables"},'
-    '"text":"交付业务场景验证记录。","citations":["S1"],'
-    '"related_requirement_fields":["business_goal"]},'
-    '{"placement":{"section":"milestones","container_kind":"milestone",'
-    '"container_key":"validation_complete","field":"outcome"},'
-    '"text":"核心业务链路完成验收。","citations":["S1"],'
-    '"related_requirement_fields":["business_goal"]}'
-    '],"structure_relations":['
-    '{"relation_type":"milestone_phase","source_container_kind":"milestone",'
-    '"source_container_key":"validation_complete","target_container_kind":"implementation_phase",'
-    '"target_container_key":"validation"}'
-    ']}'
-)
-
-_ASSURANCE_PASS_EXAMPLE = (
-    '{"proposals":['
-    '{"placement":{"section":"risks","container_kind":"risk",'
-    '"container_key":"access_boundary","field":"condition"},'
-    '"text":"若权限映射不完整，受限知识可能被错误纳入检索范围。","citations":["S1"],'
-    '"related_requirement_fields":["data_security"]},'
-    '{"placement":{"section":"acceptance_criteria","container_kind":"acceptance_criterion",'
-    '"container_key":"business_flow","field":"criterion"},'
-    '"text":"以授权身份查询受限资料，返回结果应仅包含该身份获准访问的资料。","citations":["S1"],'
-    '"related_requirement_fields":["business_goal"]}'
-    '],"structure_relations":['
-    '{"relation_type":"phase_acceptance","source_container_kind":"implementation_phase",'
-    '"source_container_key":"validation","target_container_kind":"acceptance_criterion",'
-    '"target_container_key":"business_flow"}'
-    ']}'
-)
-

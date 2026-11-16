@@ -22,15 +22,7 @@ from apps.sales.services.solution_retrieval import SolutionSource
 from apps.sales.services.solution_schema import SolutionStatementType
 from apps.sales.services.solution_prompt_v2_helpers import _invalid
 from apps.sales.services.solution_prompt_v2_semantic import _semantic_pass_prompt
-from apps.sales.services.solution_prompt_v2_text import (
-    _ASSURANCE_PASS_CONTRACT,
-    _ASSURANCE_PASS_EXAMPLE,
-    _CORE_PASS_CONTRACT,
-    _CORE_PASS_EXAMPLE,
-    _IMPLEMENTATION_PASS_CONTRACT,
-    _IMPLEMENTATION_PASS_EXAMPLE,
-    _SYSTEM_PROMPT,
-)
+from apps.sales.services.solution_prompt_v2_text import _SYSTEM_PROMPT
 
 
 from apps.sales.services.solution_generation_contract import (
