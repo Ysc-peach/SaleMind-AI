@@ -11,12 +11,14 @@ from apps.sales.models import (
     SolutionGenerationJob,
     SolutionGenerationJobStatus,
 )
+from apps.sales.services.solution_generation_jobs import stale_running_queryset
 
 
 @dataclass(frozen=True)
 class GenerationHealth:
     queued: int
     running: int
+    stale_running: int
     oldest_queued_wait_seconds: float
     failed_last_hour: int
 
@@ -41,6 +43,9 @@ def collect_health(*, now=None) -> GenerationHealth:
         running=SolutionGenerationJob.objects.filter(
             status=SolutionGenerationJobStatus.RUNNING
         ).count(),
+        # A worker that died cannot reclaim its own job, so this is the only
+        # signal an operator gets from outside the worker process.
+        stale_running=stale_running_queryset(now=now).count(),
         oldest_queued_wait_seconds=wait,
         failed_last_hour=SolutionGenerationJob.objects.filter(
             status=SolutionGenerationJobStatus.FAILED,

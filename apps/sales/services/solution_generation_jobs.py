@@ -83,6 +83,26 @@ def _requeue_lost(job: SolutionGenerationJob) -> None:
     job.save(update_fields=["status", "started_at", "heartbeat_at"])
 
 
+def stale_running_queryset(*, now=None):
+    """RUNNING rows whose worker stopped heartbeating.
+
+    Shared with the health check. When the only worker dies, nothing calls
+    ``reclaim_stale_jobs``, so the operator needs to see the very same rows from
+    the outside rather than infer them from a queue that never drains.
+    """
+
+    now = now or timezone.now()
+    cutoff = now - timedelta(
+        seconds=settings.SOLUTION_GENERATION_JOB_STALE_SECONDS
+    )
+    return SolutionGenerationJob.objects.filter(
+        status=SolutionGenerationJobStatus.RUNNING
+    ).filter(
+        Q(heartbeat_at__lt=cutoff)
+        | Q(heartbeat_at__isnull=True, started_at__lt=cutoff)
+    )
+
+
 def reclaim_stale_jobs(*, now=None) -> int:
     """Requeue or fail jobs whose worker stopped heartbeating.
 
@@ -92,21 +112,13 @@ def reclaim_stale_jobs(*, now=None) -> int:
     heartbeat column was populated.
     """
 
-    now = now or timezone.now()
-    cutoff = now - timedelta(
-        seconds=settings.SOLUTION_GENERATION_JOB_STALE_SECONDS
-    )
     max_attempts = settings.SOLUTION_GENERATION_JOB_MAX_ATTEMPTS
     reclaimed = 0
 
     with transaction.atomic():
         stale = (
-            SolutionGenerationJob.objects.select_for_update(skip_locked=True)
-            .filter(status=SolutionGenerationJobStatus.RUNNING)
-            .filter(
-                Q(heartbeat_at__lt=cutoff)
-                | Q(heartbeat_at__isnull=True, started_at__lt=cutoff)
-            )
+            stale_running_queryset(now=now)
+            .select_for_update(skip_locked=True)
             .order_by("started_at", "id")
         )
         for job in stale:

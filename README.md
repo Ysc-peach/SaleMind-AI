@@ -239,8 +239,9 @@ compose 的 `backup` 服务默认启动，在 compose 网络内直连数据库�
 ```bash
 docker compose --env-file .env.production.local exec -T web \
     python manage.py check_generation_health
-# {"health": {"queued": 0, "running": 0, "oldest_queued_wait_seconds": 0.0,
-#             "failed_last_hour": 0}, "thresholds": {...}, "breaches": []}
+# {"health": {"queued": 0, "running": 0, "stale_running": 0,
+#             "oldest_queued_wait_seconds": 0.0, "failed_last_hour": 0},
+#  "thresholds": {...}, "breaches": []}
 ```
 
 crontab 示例（每 5 分钟，非零退出码发邮件）：
@@ -249,7 +250,7 @@ crontab 示例（每 5 分钟，非零退出码发邮件）：
 */5 * * * * cd /srv/salesmind && docker compose --env-file .env.production.local exec -T web python manage.py check_generation_health --max-queued 10 --max-wait-seconds 600 --max-failed-last-hour 5
 ```
 
-三个阈值分别对应：排队任务数、最老排队任务等待秒数、近一小时失败数。命令只读，不碰 provider、不改任务状态。
+四个阈值分别对应：排队任务数、最老排队任务等待秒数、近一小时失败数，以及**心跳已停但在跑的任务数**（`--max-stale-running`，默认 0）。最后一项是为了覆盖「唯一的 worker 进程自己死了」：这时没人会去回收任务，队列也不会变长，只能由外部检查发现。命令只读，不碰 provider、不改任务状态。
 
 ### 异地备份
 

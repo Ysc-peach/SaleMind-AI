@@ -18,6 +18,7 @@ class Command(BaseCommand):
         parser.add_argument("--max-queued", type=int, default=10)
         parser.add_argument("--max-wait-seconds", type=int, default=600)
         parser.add_argument("--max-failed-last-hour", type=int, default=5)
+        parser.add_argument("--max-stale-running", type=int, default=0)
 
     def handle(self, *args, **options):
         health = collect_health()
@@ -28,6 +29,10 @@ class Command(BaseCommand):
             breaches.append("oldest_queued_wait_seconds")
         if health.failed_last_hour > options["max_failed_last_hour"]:
             breaches.append("failed_last_hour")
+        # Any job whose worker stopped beating is a breach by default: if the
+        # only worker is gone, no one else will reclaim it.
+        if health.stale_running > options["max_stale_running"]:
+            breaches.append("stale_running")
 
         self.stdout.write(
             json.dumps(
@@ -37,6 +42,7 @@ class Command(BaseCommand):
                         "max_queued": options["max_queued"],
                         "max_wait_seconds": options["max_wait_seconds"],
                         "max_failed_last_hour": options["max_failed_last_hour"],
+                        "max_stale_running": options["max_stale_running"],
                     },
                     "breaches": breaches,
                 },

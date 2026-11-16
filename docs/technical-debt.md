@@ -74,6 +74,13 @@ database dump plus a media archive on an interval with retention pruning, and
 and recent failures as one JSON line with a non-zero exit code on threshold
 breaches. Both were exercised against the running stack.
 
+The health check also reports `stale_running`: rows still marked RUNNING whose
+heartbeat stopped. That is the only signal available when the single worker
+process itself dies, because in that case nothing calls `reclaim_stale_jobs` and
+the queue never grows. It shares one predicate with the reclaimer, so the two can
+never disagree about what "abandoned" means, and it breaches by default
+(`--max-stale-running 0`).
+
 Still open: off-host replication remains a deployment task. `scripts/offsite-sync.ps1`
 now provides the verified transfer (integrity gate, remote-target validation,
 non-zero exit on failure), but the destination host and SSH key must be supplied

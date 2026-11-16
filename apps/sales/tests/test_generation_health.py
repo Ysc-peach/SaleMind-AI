@@ -115,5 +115,57 @@ def test_running_and_old_failures_are_visible_but_not_breaches(job_context):
     report = _run()
 
     assert report["health"]["running"] == 1
+    assert report["health"]["stale_running"] == 0
     assert report["health"]["failed_last_hour"] == 0
+    assert report["breaches"] == []
+
+
+def test_a_run_whose_worker_died_is_a_breach_by_default(job_context):
+    now = timezone.now()
+    _add_job(
+        job_context,
+        status=SolutionGenerationJobStatus.RUNNING,
+        started_at=now - timedelta(hours=2),
+        heartbeat_at=now - timedelta(hours=1),
+        attempts=1,
+    )
+
+    output = StringIO()
+    with pytest.raises(CommandError, match="stale_running"):
+        call_command("check_generation_health", stdout=output)
+
+    report = json.loads(output.getvalue())
+    assert report["health"]["stale_running"] == 1
+    assert report["breaches"] == ["stale_running"]
+
+
+def test_a_running_row_without_a_heartbeat_falls_back_to_started_at(job_context):
+    now = timezone.now()
+    _add_job(
+        job_context,
+        status=SolutionGenerationJobStatus.RUNNING,
+        started_at=now - timedelta(hours=2),
+        heartbeat_at=None,
+        attempts=1,
+    )
+
+    # Older rows were written before the heartbeat column was populated, so the
+    # health check must not silently ignore them.
+    assert collect_health().stale_running == 1
+
+
+def test_a_freshly_beating_run_is_not_stale(job_context):
+    now = timezone.now()
+    _add_job(
+        job_context,
+        status=SolutionGenerationJobStatus.RUNNING,
+        started_at=now - timedelta(minutes=5),
+        heartbeat_at=now,
+        attempts=1,
+    )
+
+    report = _run()
+
+    assert report["health"]["running"] == 1
+    assert report["health"]["stale_running"] == 0
     assert report["breaches"] == []
