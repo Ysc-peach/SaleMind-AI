@@ -51,13 +51,9 @@ the queue, and once `SOLUTION_GENERATION_JOB_MAX_ATTEMPTS` (default 2) is spent
 it fails visibly as `workflow_worker_lost`. The lost attempt is not refunded, so
 a repeatedly crashing job cannot loop forever.
 
-A running job now refreshes `heartbeat_at` from a daemon thread every
-`SOLUTION_GENERATION_JOB_HEARTBEAT_SECONDS` (default 60, clamped to a third of
-the stale window), and the thread closes its own database connection when it
-stops. A run longer than the stale window is therefore no longer mistaken for a
-dead worker, which removes the earlier requirement that the window stay above
-one generation. Still open in this area: the verifier cost per draft is
-unchanged.
+Still open in this area: `heartbeat_at` is written on claim only, not refreshed
+during a long run, so the stale window must stay above one generation (95-98s);
+and the verifier cost per draft is unchanged.
 
 Backup/restore is no longer unproven: a 2026-11-14 drill on the compose demo
 database took a `pg_dump` plus a media archive, deliberately corrupted a row and
