@@ -8,10 +8,11 @@ queue lives in the same PostgreSQL database the project already depends on, and
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import timedelta
 
 from django.conf import settings
-from django.db import transaction
+from django.db import connections, transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -130,6 +131,73 @@ def reclaim_stale_jobs(*, now=None) -> int:
     return reclaimed
 
 
+def heartbeat_interval_seconds() -> float:
+    """Beat often enough that a healthy run never crosses the stale window.
+
+    The configured interval is clamped to a third of the stale window, so a
+    deployment that sets both to the same value cannot make its own runs look
+    dead.
+    """
+
+    configured = max(1, settings.SOLUTION_GENERATION_JOB_HEARTBEAT_SECONDS)
+    window = max(3, settings.SOLUTION_GENERATION_JOB_STALE_SECONDS)
+    return min(configured, window / 3)
+
+
+class _Heartbeat:
+    """Refresh ``heartbeat_at`` while a job is actually running.
+
+    The claim writes the heartbeat once. Without a refresh, any run longer than
+    the stale window looks abandoned and ``reclaim_stale_jobs`` either requeues
+    it or fails it as ``workflow_worker_lost``, even though the worker is fine.
+    The beat runs on a daemon thread with its own database connection, which is
+    closed when the thread stops so a long-lived worker does not leak them.
+    """
+
+    def __init__(self, job_id: int, interval_seconds: float):
+        self._job_id = job_id
+        self._interval = max(0.01, interval_seconds)
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def __enter__(self) -> "_Heartbeat":
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"generation-heartbeat-{self._job_id}",
+            daemon=True,
+        )
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc_info) -> bool:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=self._interval * 2 + 5)
+        return False
+
+    def _run(self) -> None:
+        try:
+            while not self._stop.wait(self._interval):
+                self._beat()
+        finally:
+            # The thread opened its own connection; leaving it open would keep a
+            # database session alive for every run served by this worker.
+            connections.close_all()
+
+    def _beat(self) -> None:
+        try:
+            SolutionGenerationJob.objects.filter(
+                pk=self._job_id,
+                status=SolutionGenerationJobStatus.RUNNING,
+            ).update(heartbeat_at=timezone.now())
+        except Exception:
+            # A missed beat must never abort the run: the stale window still
+            # covers the last successful one.
+            logger.warning(
+                "generation job %s heartbeat update failed", self._job_id
+            )
+
+
 def execute_job(job: SolutionGenerationJob) -> str:
     """Run one claimed job and record its terminal state.
 
@@ -138,12 +206,13 @@ def execute_job(job: SolutionGenerationJob) -> str:
     """
 
     try:
-        start_workflow(
-            workflow_id=job.workflow_id,
-            opportunity=job.opportunity,
-            analysis=job.requirement_analysis,
-            actor=job.requested_by,
-        )
+        with _Heartbeat(job.pk, heartbeat_interval_seconds()):
+            start_workflow(
+                workflow_id=job.workflow_id,
+                opportunity=job.opportunity,
+                analysis=job.requirement_analysis,
+                actor=job.requested_by,
+            )
     except GenerationCapacityReached:
         # Another run holds every slot. Put the job back rather than burning an
         # attempt; the next poll retries it.

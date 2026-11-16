@@ -139,6 +139,14 @@ SOLUTION_GENERATION_JOB_STALE_SECONDS = env.int(
     "SOLUTION_GENERATION_JOB_STALE_SECONDS",
     default=600,
 )
+
+# A running job refreshes its heartbeat this often. It is clamped to at most a
+# third of the stale window, so a misconfigured pair cannot make a healthy run
+# look dead.
+SOLUTION_GENERATION_JOB_HEARTBEAT_SECONDS = env.int(
+    "SOLUTION_GENERATION_JOB_HEARTBEAT_SECONDS",
+    default=60,
+)
 SOLUTION_GENERATION_JOB_MAX_ATTEMPTS = env.int(
     "SOLUTION_GENERATION_JOB_MAX_ATTEMPTS",
     default=2,
