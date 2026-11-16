@@ -14,6 +14,7 @@ from apps.sales.models import (
     SolutionReviewDecisionStatus,
     SolutionReviewStatus,
 )
+from apps.sales.services.review_notifications import notify_review_assigned
 from apps.sales.services.solution_persistence import (
     project_solution_draft_staleness,
     refresh_solution_draft_staleness,
@@ -96,6 +97,12 @@ def submit_solution_draft_for_review(
                 )
                 locked.review_status = SolutionReviewStatus.PENDING_REVIEW
                 locked.save(update_fields=["review_status"])
+                # Notify only once the review is committed: a rolled-back
+                # submission must not leave a reviewer chasing a review that
+                # does not exist.
+                transaction.on_commit(
+                    lambda review=created_review: notify_review_assigned(review)
+                )
     except IntegrityError as exc:
         # The draft row lock normally serializes submitters. If a constraint
         # still fires, report the existing conflict code without leaking the

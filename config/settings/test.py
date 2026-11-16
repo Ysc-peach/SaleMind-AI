@@ -14,6 +14,10 @@ from .base import *  # noqa: E402,F401,F403
 
 DEBUG = False
 
+# Tests assert on django.core.mail.outbox, which only exists with this backend.
+# The feature flag itself stays off by default, so unrelated tests send nothing.
+EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
+
 # Automated tests must never inherit real verifier credentials or make external
 # model calls from a developer's local environment.
 VERIFIER_PROVIDER = ""

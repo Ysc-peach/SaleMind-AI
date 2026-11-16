@@ -306,6 +306,21 @@ compose 里的 `worker` 服务会消费 `SolutionGenerationJob` 队列；它依�
 2. 审核时可以「通过」或「退回」，退回必须给出原因（需要补充客户信息 / 需要修改技术方案）；
 3. 方案作者不能审核自己提交的版本。
 
+审核指派后可以发一封邮件提醒（默认关闭，没有邮件服务时提交不会被拖住）：
+
+```powershell
+# .env.production.local
+NOTIFICATION_EMAIL_ENABLED=true
+EMAIL_HOST=smtp.example.internal
+EMAIL_PORT=587
+EMAIL_HOST_USER=salesmind@example.internal
+EMAIL_HOST_PASSWORD=<密码>
+DEFAULT_FROM_EMAIL=salesmind@example.internal
+SALESMIND_PUBLIC_BASE_URL=http://salesmind.internal:8080
+```
+
+邮件只在审核创建并**提交成功之后**发送；内容只有商机名、方案版本和链接，不含方案正文。发送失败只写一条不含收件人和正文的告警日志，提交本身仍然成功。
+
 ### 管理员运维
 
 | 想做的事 | 位置 |

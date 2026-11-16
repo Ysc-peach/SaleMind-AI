@@ -147,6 +147,22 @@ SOLUTION_GENERATION_JOB_HEARTBEAT_SECONDS = env.int(
     "SOLUTION_GENERATION_JOB_HEARTBEAT_SECONDS",
     default=60,
 )
+
+# Review notifications are opt-in: without a mail server the project must not
+# try to reach one on every submission. The public base URL is only used to
+# build the link inside the mail.
+NOTIFICATION_EMAIL_ENABLED = env.bool("NOTIFICATION_EMAIL_ENABLED", default=False)
+SALESMIND_PUBLIC_BASE_URL = env("SALESMIND_PUBLIC_BASE_URL", default="")
+
+EMAIL_BACKEND = env(
+    "EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend"
+)
+EMAIL_HOST = env("EMAIL_HOST", default="")
+EMAIL_PORT = env.int("EMAIL_PORT", default=587)
+EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
+EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="salesmind@example.internal")
 SOLUTION_GENERATION_JOB_MAX_ATTEMPTS = env.int(
     "SOLUTION_GENERATION_JOB_MAX_ATTEMPTS",
     default=2,
