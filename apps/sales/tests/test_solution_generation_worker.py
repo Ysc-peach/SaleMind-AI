@@ -1,5 +1,6 @@
 """The worker claims queued rows and records exactly one terminal state."""
 
+import time
 from datetime import timedelta
 from uuid import uuid4
 
@@ -183,3 +184,54 @@ def test_unexpected_errors_do_not_leak_into_the_row(monkeypatch, queued_job):
     assert job.status == SolutionGenerationJobStatus.FAILED
     assert job.error_code == "workflow_generation_error"
     assert "PRIVATE_PROVIDER_BODY" not in job.error_code
+
+
+def test_the_heartbeat_interval_is_clamped_to_the_stale_window(settings):
+    settings.SOLUTION_GENERATION_JOB_HEARTBEAT_SECONDS = 600
+    settings.SOLUTION_GENERATION_JOB_STALE_SECONDS = 600
+
+    # A deployment that sets both to the same value must not make its own
+    # healthy runs look dead.
+    assert jobs.heartbeat_interval_seconds() == 200
+
+
+def test_a_running_job_keeps_its_heartbeat_fresh(queued_job):
+    job = _running_job(queued_job, attempts=1, heartbeat_delta=timedelta(hours=1))
+
+    with jobs._Heartbeat(job.pk, 0.05):
+        time.sleep(0.3)
+
+    job.refresh_from_db()
+    # The hour-old heartbeat was replaced while the run was in flight, so a run
+    # longer than the stale window is no longer mistaken for a dead worker.
+    assert timezone.now() - job.heartbeat_at < timedelta(seconds=10)
+
+
+def test_the_heartbeat_stops_when_the_run_finishes(queued_job):
+    job = _running_job(queued_job, attempts=1, heartbeat_delta=timedelta(hours=1))
+
+    with jobs._Heartbeat(job.pk, 0.05):
+        time.sleep(0.2)
+    job.refresh_from_db()
+    after_run = job.heartbeat_at
+
+    time.sleep(0.3)
+    job.refresh_from_db()
+    assert job.heartbeat_at == after_run
+
+
+def test_a_finished_job_is_not_kept_alive(queued_job):
+    job = _running_job(queued_job, attempts=1, heartbeat_delta=timedelta(hours=1))
+    # A terminal status needs finished_at; the table enforces that pairing.
+    SolutionGenerationJob.objects.filter(pk=job.pk).update(
+        status=SolutionGenerationJobStatus.SUCCEEDED,
+        finished_at=timezone.now(),
+    )
+    job.refresh_from_db()
+    settled = job.heartbeat_at
+
+    with jobs._Heartbeat(job.pk, 0.05):
+        time.sleep(0.25)
+
+    job.refresh_from_db()
+    assert job.heartbeat_at == settled
