@@ -13,9 +13,6 @@ from apps.sales.services.solution_generation_capacity import (
     GenerationCapacityReached,
 )
 from apps.sales.services.solution_workflow_runner import WorkflowFailedOutcome
-from apps.sales.tests.test_solution_persistence_service import (  # noqa: F401
-    persistence_context,
-)
 
 
 pytestmark = pytest.mark.django_db(transaction=True)

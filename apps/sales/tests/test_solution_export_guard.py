@@ -8,9 +8,7 @@ from rest_framework.exceptions import PermissionDenied, NotFound
 from apps.accounts.models import UserRole
 from apps.knowledge.models import KnowledgeChunk
 from apps.sales.models import SolutionDraftRecord, SolutionDraftProvenance, SolutionReview, OpportunityRequirementAnalysis
-from apps.sales.tests.export_fixtures import (
-    make_export_case, persistence_context, generated_artifact, business_state,
-)
+from apps.sales.tests.export_fixtures import make_export_case, business_state
 
 pytestmark = pytest.mark.django_db(transaction=True)
 

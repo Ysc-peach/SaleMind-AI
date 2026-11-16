@@ -12,9 +12,6 @@ from django.utils import timezone
 
 from apps.sales.models import SolutionGenerationJob, SolutionGenerationJobStatus
 from apps.sales.services.generation_health import collect_health
-from apps.sales.tests.test_solution_persistence_service import (  # noqa: F401
-    persistence_context,
-)
 
 
 pytestmark = pytest.mark.django_db(transaction=True)

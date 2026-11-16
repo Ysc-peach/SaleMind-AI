@@ -20,9 +20,11 @@ ignore = [
 ]
 
 [lint.per-file-ignores]
-# pytest fixtures are shared by importing them into the test module, so an
-# imported name that also appears as a parameter is intentional, not a duplicate,
-# and the import is the registration rather than dead code.
+# The sales suite now takes its shared fixtures from conftest.py, but the
+# knowledge suite still imports fixtures into a module on purpose: its
+# `local_admin_environment` is autouse and must stay opt-in per module, and an
+# imported fixture that also appears as a parameter is a registration, not a
+# redefinition.
 "apps/**/tests/*.py" = ["F811", "F401"]
 # Settings modules extend base.py with a wildcard import by design.
 "config/settings/*.py" = ["F405"]

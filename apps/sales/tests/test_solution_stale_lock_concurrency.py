@@ -22,10 +22,6 @@ from django.utils import timezone
 
 from apps.knowledge.models import KnowledgeDocument
 from apps.sales.services.solution_review import approve_solution_draft
-from apps.sales.tests.test_solution_persistence_service import (  # noqa: F401
-    generated_artifact,
-    persistence_context,
-)
 from apps.sales.tests.test_solution_stale_revalidation_atomicity import (
     _pending_case,
 )

@@ -9,10 +9,6 @@ from rest_framework.test import APIClient
 from apps.accounts.models import UserRole
 from apps.sales.models import SolutionReview, SolutionReviewStatus
 from apps.sales.services.solution_persistence import generate_and_persist_solution_draft
-from apps.sales.tests.test_solution_persistence_service import (  # noqa: F401
-    generated_artifact,
-    persistence_context,
-)
 from apps.sales.tests.test_solution_v2_provenance import _patch, _v2_result
 
 

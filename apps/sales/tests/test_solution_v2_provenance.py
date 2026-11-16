@@ -5,10 +5,6 @@ from uuid import uuid4
 
 import pytest
 
-from apps.sales.tests.test_solution_persistence_service import (
-    generated_artifact,
-    persistence_context,
-)
 
 
 pytestmark = pytest.mark.django_db(transaction=True)

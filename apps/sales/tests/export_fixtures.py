@@ -7,7 +7,6 @@ from apps.accounts.models import UserRole
 from apps.sales.models import SolutionReview, SolutionDraftRecord, SolutionDraftProvenance
 from apps.sales.services.solution_persistence import generate_and_persist_solution_draft
 from apps.sales.services.solution_review import submit_solution_draft_for_review, approve_solution_draft
-from apps.sales.tests.test_solution_persistence_service import persistence_context, generated_artifact
 from apps.sales.tests.test_solution_v2_provenance import _v2_result, _patch
 
 

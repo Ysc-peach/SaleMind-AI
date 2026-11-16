@@ -31,10 +31,6 @@ from apps.sales.services.solution_review import (
     validate_solution_review_submission,
 )
 from apps.sales.tests.export_fixtures import make_export_case  # noqa: F401
-from apps.sales.tests.test_solution_persistence_service import (  # noqa: F401
-    generated_artifact,
-    persistence_context,
-)
 from apps.sales.tests.test_solution_v2_provenance import _patch, _v2_result
 
 

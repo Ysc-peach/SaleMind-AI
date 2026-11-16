@@ -2,7 +2,7 @@
 import pytest
 from django.db import connection
 from rest_framework.test import APIClient
-from apps.sales.tests.export_fixtures import make_export_case, persistence_context, generated_artifact, business_state
+from apps.sales.tests.export_fixtures import make_export_case, business_state
 
 pytestmark = pytest.mark.django_db(transaction=True)
 

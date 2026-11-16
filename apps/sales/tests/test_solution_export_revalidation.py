@@ -6,7 +6,7 @@ import pytest
 from django.utils import timezone
 from apps.sales.models import SolutionDraftRecord, SolutionDraftProvenance, SolutionReview, OpportunityRequirementAnalysis
 from apps.knowledge.models import KnowledgeChunk, EnterpriseGroundingFact
-from apps.sales.tests.export_fixtures import make_export_case, persistence_context, generated_artifact
+from apps.sales.tests.export_fixtures import make_export_case
 from apps.sales.tests.test_solution_export_api import client, url
 
 pytestmark = pytest.mark.django_db(transaction=True)
