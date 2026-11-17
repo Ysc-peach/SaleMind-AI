@@ -3,25 +3,32 @@
   "note": "Third-party documentation kept for local evaluation only; the text is not committed and the licence stays with the publisher.",
   "documents": [
     {
-      "url": "https://doc.fastgpt.io/self-host.md",
-      "file": "doc-fastgpt-io-self-host-md.txt",
-      "title": "Deploy and operate",
-      "chars": 4493,
-      "sha256": "7a7b5e5faf0795b4f6c23bc9e20c43799cdeba3f353051b1e5d7f43a79736273"
+      "url": "https://doc.fastgpt.io/faq/chat.md",
+      "file": "doc-fastgpt-io-faq-chat-md.txt",
+      "title": "Chat Interface",
+      "chars": 2366,
+      "sha256": "668e4e089180527dd82a17bcbe2ce32eb7c24537243b969094318a43dfb4461d"
     },
     {
-      "url": "https://doc.fastgpt.io/self-host/config/env.md",
-      "file": "doc-fastgpt-io-self-host-config-env-md.txt",
-      "title": "Environment Variables",
-      "chars": 83165,
-      "sha256": "4ea78ad93cde3eb89308993e49245f76dda134b953771141c4b1d713f845ea56"
+      "url": "https://doc.fastgpt.io/guide/dataset/collection_permission.md",
+      "file": "doc-fastgpt-io-guide-dataset-collection-permission-md.txt",
+      "title": "Collection Permission Control",
+      "chars": 9649,
+      "sha256": "40d087d13687edb26c6d39d6af4cadd5181b82194ae87472a1aee7f56e82b515"
     },
     {
-      "url": "https://doc.fastgpt.io/guide/dataset/rag.md",
-      "file": "doc-fastgpt-io-guide-dataset-rag-md.txt",
-      "title": "RAG Architecture and Anti-Hallucination",
-      "chars": 4869,
-      "sha256": "88f9a11aebc318704320b7a5df82ce58b041db4da8a916303fedeca96a9d59d2"
+      "url": "https://doc.fastgpt.io/guide/dataset/dataset_engine.md",
+      "file": "doc-fastgpt-io-guide-dataset-dataset-engine-md.txt",
+      "title": "Knowledge Base Dual-Engine Principles",
+      "chars": 10998,
+      "sha256": "ba61e4e0bfe0a2c56b7c5b7209a74277b48995717c55cf7a08c0246712923db2"
+    },
+    {
+      "url": "https://doc.fastgpt.io/guide/dataset/faq.md",
+      "file": "doc-fastgpt-io-guide-dataset-faq-md.txt",
+      "title": "Knowledge Base Troubleshooting",
+      "chars": 7040,
+      "sha256": "ea3748d836978a48d4ba32aebace52d76bff1e2c24fe8f30990d7b4e91ea2278"
     },
     {
       "url": "https://doc.fastgpt.io/guide/dataset/import-data.md",
@@ -31,11 +38,18 @@
       "sha256": "4d6d3ef6105dbde3b29113564ebb0afba3723f42f5701c2662b48f5b67b0407c"
     },
     {
-      "url": "https://doc.fastgpt.io/self-host/custom-models/mineru.md",
-      "file": "doc-fastgpt-io-self-host-custom-models-mineru-md.txt",
-      "title": "Integrating MinerU PDF Parsing",
-      "chars": 5409,
-      "sha256": "2653a450ae42ae5fae38a86a8edd344b43a1cc63380e13d64dfe96fb377f90b9"
+      "url": "https://doc.fastgpt.io/guide/dataset/rag.md",
+      "file": "doc-fastgpt-io-guide-dataset-rag-md.txt",
+      "title": "RAG Architecture and Anti-Hallucination",
+      "chars": 4869,
+      "sha256": "88f9a11aebc318704320b7a5df82ce58b041db4da8a916303fedeca96a9d59d2"
+    },
+    {
+      "url": "https://doc.fastgpt.io/openapi/dataset.md",
+      "file": "doc-fastgpt-io-openapi-dataset-md.txt",
+      "title": "Integrate knowledge ingestion and retrieval",
+      "chars": 15538,
+      "sha256": "ee95a3b92f6d753e8181fb8f85aaef630a84f6ed97af08cf5b507941afe4bfe8"
     },
     {
       "url": "https://doc.fastgpt.io/openapi/identity-proxy.md",
@@ -52,11 +66,39 @@
       "sha256": "0d235ec97d4084e7bfe562eb3fa04517bd9ff7df136788dbc7d403606359e00a"
     },
     {
-      "url": "https://doc.fastgpt.io/guide/dataset/dataset_engine.md",
-      "file": "doc-fastgpt-io-guide-dataset-dataset-engine-md.txt",
-      "title": "Knowledge Base Dual-Engine Principles",
-      "chars": 10998,
-      "sha256": "ba61e4e0bfe0a2c56b7c5b7209a74277b48995717c55cf7a08c0246712923db2"
+      "url": "https://doc.fastgpt.io/self-host.md",
+      "file": "doc-fastgpt-io-self-host-md.txt",
+      "title": "Deploy and operate",
+      "chars": 4493,
+      "sha256": "7a7b5e5faf0795b4f6c23bc9e20c43799cdeba3f353051b1e5d7f43a79736273"
+    },
+    {
+      "url": "https://doc.fastgpt.io/self-host/config/env.md",
+      "file": "doc-fastgpt-io-self-host-config-env-md.txt",
+      "title": "Environment Variables",
+      "chars": 83165,
+      "sha256": "4ea78ad93cde3eb89308993e49245f76dda134b953771141c4b1d713f845ea56"
+    },
+    {
+      "url": "https://doc.fastgpt.io/self-host/config/model/intro.md",
+      "file": "doc-fastgpt-io-self-host-config-model-intro-md.txt",
+      "title": "Model Configuration",
+      "chars": 22294,
+      "sha256": "a86bf68056a3f09a3bf3025771057804f1cca98157a41e0f5e1e59f5a00ad24a"
+    },
+    {
+      "url": "https://doc.fastgpt.io/self-host/config/object-storage.md",
+      "file": "doc-fastgpt-io-self-host-config-object-storage-md.txt",
+      "title": "Object Storage Configuration",
+      "chars": 7758,
+      "sha256": "44ad5b09a36e4e955b14b7455e416fe4f87f1a3d78b056f0a8f596ca69286e5d"
+    },
+    {
+      "url": "https://doc.fastgpt.io/self-host/custom-models/mineru.md",
+      "file": "doc-fastgpt-io-self-host-custom-models-mineru-md.txt",
+      "title": "Integrating MinerU PDF Parsing",
+      "chars": 5409,
+      "sha256": "2653a450ae42ae5fae38a86a8edd344b43a1cc63380e13d64dfe96fb377f90b9"
     }
   ]
 }

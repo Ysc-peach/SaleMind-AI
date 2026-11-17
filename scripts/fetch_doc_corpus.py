@@ -143,7 +143,17 @@ def main() -> int:
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = out_dir / "sources.json"
-    entries = []
+    # Merging keeps the manifest usable when a corpus grows in waves: re-fetching
+    # one page must not drop the entries recorded earlier.
+    existing: list[dict] = []
+    if manifest_path.exists():
+        try:
+            existing = json.loads(manifest_path.read_text(encoding="utf-8")).get(
+                "documents", []
+            )
+        except (OSError, ValueError):
+            existing = []
+    entries: list[dict] = []
     for url in args.urls:
         try:
             entry = fetch(url, out_dir)
@@ -155,18 +165,23 @@ def main() -> int:
 
     if not entries:
         return 1
+    merged = {item["url"]: item for item in existing}
+    merged.update({item["url"]: item for item in entries})
     manifest = {
         "fetched_on": date.today().isoformat(),
         "note": (
             "Third-party documentation kept for local evaluation only; the text is "
             "not committed and the licence stays with the publisher."
         ),
-        "documents": entries,
+        "documents": [merged[url] for url in sorted(merged)],
     }
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    print(f"\nwrote {manifest_path} with {len(entries)} document(s)")
+    print(
+        f"\nwrote {manifest_path} with {len(merged)} document(s) "
+        f"({len(entries)} fetched now)"
+    )
     return 0
 
 

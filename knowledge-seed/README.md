@@ -30,17 +30,27 @@
 「Oracle 不在支持列表内」「未记载数据驻留保证」「没有合同生成的信息」这类缺席推断，
 以及把「导入 .csv」错标成导出能力的那条。
 
-## 三次生成尝试（同一份语料，逐步补齐需求）
+## 五次生成尝试（同一需求思路，逐步补语料与需求）
 
-| 尝试 | 需求完整度 | 结果 | 卡在哪 |
+| 尝试 | 语料/需求状态 | 结果 | 卡在哪 |
 |---|---|---|---|
-| 1 | 7 维度 known | `solution_draft_not_grounded` | 语义审查 `INADMISSIBLE`：某条能力陈述只引 1 条事实却不被该事实支持 |
-| 2 | 同上 + 收敛 | `solution_draft_not_grounded` | 确定性守卫 `unresolved_as_confirmed`：把 unclear 的 `existing_environment`/`integration_requirement` 写成确定事实 |
-| 3 | 9/10 维度 known | `solution_draft_not_grounded` | 语义审查 `COMPOUND`：架构概览一条 proposal 里塞了多个可独立判断的判断（`decision` 已是 `ADMISSIBLE`，即证据够） |
+| 1 | 8 篇 / 24 条事实，需求 7 维度 known | `solution_draft_not_grounded` | 语义审查 `INADMISSIBLE`：某条能力陈述只引 1 条事实却不被该事实支持 |
+| 2 | 同上，需求收敛 | `solution_draft_not_grounded` | 确定性守卫 `unresolved_as_confirmed`：把 unclear 的「现有环境/集成范围」写成确定事实 |
+| 3 | 同上，需求 9/10 known | `solution_draft_not_grounded` | 语义审查 `COMPOUND`：架构概览一条塞了多个可独立判断的判断（`decision` 已 `ADMISSIBLE`） |
+| 4 | **14 篇** / 41 条事实 | `solution_draft_insufficient_approved_evidence` | 检中的 8 个 chunk **全部没有已批准事实**，准入放不出任何来源标签 |
+| 5 | 14 篇 / **53 条事实** | **`succeeded`** | 草稿 7：schema v2、9 章节齐全、67 条 claim（55 条带引用）、3 个架构组件、55 条 provenance |
 
-三次都停在设计内的守卫，且第三次的事实判定已经通过，说明**这套语料能提供可引用证据**；
-剩下的问题一是模型输出的原子性与措辞（不能把 unclear 写成确定），二是**事实密度**——
-24 条事实分到 11 个主题后，每节只有 1–3 条，模型为了填满架构概览只能把多条事实压进一条 proposal。
+### 第 4 次暴露的结构性问题（值得单独记）
+
+事实是**按 chunk 挂载**的（`EnterpriseGroundingFact.source_chunk_id`），而检索是每意图 `top_k=3` 的纯语义相似度。
+两者错位时会出现极端情况：库里 53 条已批准事实，但检中的 8 个 chunk 里只有 1 个带事实，
+于是准入只放行一个来源标签（`('S6',)`），草稿虽然合规却薄——55 条引用全部指向同一个来源。
+
+也就是说：**加文档不一定让证据变厚**，只有当"带事实的那个 chunk"恰好被检索命中时才有用。
+可能的改法（都属产品决策，未实施）：
+1. 提高每意图 `top_k`，或对"带已批准事实的 chunk"加权；
+2. 事实挂到更细的粒度（句子/段落）并允许多 chunk 共享；
+3. 准入失败时回退到"带事实的 chunk 集合"，而不是直接硬失败。
 
 ## 关键结论：语料必须匹配受控主题，且必须是陈述句
 
