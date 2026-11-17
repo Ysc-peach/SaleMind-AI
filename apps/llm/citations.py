@@ -25,13 +25,3 @@ def normalize_citations(answer: str, *, source_count: int) -> str:
         return "".join(f"[{label}]" for label in labels)
 
     return _CITATION_GROUP_PATTERN.sub(replace_group, answer)
-
-
-def has_unknown_citations(text: str, *, source_count: int) -> bool:
-    """Recognize the same small token grammar, not arbitrary prose or NLP."""
-    allowed = {f"S{i}" for i in range(1, source_count + 1)}
-    for match in _CITATION_GROUP_PATTERN.finditer(text):
-        body = next(group for group in match.groups() if group is not None)
-        if any(label not in allowed for label in re.findall(r"S[0-9]+", body)):
-            return True
-    return False
