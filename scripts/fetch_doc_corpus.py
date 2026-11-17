@@ -99,14 +99,29 @@ def _trim_to_heading(body: str, title: str) -> str:
     return body
 
 
+def _markdown_title(text: str, fallback: str) -> str:
+    for line in text.splitlines():
+        if line.startswith("# "):
+            return line[2:].strip() or fallback
+    return fallback
+
+
 def fetch(url: str, out_dir: Path, timeout: int = 40):
     request = Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; SalesMind corpus fetch)"})
     with urlopen(request, timeout=timeout) as response:
         raw = response.read().decode("utf-8", errors="replace")
-    extractor = _TextExtractor()
-    extractor.feed(raw)
-    title = _title(raw, url)
-    body = _trim_to_heading(extractor.text(), title)
+
+    if url.endswith(".md"):
+        # Documentation sites that serve the source markdown give cleaner text
+        # than any HTML extraction, so take it as-is.
+        title = _markdown_title(raw, url)
+        body = raw.strip() + "\n"
+    else:
+        extractor = _TextExtractor()
+        extractor.feed(raw)
+        title = _title(raw, url)
+        body = _trim_to_heading(extractor.text(), title)
+
     name = _slug(url) + ".txt"
     target = out_dir / name
     target.write_text(body, encoding="utf-8")

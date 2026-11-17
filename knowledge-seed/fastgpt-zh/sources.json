@@ -1,0 +1,62 @@
+{
+  "fetched_on": "2026-11-17",
+  "note": "Third-party documentation kept for local evaluation only; the text is not committed and the licence stays with the publisher.",
+  "documents": [
+    {
+      "url": "https://doc.fastgpt.io/self-host.md",
+      "file": "doc-fastgpt-io-self-host-md.txt",
+      "title": "Deploy and operate",
+      "chars": 4493,
+      "sha256": "7a7b5e5faf0795b4f6c23bc9e20c43799cdeba3f353051b1e5d7f43a79736273"
+    },
+    {
+      "url": "https://doc.fastgpt.io/self-host/config/env.md",
+      "file": "doc-fastgpt-io-self-host-config-env-md.txt",
+      "title": "Environment Variables",
+      "chars": 83165,
+      "sha256": "4ea78ad93cde3eb89308993e49245f76dda134b953771141c4b1d713f845ea56"
+    },
+    {
+      "url": "https://doc.fastgpt.io/guide/dataset/rag.md",
+      "file": "doc-fastgpt-io-guide-dataset-rag-md.txt",
+      "title": "RAG Architecture and Anti-Hallucination",
+      "chars": 4869,
+      "sha256": "88f9a11aebc318704320b7a5df82ce58b041db4da8a916303fedeca96a9d59d2"
+    },
+    {
+      "url": "https://doc.fastgpt.io/guide/dataset/import-data.md",
+      "file": "doc-fastgpt-io-guide-dataset-import-data-md.txt",
+      "title": "Document Ingestion and Chunking",
+      "chars": 5171,
+      "sha256": "4d6d3ef6105dbde3b29113564ebb0afba3723f42f5701c2662b48f5b67b0407c"
+    },
+    {
+      "url": "https://doc.fastgpt.io/self-host/custom-models/mineru.md",
+      "file": "doc-fastgpt-io-self-host-custom-models-mineru-md.txt",
+      "title": "Integrating MinerU PDF Parsing",
+      "chars": 5409,
+      "sha256": "2653a450ae42ae5fae38a86a8edd344b43a1cc63380e13d64dfe96fb377f90b9"
+    },
+    {
+      "url": "https://doc.fastgpt.io/openapi/identity-proxy.md",
+      "file": "doc-fastgpt-io-openapi-identity-proxy-md.txt",
+      "title": "API and MCP identity proxy",
+      "chars": 2732,
+      "sha256": "20b113114ddb2cf2ff976301ac0b6cd1582f6f505f5b6f727965634afdbd8995"
+    },
+    {
+      "url": "https://doc.fastgpt.io/openapi/intro.md",
+      "file": "doc-fastgpt-io-openapi-intro-md.txt",
+      "title": "API getting started: make your first request",
+      "chars": 7618,
+      "sha256": "0d235ec97d4084e7bfe562eb3fa04517bd9ff7df136788dbc7d403606359e00a"
+    },
+    {
+      "url": "https://doc.fastgpt.io/guide/dataset/dataset_engine.md",
+      "file": "doc-fastgpt-io-guide-dataset-dataset-engine-md.txt",
+      "title": "Knowledge Base Dual-Engine Principles",
+      "chars": 10998,
+      "sha256": "ba61e4e0bfe0a2c56b7c5b7209a74277b48995717c55cf7a08c0246712923db2"
+    }
+  ]
+}
