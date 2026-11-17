@@ -163,6 +163,16 @@ EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
 EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
 EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="salesmind@example.internal")
+
+# Alert delivery is configured separately from review mail: an operator may want
+# queue alarms in a chat channel and reviewer notices in a mailbox, or only one
+# of the two. Both stay empty by default, so an unconfigured deployment reports
+# the breach through the exit code alone instead of reaching for a network.
+ALERT_WEBHOOK_URL = env("ALERT_WEBHOOK_URL", default="")
+ALERT_WEBHOOK_TIMEOUT_SECONDS = env.int("ALERT_WEBHOOK_TIMEOUT_SECONDS", default=5)
+# Comma separated recipients; the transport is EMAIL_* above, so a working mail
+# server is still required for this channel to do anything.
+ALERT_EMAIL_TO = env("ALERT_EMAIL_TO", default="")
 SOLUTION_GENERATION_JOB_MAX_ATTEMPTS = env.int(
     "SOLUTION_GENERATION_JOB_MAX_ATTEMPTS",
     default=2,

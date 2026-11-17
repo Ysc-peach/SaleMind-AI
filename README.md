@@ -234,7 +234,7 @@ compose 的 `backup` 服务默认启动，在 compose 网络内直连数据库�
 
 产物写到宿主机 `./backups/`（`db-*.dump` + `media-*.tar.gz`）。`scripts/backup.sh` 仍可随时手动执行一次。恢复演练与 Windows 二进制重定向注意事项见上文。**备份仍在该磁盘上，生产环境请把 `backups/` 再同步到另一台机器或对象存储**，否则磁盘故障会同时丢库和备份。
 
-队列健康检查输出一行 JSON，超阈值时返回非零退出码，交给调度器告警即可：
+队列健康检查输出一行 JSON，超阈值时返回非零退出码：
 
 ```bash
 docker compose --env-file .env.production.local exec -T web \
@@ -244,13 +244,22 @@ docker compose --env-file .env.production.local exec -T web \
 #  "thresholds": {...}, "breaches": []}
 ```
 
-crontab 示例（每 5 分钟，非零退出码发邮件）：
+四个阈值分别对应：排队任务数、最老排队任务等待秒数、近一小时失败数，以及**心跳已停但在跑的任务数**（`--max-stale-running`，默认 0）。最后一项是为了覆盖「唯一的 worker 进程自己死了」：这时没人会去回收任务，队列也不会变长，只能由外部检查发现。命令只读，不碰 provider、不改任务状态。
+
+如果调度器只会记一条失败日志、没人看，就让检查自己把告警推出去：
 
 ```cron
-*/5 * * * * cd /srv/salesmind && docker compose --env-file .env.production.local exec -T web python manage.py check_generation_health --max-queued 10 --max-wait-seconds 600 --max-failed-last-hour 5
+*/5 * * * * cd /srv/salesmind && docker compose --env-file .env.production.local exec -T web python manage.py check_generation_health --notify --max-queued 10 --max-wait-seconds 600 --max-failed-last-hour 5
 ```
 
-四个阈值分别对应：排队任务数、最老排队任务等待秒数、近一小时失败数，以及**心跳已停但在跑的任务数**（`--max-stale-running`，默认 0）。最后一项是为了覆盖「唯一的 worker 进程自己死了」：这时没人会去回收任务，队列也不会变长，只能由外部检查发现。命令只读，不碰 provider、不改任务状态。
+两个通道各自独立配置，都留空则只靠退出码：
+
+```bash
+ALERT_WEBHOOK_URL=https://chat.example.internal/hooks/xxx   # 收 JSON 的机器人地址
+ALERT_EMAIL_TO=ops@example.internal,sre@example.internal    # 复用上面的 EMAIL_* 传输
+```
+
+`--notify` 推送的内容只有计数、阈值名和触发项，**不含商机名或方案正文**；输出 JSON 会多一个 `alert` 字段，写明 `attempted` / `delivered` / `failed`。推送失败只写一条不含地址的告警日志，**不会改变退出码**——投递成功与否都不能把「队列真的坏了」这件事变成绿灯。没配通道又加了 `--notify` 时，命令会在 stderr 明确说一句，避免静默。
 
 ### 异地备份
 

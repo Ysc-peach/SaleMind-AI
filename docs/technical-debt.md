@@ -81,6 +81,17 @@ the queue never grows. It shares one predicate with the reclaimer, so the two ca
 never disagree about what "abandoned" means, and it breaches by default
 (`--max-stale-running 0`).
 
+`--notify` closes the last gap between detecting a breach and someone hearing
+about it. A non-zero exit code is enough for a scheduler that pages on failure,
+but not for one that only writes a log line nobody reads. The flag pushes one
+JSON document (counts, threshold names and the breached signals; no customer or
+solution content) to `ALERT_WEBHOOK_URL`, and/or mails `ALERT_EMAIL_TO` over the
+shared `EMAIL_*` transport. Delivery is best effort by design: a failed webhook
+or mailbox is reported in the `alert` field and logged without the endpoint, and
+the exit code stays non-zero, so a delivery problem can never turn a real queue
+failure into a green check. With no channel configured the command says so on
+stderr instead of failing silently.
+
 Still open: off-host replication remains a deployment task. `scripts/offsite-sync.ps1`
 now provides the verified transfer (integrity gate, remote-target validation,
 non-zero exit on failure), but the destination host and SSH key must be supplied
