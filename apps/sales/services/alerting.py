@@ -12,15 +12,15 @@ breach into a crashed check, and must not be silently reported as delivered.
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from typing import Any
-from urllib.request import Request, urlopen
 
 from django.conf import settings
 from django.core.mail import send_mail
 from django.utils import timezone
+
+from apps.sales.services.webhook_delivery import post_json
 
 logger = logging.getLogger(__name__)
 
@@ -58,27 +58,16 @@ def build_payload(report: dict) -> dict:
     }
 
 
-def _post_json(url: str, payload: dict, timeout: int) -> None:
-    body = json.dumps(payload, sort_keys=True).encode("utf-8")
-    request = Request(url, data=body, method="POST")
-    request.add_header("Content-Type", "application/json")
-    request.add_header("User-Agent", "salesmind-alert/1")
-    with urlopen(request, timeout=timeout) as response:
-        status = getattr(response, "status", 200)
-    if status >= 300:
-        raise RuntimeError(f"webhook answered {status}")
-
-
 def _alert_recipients() -> tuple[str, ...]:
     raw = getattr(settings, "ALERT_EMAIL_TO", "") or ""
     return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
 def _send_webhook(payload: dict) -> None:
-    _post_json(
+    post_json(
         settings.ALERT_WEBHOOK_URL,
         payload,
-        max(1, settings.ALERT_WEBHOOK_TIMEOUT_SECONDS),
+        timeout=max(1, settings.WEBHOOK_TIMEOUT_SECONDS),
     )
 
 

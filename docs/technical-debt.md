@@ -92,6 +92,15 @@ the exit code stays non-zero, so a delivery problem can never turn a real queue
 failure into a green check. With no channel configured the command says so on
 stderr instead of failing silently.
 
+Reviewer notices use the same transport and the same rules: `REVIEW_WEBHOOK_URL`
+posts the review event to a chat room, `NOTIFICATION_EMAIL_ENABLED` mails the
+assignee over the shared `EMAIL_*` settings, and either channel alone is enough.
+The webhook deliberately does not require the reviewer to have an address, which
+is the case a mailbox-only design cannot serve. Both channels fire from the
+`on_commit` callback of the submission, so a rolled-back submission never
+notifies anyone, and a delivery failure is logged without the endpoint, the
+recipient or the draft text.
+
 Still open: off-host replication remains a deployment task. `scripts/offsite-sync.ps1`
 now provides the verified transfer (integrity gate, remote-target validation,
 non-zero exit on failure), but the destination host and SSH key must be supplied

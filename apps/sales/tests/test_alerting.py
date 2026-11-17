@@ -13,7 +13,8 @@ from django.core.management.base import CommandError
 from django.utils import timezone
 
 from apps.sales.models import SolutionGenerationJob, SolutionGenerationJobStatus
-from apps.sales.services import alerting
+from apps.sales.services import alerting, webhook_delivery
+from apps.sales.tests.webhook_fakes import RecordingWebhook
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -24,41 +25,14 @@ REPORT = {
 }
 
 
-class _FakeResponse:
-    def __init__(self, status):
-        self.status = status
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc_info):
-        return False
-
-
-class _Webhook:
-    """Stand-in for urlopen that records the request it was handed."""
-
-    def __init__(self, status=200, error=None):
-        self.status = status
-        self.error = error
-        self.requests = []
-
-    def __call__(self, request, timeout=None):
-        self.requests.append(request)
-        if self.error is not None:
-            raise self.error
-        return _FakeResponse(self.status)
-
-    def payload(self):
-        return json.loads(self.requests[0].data.decode("utf-8"))
-
-
 @pytest.fixture
 def webhook(monkeypatch, settings):
     settings.ALERT_WEBHOOK_URL = "https://alerts.internal/hooks/queue"
-    settings.ALERT_WEBHOOK_TIMEOUT_SECONDS = 5
-    recorder = _Webhook()
-    monkeypatch.setattr(alerting, "urlopen", recorder)
+    settings.WEBHOOK_TIMEOUT_SECONDS = 5
+    recorder = RecordingWebhook()
+    # Patch the transport, not the caller: the body, the status check and the
+    # header building are exactly what this suite is meant to cover.
+    monkeypatch.setattr(webhook_delivery, "urlopen", recorder)
     return recorder
 
 

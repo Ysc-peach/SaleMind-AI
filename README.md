@@ -315,20 +315,32 @@ compose 里的 `worker` 服务会消费 `SolutionGenerationJob` 队列；它依�
 2. 审核时可以「通过」或「退回」，退回必须给出原因（需要补充客户信息 / 需要修改技术方案）；
 3. 方案作者不能审核自己提交的版本。
 
-审核指派后可以发一封邮件提醒（默认关闭，没有邮件服务时提交不会被拖住）：
+审核指派后可以提醒被指派人，两个通道都是可选的、互不依赖：
 
 ```powershell
-# .env.production.local
+# .env.production.local —— 只要群消息，不需要邮件服务器
+REVIEW_WEBHOOK_URL=https://chat.example.internal/hooks/reviews
+SALESMIND_PUBLIC_BASE_URL=http://salesmind.internal:8080
+
+# 或者走邮件
 NOTIFICATION_EMAIL_ENABLED=true
 EMAIL_HOST=smtp.example.internal
 EMAIL_PORT=587
 EMAIL_HOST_USER=salesmind@example.internal
 EMAIL_HOST_PASSWORD=<密码>
 DEFAULT_FROM_EMAIL=salesmind@example.internal
-SALESMIND_PUBLIC_BASE_URL=http://salesmind.internal:8080
 ```
 
-邮件只在审核创建并**提交成功之后**发送；内容只有商机名、方案版本和链接，不含方案正文。发送失败只写一条不含收件人和正文的告警日志，提交本身仍然成功。
+Webhook 收到的是这样一份 JSON，聊天机器人可以直接贴成一条消息：
+
+```json
+{"version": 1, "kind": "solution_review_assigned", "review_id": 12,
+ "project": "某某企业内部知识库", "solution_version": 3,
+ "reviewer": "张三", "submitted_by": "李四",
+ "url": "http://salesmind.internal:8080/solutions/42"}
+```
+
+两个通道都只在审核创建并**提交成功之后**触发（事务提交后回调），内容只有商机名、版本、审核人与链接，**不含方案正文**。任一通道失败只写一条不含地址/收件人/正文的告警日志，提交本身仍然成功；被指派人的邮箱为空时，webhook 照样会发——这正是它存在的意义。
 
 ### 管理员运维
 
