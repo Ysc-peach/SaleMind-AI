@@ -34,6 +34,12 @@ Thumbs.db
 coverage.xml
 htmlcov/
 
+# Evaluation corpus: third-party text stays local, only the manifest is shared.
+# The directory itself is not excluded, otherwise git never looks inside and the
+# negation below cannot match.
+knowledge-seed/*/*
+!knowledge-seed/*/sources.json
+
 # Superpowers execution workspace
 .superpowers/
 .worktrees/

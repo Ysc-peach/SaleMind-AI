@@ -1,0 +1,55 @@
+{
+  "fetched_on": "2026-11-17",
+  "note": "Third-party documentation kept for local evaluation only; the text is not committed and the licence stays with the publisher.",
+  "documents": [
+    {
+      "url": "https://www.odoo.com/documentation/17.0/zh_CN/administration/on_premise/deploy.html",
+      "file": "www-odoo-com-documentation-17-0-zh-cn-administration-on-premise-deploy-html.txt",
+      "title": "系统配置 &#8212; Odoo 17.0 文档",
+      "chars": 16859,
+      "sha256": "5354ea09f9a290ee0248fa456b3882a8ff7d01d77ae0f9049217310cb817faca"
+    },
+    {
+      "url": "https://www.odoo.com/documentation/17.0/zh_CN/applications/essentials/export_import_data.html",
+      "file": "doo-com-documentation-17-0-zh-cn-applications-essentials-export-import-data-html.txt",
+      "title": "导出和导入数据 &#8212; Odoo 17.0 文档",
+      "chars": 8584,
+      "sha256": "d548cd6aaa71e8d9d66992b6318d23ecbe55a6a78ebf96580107d4a43732dbaf"
+    },
+    {
+      "url": "https://www.odoo.com/documentation/17.0/zh_CN/applications/general/users/ldap.html",
+      "file": "www-odoo-com-documentation-17-0-zh-cn-applications-general-users-ldap-html.txt",
+      "title": "LDAP 认证 &#8212; Odoo 17.0 文档",
+      "chars": 929,
+      "sha256": "d6d29d0f331c5bbd3819f9898d27c995255520ca198f65f7632fb646ca7ece4b"
+    },
+    {
+      "url": "https://www.odoo.com/documentation/17.0/zh_CN/applications/productivity/documents.html",
+      "file": "www-odoo-com-documentation-17-0-zh-cn-applications-productivity-documents-html.txt",
+      "title": "文档 &#8212; Odoo 17.0 文档",
+      "chars": 10453,
+      "sha256": "9110eceec9abd9635178023e8e468c554709a1b9daadffd68fa3fec5322a56e7"
+    },
+    {
+      "url": "https://www.odoo.com/documentation/17.0/zh_CN/developer/reference/external_api.html",
+      "file": "www-odoo-com-documentation-17-0-zh-cn-developer-reference-external-api-html.txt",
+      "title": "External API &#8212; Odoo 17.0 文档",
+      "chars": 32557,
+      "sha256": "69cfcd1f245dea759393acf15f5efac083b08ac9c34ff095aef1a24b2d2e455a"
+    },
+    {
+      "url": "https://www.odoo.com/documentation/17.0/zh_CN/applications/productivity/sign.html",
+      "file": "www-odoo-com-documentation-17-0-zh-cn-applications-productivity-sign-html.txt",
+      "title": "标志 &#8212; Odoo 17.0 文档",
+      "chars": 4886,
+      "sha256": "980e265687180aa1f3e584c0e3a4caf2d098b6dbac639a266607427c7d5cc8d4"
+    },
+    {
+      "url": "https://www.odoo.com/documentation/17.0/zh_CN/applications/sales/sales/products_prices/prices/pricing.html",
+      "file": "entation-17-0-zh-cn-applications-sales-sales-products-prices-prices-pricing-html.txt",
+      "title": "Pricelists, discounts, and formulas &#8212; Odoo 17.0 文档",
+      "chars": 16736,
+      "sha256": "eef51401f781913bdfb8b5a1ba361587770cfed9258145f35e84ead55023fd04"
+    }
+  ]
+}

@@ -1,0 +1,76 @@
+{
+  "fetched_on": "2026-11-17",
+  "note": "Third-party documentation kept for local evaluation only; the text is not committed and the licence stays with the publisher.",
+  "documents": [
+    {
+      "url": "https://docs.pingcap.com/zh/tidb/stable/overview/",
+      "file": "docs-pingcap-com-zh-tidb-stable-overview.txt",
+      "title": "TiDB 简介 | TiDB 文档中心",
+      "chars": 1646,
+      "sha256": "58d503401f18fb284ac5030cccd665e442c6853f1f8cd23116a6daa4206cd3ea"
+    },
+    {
+      "url": "https://docs.pingcap.com/zh/tidb/stable/tidb-architecture/",
+      "file": "docs-pingcap-com-zh-tidb-stable-tidb-architecture.txt",
+      "title": "TiDB 整体架构 | TiDB 文档中心",
+      "chars": 1375,
+      "sha256": "5bb53d206ac395757cae676f42d0ca66bd95dfe1ac6031acfde507945e8e05c2"
+    },
+    {
+      "url": "https://docs.pingcap.com/zh/tidb/stable/tidb-storage/",
+      "file": "docs-pingcap-com-zh-tidb-stable-tidb-storage.txt",
+      "title": "TiDB 数据库的存储 | TiDB 文档中心",
+      "chars": 3347,
+      "sha256": "cb18a20f51a7a8d0b1dc934a5716da7dc425c0b43eaa4961620765cebe70304c"
+    },
+    {
+      "url": "https://docs.pingcap.com/zh/tidb/stable/geo-distributed-deployment-topology/",
+      "file": "docs-pingcap-com-zh-tidb-stable-geo-distributed-deployment-topology.txt",
+      "title": "跨数据中心部署拓扑 | TiDB 文档中心",
+      "chars": 4559,
+      "sha256": "a4d1417a07763940d7c082d2eb39b3d557b0ee3800b24083fabc8aece14671af"
+    },
+    {
+      "url": "https://docs.pingcap.com/zh/tidb/stable/tiflash-overview/",
+      "file": "docs-pingcap-com-zh-tidb-stable-tiflash-overview.txt",
+      "title": "TiFlash 简介 | TiDB 文档中心",
+      "chars": 2309,
+      "sha256": "f9b7ad10f490152a7f47d352ce6dc8fbee5d962b335a1acfb8a3a6cdca69e2d5"
+    },
+    {
+      "url": "https://docs.pingcap.com/zh/tidb/stable/tiproxy-overview/",
+      "file": "docs-pingcap-com-zh-tidb-stable-tiproxy-overview.txt",
+      "title": "TiProxy 简介 | TiDB 文档中心",
+      "chars": 7573,
+      "sha256": "d0cb195c583d5540cc348c3d704d1a32dcdc0a664307e15d9ba421d387cda754"
+    },
+    {
+      "url": "https://docs.pingcap.com/zh/tidb/stable/mysql-compatibility/",
+      "file": "docs-pingcap-com-zh-tidb-stable-mysql-compatibility.txt",
+      "title": "与 MySQL 兼容性对比 | TiDB 文档中心",
+      "chars": 6638,
+      "sha256": "b4930d96059230f516866f20267fdc0caf095b2b7b46b976bec924315f106790"
+    },
+    {
+      "url": "https://docs.pingcap.com/zh/tidb/stable/tidb-limitations/",
+      "file": "docs-pingcap-com-zh-tidb-stable-tidb-limitations.txt",
+      "title": "TiDB 使用限制 | TiDB 文档中心",
+      "chars": 1440,
+      "sha256": "1490fd90290afdc4c1ca107bad0c958b309b40601407abcb4835c2849f77d222"
+    },
+    {
+      "url": "https://docs.pingcap.com/zh/tidb/stable/backup-and-restore-overview/",
+      "file": "docs-pingcap-com-zh-tidb-stable-backup-and-restore-overview.txt",
+      "title": "TiDB 备份与恢复概述 | TiDB 文档中心",
+      "chars": 6176,
+      "sha256": "41e6cea7be85f0e4befd10911c4e29b5095a3139a31686dbef9352dc01f714e6"
+    },
+    {
+      "url": "https://docs.pingcap.com/zh/tidb/stable/production-deployment-using-tiup/",
+      "file": "docs-pingcap-com-zh-tidb-stable-production-deployment-using-tiup.txt",
+      "title": "使用 TiUP 部署 TiDB 集群 | TiDB 文档中心",
+      "chars": 7758,
+      "sha256": "f7f48bf769f18960d6b6534bcc70a9869fcec6e7d932d8e80911170195ea5191"
+    }
+  ]
+}
