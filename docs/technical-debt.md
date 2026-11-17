@@ -252,6 +252,25 @@ These are candidates for evaluation, not commitments or guaranteed fixes:
 7. Add application-wide provider concurrency or rate limiting if real multi-user load requires it.
 8. Re-evaluate whether every proposal class requires the same expensive verifier.
 
+### Public entry points only the suite calls
+
+A scan of every top-level definition in `apps/**/services` and `apps/**/api` (2,475
+of them) found sixteen that no production file references. Two referred to
+nothing at all and were deleted: `verify_solution_draft_grounding` (a
+compatibility wrapper for a caller that no longer exists) and
+`_has_unsupported_precision` (a boolean wrapper around the matcher the guard
+actually calls).
+
+The rest are referenced only by their own tests, and each needs a decision rather
+than a sweep: `analyze_opportunity_requirement`, `verify_atomic_solution_claims`,
+`parse_solution_draft`, `parse_atomic_solution_claims`,
+`render_solution_statement`, `solution_draft_to_payload`,
+`solution_draft_from_payload`, `diagnose_solution_v2_output`, plus six helpers in
+`real_provider_benchmark`. They are either legacy entry points the V2 path
+replaced, kept alive because their tests still call them, or intentional API for
+tooling. Deleting them would also delete real coverage of behaviour the V2 path
+shares, so the list is recorded here instead of acted on.
+
 ### Safety invariants future optimization must preserve
 
 - Deterministic admission remains authoritative.

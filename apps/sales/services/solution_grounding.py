@@ -181,18 +181,6 @@ class SolutionDraftGroundingError(Exception):
         super().__init__(self.safe_message)
 
 
-def verify_solution_draft_grounding(
-    *,
-    analysis: OpportunityRequirementAnalysis,
-    draft: SolutionDraft,
-    sources: tuple[SolutionSource, ...],
-    llm_provider: LLMProvider | None = None,
-) -> SolutionGroundingVerification:
-    """Compatibility boundary for callers that already hold a final draft."""
-    packets = build_grounding_claim_packets(analysis, draft, sources)
-    return _verify_packets(packets, llm_provider)
-
-
 def verify_atomic_solution_claims(
     *,
     analysis: OpportunityRequirementAnalysis,
@@ -638,20 +626,6 @@ def _blocks_scoped_unresolved_action(
         if not clear_clarification_action(consequence) and assertive_consequence(consequence):
             return True
     return False
-
-
-def _has_unsupported_precision(
-    text: str,
-    analysis: OpportunityRequirementAnalysis,
-    related_fields: tuple[RequirementDimension, ...],
-    basis: tuple[SolutionSource, ...],
-) -> bool:
-    return _unsupported_precision_match(
-        text,
-        analysis,
-        related_fields,
-        basis,
-    ) is not None
 
 
 def _unsupported_precision_match(
