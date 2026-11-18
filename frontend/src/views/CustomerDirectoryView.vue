@@ -1,13 +1,26 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
-import { createCustomer, searchCustomers, updateCustomer } from '../api/customers'
+import { computed, reactive, ref } from 'vue'
+import { createCustomer, searchCustomers, setCustomerActive, updateCustomer } from '../api/customers'
 import type { Customer } from '../types/domain'
 import Notice from '../components/Notice.vue'
 import { safeError } from '../utils/errors'
+import { useAuthStore } from '../stores/auth'
+const auth=useAuthStore()
+// Archiving is an administrator action; the server enforces it, the UI just
+// does not offer it to anyone else.
+const isAdmin=computed(()=>auth.user?.role==='admin')
 const query=ref(''),rows=ref<Customer[]>([]),loading=ref(false),error=ref(''),showCreate=ref(false),name=ref(''),feedback=ref('')
-const editing=ref<Customer|null>(null),editBusy=ref(false)
+const editing=ref<Customer|null>(null),editBusy=ref(false),showInactive=ref(false),busyId=ref<number|null>(null)
 const editForm=reactive({name:'',industry:'',company_size:'',basic_info:''})
-async function search(){if(!query.value.trim())return;loading.value=true;error.value='';try{rows.value=(await searchCustomers(query.value.trim())).results}catch(e){error.value=safeError(e)}finally{loading.value=false}}
+async function search(){if(!query.value.trim())return;loading.value=true;error.value='';try{rows.value=(await searchCustomers(query.value.trim(),1,isAdmin.value&&showInactive.value)).results}catch(e){error.value=safeError(e)}finally{loading.value=false}}
+async function toggleActive(item:Customer){
+  busyId.value=item.id;error.value=''
+  try{
+    await setCustomerActive(item.id,!item.is_active)
+    feedback.value=item.is_active?`客户已停用：${item.name}`:`客户已恢复：${item.name}`
+    await search()
+  }catch(e){error.value=safeError(e)}finally{busyId.value=null}
+}
 async function create(){if(!name.value.trim())return;loading.value=true;error.value='';try{const item=await createCustomer({name:name.value.trim()});feedback.value=`客户已创建：${item.name}`;query.value=item.name;showCreate.value=false;name.value='';await search()}catch(e){error.value=safeError(e)}finally{loading.value=false}}
 function openEdit(item:Customer){
   editing.value=item;error.value=''
@@ -66,12 +79,21 @@ async function saveEdit(){
     <div class="row">
       <input v-model="query" placeholder="输入客户名称" @keyup.enter="search">
       <el-button :loading="loading" @click="search">搜索</el-button>
+      <el-checkbox v-if="isAdmin" v-model="showInactive" data-test="show-inactive" @change="search">含已停用</el-checkbox>
     </div>
     <div v-if="!error&&rows.length" class="opportunity-list">
       <div v-for="item in rows" :key="item.id" class="opportunity-row">
         <strong>{{ item.name }}</strong>
+        <el-tag v-if="!item.is_active" type="info" data-test="inactive-tag">已停用</el-tag>
         <small>{{ item.industry||'行业未填写' }} · {{ item.company_size||'规模未填写' }}</small>
-        <el-button text :data-test="`edit-${item.id}`" @click="openEdit(item)">编辑</el-button>
+        <el-button text :data-test="`edit-${item.id}`" :disabled="!item.is_active" @click="openEdit(item)">编辑</el-button>
+        <el-button
+          v-if="isAdmin"
+          text
+          :loading="busyId===item.id"
+          :data-test="`toggle-${item.id}`"
+          @click="toggleActive(item)"
+        >{{ item.is_active?'停用':'恢复' }}</el-button>
       </div>
     </div>
     <p v-else-if="!error&&query&&!loading" class="empty">未找到匹配客户。</p>

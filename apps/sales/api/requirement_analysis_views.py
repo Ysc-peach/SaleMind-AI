@@ -18,6 +18,7 @@ from apps.sales.services import requirement_analysis_history as history
 from .opportunity_access import OpportunityVisibilityMixin
 from .pagination import DefaultPageNumberPagination
 from .permissions import OpportunityPermission
+from .record_state import require_active
 from .requirement_analysis_errors import HTTP_ERRORS, RequirementAnalysisAPIError
 from .requirement_analysis_serializers import (
     EmptyAnalysisRequestSerializer,
@@ -54,7 +55,7 @@ class RequirementAnalysisViewSet(
         return RequirementAnalysisDetailSerializer
 
     def analyze(self, request, *args, **kwargs):
-        opportunity = self.get_object()
+        opportunity = require_active(self.get_object())
         try:
             request_data = request.data
         except RecursionError:

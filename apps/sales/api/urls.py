@@ -27,12 +27,16 @@ customer_detail_view = CustomerViewSet.as_view({
     "patch": "partial_update",
 })
 customer_search_view = CustomerViewSet.as_view({"get": "search"})
+customer_disable_view = CustomerViewSet.as_view({"post": "disable"})
+customer_enable_view = CustomerViewSet.as_view({"post": "enable"})
 opportunity_collection_view = OpportunityViewSet.as_view(
     {"get": "list", "post": "create"}
 )
 opportunity_detail_view = OpportunityViewSet.as_view(
     {"get": "retrieve", "patch": "partial_update"}
 )
+opportunity_disable_view = OpportunityViewSet.as_view({"post": "disable"})
+opportunity_enable_view = OpportunityViewSet.as_view({"post": "enable"})
 solution_draft_collection_view = SolutionDraftCollectionViewSet.as_view(
     {"get": "list_drafts", "post": "create_draft"}
 )
@@ -146,7 +150,23 @@ urlpatterns = [
     ),
     path("customers/search/", customer_search_view, name="customer-search"),
     path("customers/<int:pk>/", customer_detail_view, name="customer-detail"),
+    path(
+        "customers/<int:pk>/disable/",
+        customer_disable_view,
+        name="customer-disable",
+    ),
+    path("customers/<int:pk>/enable/", customer_enable_view, name="customer-enable"),
     path("customers/", customer_create_view, name="customer-create"),
     path("opportunities/<int:pk>/", opportunity_detail_view, name="opportunity-detail"),
+    path(
+        "opportunities/<int:pk>/disable/",
+        opportunity_disable_view,
+        name="opportunity-disable",
+    ),
+    path(
+        "opportunities/<int:pk>/enable/",
+        opportunity_enable_view,
+        name="opportunity-enable",
+    ),
     path("opportunities/", opportunity_collection_view, name="opportunity-list"),
 ]

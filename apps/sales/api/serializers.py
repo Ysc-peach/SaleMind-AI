@@ -87,6 +87,7 @@ class _CustomerReadSerializer(serializers.ModelSerializer):
             "industry",
             "company_size",
             "basic_info",
+            "is_active",
             "opportunities",
         )
         read_only_fields = fields
@@ -119,11 +120,12 @@ class RejectForbiddenFieldsMixin:
 class CustomerUpdateSerializer(RejectForbiddenFieldsMixin, serializers.ModelSerializer):
     """Accept only the shared descriptive fields of an existing Customer.
 
-    ``created_by`` and the timestamps stay server-controlled, so renaming a
-    customer can never transfer its ownership or rewrite history.
+    ``created_by``, the timestamps and ``is_active`` stay server-controlled, so
+    renaming a customer can never transfer its ownership, rewrite history, or
+    lift its own archive flag.
     """
 
-    forbidden_fields = ("created_by", "created_at", "updated_at")
+    forbidden_fields = ("created_by", "created_at", "updated_at", "is_active")
 
     class Meta:
         model = Customer
@@ -148,6 +150,7 @@ class OpportunityListSerializer(OpportunityDisplaySerializer):
             "status",
             "budget",
             "expected_launch_date",
+            "is_active",
             "updated_at",
         )
         read_only_fields = fields
@@ -172,6 +175,7 @@ class OpportunityDetailSerializer(OpportunityDisplaySerializer):
             "stage",
             "status",
             "expected_launch_date",
+            "is_active",
             "created_at",
             "updated_at",
         )
@@ -186,7 +190,7 @@ class OpportunityCreateSerializer(RejectForbiddenFieldsMixin, serializers.ModelS
         allow_null=True,
         required=False,
     )
-    forbidden_fields = ("sales_owner", "created_by", "stage", "status")
+    forbidden_fields = ("sales_owner", "created_by", "stage", "status", "is_active")
 
     class Meta:
         model = Opportunity
@@ -200,6 +204,13 @@ class OpportunityCreateSerializer(RejectForbiddenFieldsMixin, serializers.ModelS
             "expected_launch_date",
         )
         read_only_fields = ("id",)
+
+    def validate_customer(self, customer):
+        # A new opportunity under an archived customer would immediately be work
+        # nobody can find in the customer's list.
+        if not customer.is_active:
+            raise serializers.ValidationError("该客户已停用，无法在其下创建商机。")
+        return customer
 
 
 class OpportunityUpdateSerializer(RejectForbiddenFieldsMixin, serializers.ModelSerializer):
@@ -216,6 +227,7 @@ class OpportunityUpdateSerializer(RejectForbiddenFieldsMixin, serializers.ModelS
         "created_by",
         "created_at",
         "updated_at",
+        "is_active",
     )
 
     class Meta:

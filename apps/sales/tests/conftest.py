@@ -1,17 +1,18 @@
 """Shared fixtures for sales domain tests.
 
-`persistence_context` and `generated_artifact` live here rather than in one test
-module because eight other modules use them; importing a fixture across test
-modules works but hides who owns it and leaves every importer looking like it has
-an unused import.
+Fixtures live here rather than in one test module when several modules use them;
+importing a fixture across test modules works but hides who owns it and leaves
+every importer looking like it has an unused import.
 """
 
 import hashlib
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from rest_framework.test import APIClient
 
 from apps.accounts.models import UserRole
 from apps.knowledge.models import (
@@ -23,6 +24,8 @@ from apps.sales.models import (
     Customer,
     Opportunity,
     OpportunityRequirementAnalysis,
+    OpportunityStage,
+    OpportunityStatus,
 )
 from apps.sales.services.requirement_analysis_history import (
     analysis_record_to_domain,
@@ -167,3 +170,74 @@ def generated_artifact(persistence_context):
         admission=admission,
     )
     return result, fact, document
+
+
+@pytest.fixture
+def api_client():
+    return APIClient()
+
+
+@pytest.fixture
+def user_factory():
+    """Create users with a unique username; role and flags are explicit."""
+
+    sequence = 0
+
+    def create_user(
+        role=UserRole.SALES,
+        *,
+        username=None,
+        is_active=True,
+        is_staff=False,
+        is_superuser=False,
+    ):
+        nonlocal sequence
+        sequence += 1
+        username = username or f"user-{sequence}"
+        return get_user_model().objects.create_user(
+            username=username,
+            email=f"{username}@example.com",
+            role=role,
+            password="StrongPassword123!",
+            is_active=is_active,
+            is_staff=is_staff,
+            is_superuser=is_superuser,
+        )
+
+    return create_user
+
+
+@pytest.fixture
+def customer_factory(user_factory):
+    def create_customer(name="Acme", *, created_by=None, **overrides):
+        created_by = created_by or user_factory()
+        return Customer.objects.create(name=name, created_by=created_by, **overrides)
+
+    return create_customer
+
+
+@pytest.fixture
+def opportunity_factory(user_factory):
+    def create_opportunity(
+        customer,
+        *,
+        sales_owner=None,
+        project_name="Platform rollout",
+        status=OpportunityStatus.ACTIVE,
+        stage=OpportunityStage.INITIAL_CONTACT,
+        **overrides,
+    ):
+        sales_owner = sales_owner or user_factory(UserRole.SALES)
+        return Opportunity.objects.create(
+            project_name=project_name,
+            customer=customer,
+            sales_owner=sales_owner,
+            created_by=sales_owner,
+            status=status,
+            stage=stage,
+            raw_requirement="confidential raw requirement",
+            budget=Decimal("120000.00"),
+            **overrides,
+        )
+
+    return create_opportunity

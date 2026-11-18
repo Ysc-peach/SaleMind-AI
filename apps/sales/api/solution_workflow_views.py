@@ -53,6 +53,7 @@ from apps.sales.services.visibility import (
     visible_opportunities_for,
 )
 from .permissions import SolutionDraftPermission
+from .record_state import require_active
 from .solution_workflow_serializers import (
     SolutionWorkflowResumeSerializer,
     SolutionWorkflowStartSerializer,
@@ -129,6 +130,9 @@ class SolutionWorkflowCollectionViewSet(
         ).first()
         if opportunity is None:
             raise NotFound()
+        # An archived opportunity is history; starting a new generation on it
+        # would produce a draft nobody can find afterwards.
+        require_active(opportunity)
         analysis = OpportunityRequirementAnalysis.objects.filter(
             pk=serializer.validated_data["analysis_id"],
             opportunity=opportunity,

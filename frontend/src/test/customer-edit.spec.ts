@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
+import { createPinia, setActivePinia } from 'pinia'
 import type { AxiosAdapter } from 'axios'
 import CustomerDirectoryView from '../views/CustomerDirectoryView.vue'
 import { http } from '../api/http'
+import { useAuthStore } from '../stores/auth'
 
 const customer = {
   id: 7,
@@ -11,6 +13,7 @@ const customer = {
   industry: 'Manufacturing',
   company_size: '200-500',
   basic_info: '',
+  is_active: true,
   opportunities: [],
 }
 
@@ -33,6 +36,12 @@ const adapter: AxiosAdapter = async config => {
 
 beforeEach(() => {
   patches = []
+  setActivePinia(createPinia())
+  const auth = useAuthStore()
+  auth.restored = true
+  auth.user = {
+    id: 1, username: 'seller', role: 'sales', first_name: '', last_name: '', email: '',
+  }
   http.defaults.adapter = adapter
 })
 

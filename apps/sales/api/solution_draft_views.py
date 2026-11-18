@@ -30,6 +30,7 @@ from apps.sales.services.visibility import visible_solution_drafts_for
 from .opportunity_access import OpportunityVisibilityMixin
 from .pagination import DefaultPageNumberPagination
 from .permissions import SolutionDraftPermission
+from .record_state import require_active
 from .solution_draft_serializers import (
     SolutionDraftCreateSerializer,
     SolutionDraftDetailSerializer,
@@ -87,7 +88,7 @@ class SolutionDraftCollectionViewSet(
         return self.get_paginated_response(serializer.data)
 
     def create_draft(self, request, *args, **kwargs):
-        opportunity = self.get_object()
+        opportunity = require_active(self.get_object())
         serializer = SolutionDraftCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         analysis = OpportunityRequirementAnalysis.objects.filter(

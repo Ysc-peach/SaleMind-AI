@@ -1,7 +1,7 @@
 """Stable API error envelope for throttled requests and database conflicts."""
 
 from django.db import IntegrityError
-from rest_framework.exceptions import Throttled
+from rest_framework.exceptions import APIException, Throttled
 from rest_framework.response import Response
 from rest_framework.views import exception_handler
 
@@ -24,6 +24,18 @@ def api_exception_handler(exc, context):
                 "message": "The resource conflicts with the current state.",
             },
             status=409,
+        )
+
+    # An archived record is a state conflict the client can act on (ask an
+    # administrator), so it gets the same code/message envelope as a constraint
+    # conflict instead of a bare detail string. Matched on the declared code
+    # rather than the class, to keep this module free of app imports.
+    if isinstance(exc, APIException) and getattr(exc, "default_code", "") == (
+        "record_inactive"
+    ):
+        return Response(
+            {"code": "record_inactive", "message": str(exc.detail)},
+            status=exc.status_code,
         )
 
     response = exception_handler(exc, context)

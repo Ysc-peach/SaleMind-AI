@@ -8,6 +8,12 @@ from rest_framework.response import Response
 from .opportunity_access import OpportunityVisibilityMixin
 from .pagination import DefaultPageNumberPagination
 from .permissions import CustomerPermission, OpportunityPermission
+from .record_state import (
+    include_inactive_requested,
+    require_active,
+    require_admin,
+    require_admin_for_archived_view,
+)
 from .serializers import (
     CustomerCreateSerializer,
     CustomerDetailSerializer,
@@ -55,6 +61,14 @@ class CustomerViewSet(
         queryset = Customer.objects.all()
         action = getattr(self, "action", None)
 
+        if action in ("list", "search"):
+            # Archived customers stay readable by id, so drafts and reviews that
+            # reference them still open, but they leave the working list.
+            if include_inactive_requested(self.request):
+                require_admin_for_archived_view(self.request)
+            else:
+                queryset = queryset.filter(is_active=True)
+
         if action == "search":
             query = self.request.query_params.get("q", "").strip()
             if not query:
@@ -91,6 +105,24 @@ class CustomerViewSet(
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
+
+    def partial_update(self, request, *args, **kwargs):
+        require_active(self.get_object())
+        return super().partial_update(request, *args, **kwargs)
+
+    def disable(self, request, *args, **kwargs):
+        return self._set_active(request, False)
+
+    def enable(self, request, *args, **kwargs):
+        return self._set_active(request, True)
+
+    def _set_active(self, request, active: bool):
+        require_admin(request.user)
+        record = self.get_object()
+        if record.is_active != active:
+            record.is_active = active
+            record.save(update_fields=["is_active", "updated_at"])
+        return Response(self.get_serializer(record).data)
 
     def search(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
@@ -129,3 +161,32 @@ class OpportunityViewSet(
 
     def perform_create(self, serializer):
         serializer.save(sales_owner=self.request.user, created_by=self.request.user)
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if getattr(self, "action", None) == "list":
+            # Retrieve stays unfiltered on purpose: an archived opportunity is
+            # still where its drafts, reviews and provenance live.
+            if include_inactive_requested(self.request):
+                require_admin_for_archived_view(self.request)
+            else:
+                queryset = queryset.filter(is_active=True)
+        return queryset
+
+    def partial_update(self, request, *args, **kwargs):
+        require_active(self.get_object())
+        return super().partial_update(request, *args, **kwargs)
+
+    def disable(self, request, *args, **kwargs):
+        return self._set_active(request, False)
+
+    def enable(self, request, *args, **kwargs):
+        return self._set_active(request, True)
+
+    def _set_active(self, request, active: bool):
+        require_admin(request.user)
+        record = self.get_object()
+        if record.is_active != active:
+            record.is_active = active
+            record.save(update_fields=["is_active", "updated_at"])
+        return Response(self.get_serializer(record).data)

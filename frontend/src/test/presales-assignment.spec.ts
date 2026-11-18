@@ -12,7 +12,8 @@ const original: Opportunity = {
   id: 7, project_name: '资料检索平台', customer: 3, customer_name: '客户公司',
   sales_owner: 1, sales_owner_name: '负责销售', presales_owner: null,
   presales_owner_name: '', raw_requirement: '需要私有化部署', stage: 'solution',
-  status: 'active', budget: null, expected_launch_date: null, updated_at: '2026-10-12T00:00:00Z',
+  status: 'active', budget: null, expected_launch_date: null, is_active: true,
+  updated_at: '2026-10-12T00:00:00Z',
 }
 const people: PresalesOption[] = [
   { id: 2, username: 'pre', first_name: '小李', last_name: '售前' },

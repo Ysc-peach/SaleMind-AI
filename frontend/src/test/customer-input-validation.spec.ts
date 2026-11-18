@@ -1,14 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { searchCustomers } from '../api/customers'
 import { http } from '../api/http'
 import { safeError } from '../utils/errors'
 import CustomerDirectoryView from '../views/CustomerDirectoryView.vue'
 
-vi.mock('../api/http', () => ({ http: { get: vi.fn(), post: vi.fn() } }))
+// bindAuth must exist: the view reads the auth store, whose setup registers it.
+vi.mock('../api/http', () => ({
+  http: { get: vi.fn(), post: vi.fn() },
+  bindAuth: vi.fn(),
+}))
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // The view reads the current role to decide whether to offer archiving.
+  setActivePinia(createPinia())
   vi.mocked(http.get).mockResolvedValue({ data: { count: 0, results: [] } })
 })
 afterEach(() => vi.restoreAllMocks())

@@ -1,88 +1,15 @@
 """Consumer-facing tests for the Customer APIs."""
 
-from decimal import Decimal
-
 import pytest
-from django.contrib.auth import get_user_model
-from rest_framework.test import APIClient
 
 from apps.accounts.models import UserRole
-from apps.sales.models import Customer, Opportunity, OpportunityStage, OpportunityStatus
+from apps.sales.models import Customer, OpportunityStage, OpportunityStatus
 
 
 pytestmark = pytest.mark.django_db
 
 CUSTOMERS_URL = "/api/customers/"
 CUSTOMER_SEARCH_URL = "/api/customers/search/"
-
-
-@pytest.fixture
-def api_client():
-    return APIClient()
-
-
-@pytest.fixture
-def user_factory():
-    sequence = 0
-
-    def create_user(
-        role=UserRole.SALES,
-        *,
-        username=None,
-        is_active=True,
-        is_staff=False,
-        is_superuser=False,
-    ):
-        nonlocal sequence
-        sequence += 1
-        username = username or f"user-{sequence}"
-        return get_user_model().objects.create_user(
-            username=username,
-            email=f"{username}@example.com",
-            role=role,
-            password="StrongPassword123!",
-            is_active=is_active,
-            is_staff=is_staff,
-            is_superuser=is_superuser,
-        )
-
-    return create_user
-
-
-@pytest.fixture
-def customer_factory(user_factory):
-    def create_customer(name="Acme", *, created_by=None, **overrides):
-        created_by = created_by or user_factory()
-        return Customer.objects.create(name=name, created_by=created_by, **overrides)
-
-    return create_customer
-
-
-@pytest.fixture
-def opportunity_factory(user_factory):
-    def create_opportunity(
-        customer,
-        *,
-        sales_owner=None,
-        project_name="Platform rollout",
-        status=OpportunityStatus.ACTIVE,
-        stage=OpportunityStage.INITIAL_CONTACT,
-        **overrides,
-    ):
-        sales_owner = sales_owner or user_factory(UserRole.SALES)
-        return Opportunity.objects.create(
-            project_name=project_name,
-            customer=customer,
-            sales_owner=sales_owner,
-            created_by=sales_owner,
-            status=status,
-            stage=stage,
-            raw_requirement="confidential raw requirement",
-            budget=Decimal("120000.00"),
-            **overrides,
-        )
-
-    return create_opportunity
 
 
 def test_unauthenticated_customer_search_is_rejected(api_client):

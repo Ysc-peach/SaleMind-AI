@@ -71,6 +71,9 @@ class Customer(models.Model):
     )
     created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
     updated_at = models.DateTimeField(_("更新时间"), auto_now=True)
+    # Archiving instead of deleting: drafts and reviews point at the customer, so
+    # removing the row would either cascade or orphan evidence.
+    is_active = models.BooleanField(_("启用"), default=True, db_index=True)
 
     class Meta:
         verbose_name = _("客户")
@@ -128,6 +131,9 @@ class Opportunity(models.Model):
     )
     created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
     updated_at = models.DateTimeField(_("更新时间"), auto_now=True)
+    # Archive flag, orthogonal to ``status``: status is the business outcome,
+    # this is "stop working on it". Reviews and drafts keep pointing at the row.
+    is_active = models.BooleanField(_("启用"), default=True, db_index=True)
 
     class Meta:
         constraints = [
