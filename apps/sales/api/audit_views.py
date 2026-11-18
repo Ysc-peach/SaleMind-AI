@@ -66,6 +66,21 @@ def _optional_date(params, name: str):
     return value
 
 
+def _actor_q(prefix: str, actor: str) -> Q:
+    """Match one person exactly, by username or either part of their name.
+
+    Substring matching on the username made `zhangsan` also return
+    `zhangsanfeng`, which turns an audit answer into a guess, and it never
+    matched the Chinese name the table actually displays.
+    """
+
+    return (
+        Q(**{f"{prefix}__username__iexact": actor})
+        | Q(**{f"{prefix}__first_name": actor})
+        | Q(**{f"{prefix}__last_name": actor})
+    )
+
+
 def _reviews(*, actor: str, status: str, start, end):
     queryset = SolutionReview.objects.select_related(
         "solution_draft__opportunity",
@@ -76,8 +91,7 @@ def _reviews(*, actor: str, status: str, start, end):
         # Either side of the review counts as the actor, so an operator can ask
         # "what did this person submit or decide".
         queryset = queryset.filter(
-            Q(submitted_by__username__icontains=actor)
-            | Q(reviewer__username__icontains=actor)
+            _actor_q("submitted_by", actor) | _actor_q("reviewer", actor)
         )
     if status:
         queryset = queryset.filter(status=status.lower())
@@ -94,7 +108,7 @@ def _generations(*, actor: str, status: str, start, end):
         "requested_by",
     )
     if actor:
-        queryset = queryset.filter(requested_by__username__icontains=actor)
+        queryset = queryset.filter(_actor_q("requested_by", actor))
     if status:
         queryset = queryset.filter(status=status.lower())
     if start is not None:

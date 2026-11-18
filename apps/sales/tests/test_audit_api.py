@@ -269,3 +269,27 @@ def test_invalid_query_parameters_are_rejected(api_client, user_factory):
         ).status_code
         == 400
     )
+
+
+def test_the_actor_filter_does_not_match_a_prefix(api_client, user_factory):
+    sales, reviewer, _opportunity, _analysis, _review, _job = build_history()
+    api_client.force_authenticate(user=user_factory(UserRole.ADMIN))
+
+    # `audit.sale` is a prefix of `audit.sales` and of nothing else; before this
+    # rule it returned that person's history, which makes an audit answer a
+    # guess about who did what.
+    partial = api_client.get(AUDIT_URL, {"actor": "audit.sale"})
+
+    assert partial.data["reviews"]["count"] == 0
+    assert partial.data["generations"]["count"] == 0
+
+
+def test_the_actor_filter_matches_the_name_the_table_shows(api_client, user_factory):
+    sales, _reviewer, _opportunity, _analysis, _review, _job = build_history()
+    sales.first_name = "张三"
+    sales.save(update_fields=["first_name"])
+    api_client.force_authenticate(user=user_factory(UserRole.ADMIN))
+
+    by_name = api_client.get(AUDIT_URL, {"actor": "张三"})
+
+    assert by_name.data["generations"]["count"] == 1

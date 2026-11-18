@@ -81,8 +81,14 @@ class CustomerViewSet(
             queryset = queryset.filter(name__icontains=query)
 
         if action in ("search", "retrieve"):
+            # Both flags matter: status is the business outcome and is_active is
+            # whether the record is still worked on. A page that lists "current
+            # work" must respect both, or an archived row reappears here after
+            # being hidden from the list.
             active_opportunities = (
-                Opportunity.objects.filter(status=OpportunityStatus.ACTIVE)
+                Opportunity.objects.filter(
+                    status=OpportunityStatus.ACTIVE, is_active=True
+                )
                 .only(
                     "id",
                     "project_name",

@@ -216,3 +216,35 @@ def test_re_enabling_restores_the_record(
     ]
     assert Customer.objects.get(pk=customer.pk).is_active is True
     assert Opportunity.objects.get(pk=opportunity.pk).is_active is True
+
+
+def test_the_sales_workspace_hides_archived_opportunities(
+    api_client, user_factory, customer_factory, opportunity_factory
+):
+    seller = user_factory(UserRole.SALES)
+    customer = customer_factory(name="Acme")
+    opportunity_factory(customer, sales_owner=seller, is_active=False)
+    opportunity_factory(customer, sales_owner=seller, project_name="Live deal")
+    api_client.force_authenticate(user=seller)
+
+    payload = api_client.get("/api/workspaces/sales/").data
+
+    # The dashboard is a to-do list, so it must agree with the list page about
+    # which records are still being worked on.
+    assert [item["project_name"] for item in payload["recently_updated"]] == [
+        "Live deal"
+    ]
+
+
+def test_a_customer_page_lists_only_live_opportunities(
+    api_client, user_factory, customer_factory, opportunity_factory
+):
+    admin = user_factory(UserRole.ADMIN)
+    customer = customer_factory(name="Acme")
+    opportunity_factory(customer, is_active=False)
+    opportunity_factory(customer, project_name="Live deal")
+    api_client.force_authenticate(user=admin)
+
+    data = api_client.get(f"/api/customers/{customer.id}/").data
+
+    assert [item["project_name"] for item in data["opportunities"]] == ["Live deal"]

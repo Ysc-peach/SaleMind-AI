@@ -77,7 +77,13 @@ class SalesWorkspaceAPIView(APIView):
     http_method_names = ["get", "head", "options"]
 
     def get(self, request):
-        opportunities = list(visible_opportunities_for(request.user)[:_SECTION_LIMIT])
+        # Archived work stays readable by id, but the dashboard is a to-do list:
+        # it must show what the person can still act on, matching the list page.
+        opportunities = list(
+            visible_opportunities_for(request.user).filter(is_active=True)[
+                :_SECTION_LIMIT
+            ]
+        )
         drafts = _drafts_with_latest_review().filter(
             opportunity__sales_owner=request.user
         )
