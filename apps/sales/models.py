@@ -734,3 +734,65 @@ class FollowUpTask(models.Model):
 
     def __str__(self) -> str:
         return f"{self.title} ({self.due_on})"
+
+
+class CaseStudySizeBand(models.TextChoices):
+    SMALL = "small", _("小型（200 人以下）")
+    MEDIUM = "medium", _("中型（200-1000 人）")
+    LARGE = "large", _("大型（1000 人以上）")
+
+
+class CaseStudy(models.Model):
+    """A delivered engagement that a proposal may point at.
+
+    Deliberately separate from the document knowledge base: a document is
+    evidence for a *fact*, while a case is a story with a shape (industry, size,
+    what hurt, what we did, what changed). Presales pick cases by resemblance,
+    not by full-text similarity.
+    """
+
+    title = models.CharField(_("案例名称"), max_length=200)
+    industry = models.CharField(_("行业"), max_length=64)
+    size_band = models.CharField(
+        _("客户规模"), max_length=16, choices=CaseStudySizeBand.choices
+    )
+    customer_name = models.CharField(
+        _("客户名称"), max_length=120, blank=True, default=""
+    )
+    pain_points = models.TextField(_("客户痛点"), blank=True, default="")
+    approach = models.TextField(_("我们的做法"), blank=True, default="")
+    results = models.TextField(_("结果"), blank=True, default="")
+    # Naming a customer in a proposal needs their permission, so this is an
+    # explicit flag rather than something inferred from the name field.
+    referenceable = models.BooleanField(_("可对外引用"), default=False)
+    is_active = models.BooleanField(_("是否启用"), default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_case_studies",
+        verbose_name=_("创建人"),
+    )
+    created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
+    updated_at = models.DateTimeField(_("更新时间"), auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(size_band__in=CaseStudySizeBand.values),
+                name="sales_case_size_band_valid",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["industry", "size_band"], name="sales_case_match_idx"
+            ),
+            models.Index(
+                fields=["is_active", "referenceable"], name="sales_case_visible_idx"
+            ),
+        ]
+        ordering = ["-updated_at", "-id"]
+        verbose_name = _("案例")
+        verbose_name_plural = _("案例")
+
+    def __str__(self) -> str:
+        return self.title

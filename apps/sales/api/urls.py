@@ -24,6 +24,7 @@ from .follow_up_views import (
     MyFollowUpAPIView,
     OpportunityFollowUpViewSet,
 )
+from .case_study_views import CaseStudyMatchAPIView, CaseStudyViewSet
 
 
 customer_create_view = CustomerViewSet.as_view({"post": "create"})
@@ -49,6 +50,13 @@ follow_up_detail_view = FollowUpTaskViewSet.as_view({"patch": "partial_update"})
 follow_up_complete_view = FollowUpTaskViewSet.as_view({"post": "complete"})
 follow_up_reopen_view = FollowUpTaskViewSet.as_view({"post": "reopen"})
 my_follow_up_view = MyFollowUpAPIView.as_view()
+case_study_collection_view = CaseStudyViewSet.as_view(
+    {"get": "list_cases", "post": "create_case"}
+)
+case_study_detail_view = CaseStudyViewSet.as_view({"patch": "partial_update"})
+case_study_archive_view = CaseStudyViewSet.as_view({"post": "archive"})
+case_study_restore_view = CaseStudyViewSet.as_view({"post": "restore"})
+case_study_match_view = CaseStudyMatchAPIView.as_view()
 solution_draft_collection_view = SolutionDraftCollectionViewSet.as_view(
     {"get": "list_drafts", "post": "create_draft"}
 )
@@ -175,6 +183,31 @@ urlpatterns = [
         name="opportunity-follow-up-list",
     ),
     path("follow-ups/mine/", my_follow_up_view, name="follow-up-mine"),
+    path(
+        "case-studies/",
+        case_study_collection_view,
+        name="case-study-list",
+    ),
+    path(
+        "case-studies/match/",
+        case_study_match_view,
+        name="case-study-match",
+    ),
+    path(
+        "case-studies/<int:pk>/",
+        case_study_detail_view,
+        name="case-study-detail",
+    ),
+    path(
+        "case-studies/<int:pk>/archive/",
+        case_study_archive_view,
+        name="case-study-archive",
+    ),
+    path(
+        "case-studies/<int:pk>/restore/",
+        case_study_restore_view,
+        name="case-study-restore",
+    ),
     path("follow-ups/<int:pk>/", follow_up_detail_view, name="follow-up-detail"),
     path(
         "follow-ups/<int:pk>/complete/",
