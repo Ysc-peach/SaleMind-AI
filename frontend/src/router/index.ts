@@ -11,6 +11,7 @@ export const router = createRouter({ history: createWebHistory(), routes: [
     { path: 'opportunities', component: () => import('../views/OpportunityListView.vue') },
     { path: 'audit', component: () => import('../views/AuditView.vue') },
     { path: 'cases', component: () => import('../views/CaseStudyView.vue') },
+    { path: 'competitors', component: () => import('../views/CompetitorView.vue') },
     { path: 'opportunities/:id(\\d+)', component: () => import('../views/OpportunityWorkspaceView.vue') },
     { path: 'solutions/:id(\\d+)', component: () => import('../views/SolutionDetailView.vue') },
   ] },

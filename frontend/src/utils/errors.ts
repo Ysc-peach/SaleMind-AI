@@ -9,6 +9,8 @@ const messages: Record<number, string> = {
 }
 const codes: Record<string, string> = {
   rate_limited: '操作过于频繁，请稍后再试；本次请求未被处理。',
+  record_inactive: '该记录已停用：请让管理员恢复后再继续；本次操作未生效。',
+  competitor_negative_claim: '不允许登记对第三方的否定断言（例如「不支持」「未提供」）。请改为引用竞品自己公开宣称的内容，并附来源链接。',
   customer_search_query_too_long: '客户搜索最多 200 个字符，请缩短后重试；输入未被截断。',
   solution_draft_no_proposals: '模型未生成任何技术建议，未形成可交付方案，未保存方案。请联系售前与维护人员核对生成结果；这不等同于客户信息缺失，勿连续重复生成。',
   solution_export_unsupported_format: '请选择 Word 或 PDF 导出格式。',
