@@ -289,6 +289,31 @@ ALERT_EMAIL_TO=ops@example.internal,sre@example.internal    # 复用上面的 EM
 
 前端入口：侧边栏「案例库」（三种角色都能进，只有售前与管理员看得到写操作）。商机详情页的「概览」还会按**客户行业**列出最接近的 5 条案例——按相似度排序，因此近似的也会出现；不可对外引用的案例在列表里显示为「匿名客户」。
 
+### 竞品与公开陈述
+
+竞品是**实体**而不是字符串：「华为云 / 华为云Stack / Huawei Cloud」写成三种就永远比不到一起，而比较表要跨方案复用很多年。所以先建实体（`/api/competitors/`，售前与管理员可建），再登记陈述。
+
+每条陈述绑定一个**受控维度**、一句**中性表述**、一个**来源链接**和**采集日期**：
+
+| 维度 | 对应受控主题 |
+|---|---|
+| 部署形态 | `private_deployment` / `kubernetes_deployment` |
+| 数据驻留 | `intranet_data_residency` / `public_network_transfer` |
+| 身份与集成 | `sso_integration` / `oa_integration` / `jwt_authentication` |
+| 数据存储 | `postgresql` / `pgvector` / `oracle_compatibility` |
+| 文档处理 | `scanned_pdf_ocr` |
+| 交付物 | `contract_generation` / `csv_bulk_export` |
+| 服务器兼容 | `server_compatibility` |
+| 知识检索 | `enterprise_knowledge_query` |
+
+三条硬规则：
+
+1. **不做否定断言**。`不支持…`、`未提供…`、`does not support…` 这类表述在登记时就被拒（`400 competitor_negative_claim`）——它们无法用对方原话自证，写进方案被客户核对时最伤信任；
+2. **必须有可访问来源**：`source_url` 只接受 http/https，另记 `published_on`（对方发布日期）与 `captured_on`（我们采集日期），方便判断是否过时；
+3. **只有管理员能审批**。售前可以登记，但陈述在 `approved` 之前不会被比较表或生成引用；审批人与时间成对落库（数据库约束），和审核决定同一套规则。
+
+竞品停用后不删除：历史陈述仍按 id 可读，但默认列表与后续比较都不再出现。
+
 ### 异地备份
 
 `backup` 服务在把 dump 命名为正式文件前会先用 `pg_restore -l` 读一遍目录表；读不通的归档会被丢弃，不会覆盖历史好备份，也不会被同步脚本选中。
@@ -391,6 +416,7 @@ Webhook 收到的是这样一份 JSON，聊天机器人可以直接贴成一条�
 | 审核方案 | ❌ | ✅ 必须是该案被指派的审核人 | ✅ 任意，但自己创建的不行 |
 | 维护跟进事项 | ✅ 自己负责的商机 | ✅ 自己是售前负责人的商机 | ✅ 任意 |
 | 案例库 | ✅ 只读 | ✅ 维护（新建 / 修改 / 停用） | ✅ 任意 + 查看已停用 |
+| 竞品与公开陈述 | ✅ 只读 | ✅ 登记（竞品、陈述） | ✅ 登记 + 审批 |
 | 停用 / 恢复客户与商机 | ❌ | ❌ | ✅ |
 | 查看已停用记录 | ❌ | ❌ | ✅ |
 | 审计视图 | ❌ | ❌ | ✅ |

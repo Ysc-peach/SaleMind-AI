@@ -796,3 +796,145 @@ class CaseStudy(models.Model):
 
     def __str__(self) -> str:
         return self.title
+
+
+class CompetitorDimension(models.TextChoices):
+    """Comparison axes, each anchored to subjects the evidence chain knows.
+
+    A dimension is not a new kind of evidence: it is a second way to look at the
+    same approved facts, which is why the list stays short and fixed.
+    """
+
+    DEPLOYMENT = "deployment", _("部署形态")
+    DATA_RESIDENCY = "data_residency", _("数据驻留")
+    IDENTITY_INTEGRATION = "identity_integration", _("身份与集成")
+    DATA_STORAGE = "data_storage", _("数据存储")
+    DOCUMENT_PROCESSING = "document_processing", _("文档处理")
+    DELIVERABLES = "deliverables", _("交付物")
+    SERVER_COMPATIBILITY = "server_compatibility", _("服务器兼容")
+    KNOWLEDGE_RETRIEVAL = "knowledge_retrieval", _("知识检索")
+
+
+class CompetitorStatementStatus(models.TextChoices):
+    PROPOSED = "proposed", _("待审批")
+    APPROVED = "approved", _("已批准")
+    REJECTED = "rejected", _("已拒绝")
+
+
+class Competitor(models.Model):
+    """A named other vendor.
+
+    A row rather than a string, because "华为云 / 华为云Stack / Huawei Cloud"
+    typed three ways can never be compared, and because a comparison table is
+    reused across proposals for years.
+    """
+
+    name = models.CharField(_("竞品名称"), max_length=120, unique=True)
+    aliases = models.CharField(
+        _("别名"), max_length=240, blank=True, default="",
+        help_text=_("逗号分隔，仅用于检索，不参与比较"),
+    )
+    is_active = models.BooleanField(_("是否启用"), default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_competitors",
+        verbose_name=_("创建人"),
+    )
+    created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
+    updated_at = models.DateTimeField(_("更新时间"), auto_now=True)
+
+    class Meta:
+        ordering = ["name", "id"]
+        verbose_name = _("竞品")
+        verbose_name_plural = _("竞品")
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class CompetitorStatement(models.Model):
+    """What a competitor publicly claims, with the source that says so.
+
+    Only neutral, attributable statements are stored. A negative claim about a
+    third party ("X does not support Y") ages badly and cannot be defended in
+    front of a customer unless the vendor said it themselves, so the service
+    refuses those outright.
+    """
+
+    competitor = models.ForeignKey(
+        Competitor,
+        on_delete=models.CASCADE,
+        related_name="statements",
+        verbose_name=_("竞品"),
+    )
+    dimension = models.CharField(
+        _("比较维度"), max_length=32, choices=CompetitorDimension.choices
+    )
+    statement = models.TextField(_("公开陈述"))
+    source_url = models.URLField(_("来源链接"), max_length=500)
+    published_on = models.DateField(_("来源发布日期"), null=True, blank=True)
+    captured_on = models.DateField(_("采集日期"))
+    status = models.CharField(
+        _("审批状态"),
+        max_length=16,
+        choices=CompetitorStatementStatus.choices,
+        default=CompetitorStatementStatus.PROPOSED,
+    )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="reviewed_competitor_statements",
+        null=True,
+        blank=True,
+        verbose_name=_("审批人"),
+    )
+    reviewed_at = models.DateTimeField(_("审批时间"), null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_competitor_statements",
+        verbose_name=_("登记人"),
+    )
+    created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
+    updated_at = models.DateTimeField(_("更新时间"), auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(dimension__in=CompetitorDimension.values),
+                name="sales_competitor_dimension_valid",
+            ),
+            models.CheckConstraint(
+                # A decision and who made it are recorded together, the same
+                # way every other decision in this project works.
+                condition=(
+                    models.Q(
+                        status=CompetitorStatementStatus.PROPOSED,
+                        reviewed_by__isnull=True,
+                        reviewed_at__isnull=True,
+                    )
+                    | models.Q(
+                        status__in=[
+                            CompetitorStatementStatus.APPROVED,
+                            CompetitorStatementStatus.REJECTED,
+                        ],
+                        reviewed_by__isnull=False,
+                        reviewed_at__isnull=False,
+                    )
+                ),
+                name="sales_competitor_reviewed_when_decided",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["competitor", "dimension", "status"],
+                name="sales_competitor_matrix_idx",
+            ),
+        ]
+        ordering = ["-created_at", "-id"]
+        verbose_name = _("竞品陈述")
+        verbose_name_plural = _("竞品陈述")
+
+    def __str__(self) -> str:
+        return f"{self.competitor.name} · {self.get_dimension_display()}"

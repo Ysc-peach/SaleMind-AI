@@ -5,6 +5,16 @@ from rest_framework.exceptions import APIException, Throttled
 from rest_framework.response import Response
 from rest_framework.views import exception_handler
 
+#: Refusals whose code the client is expected to branch on.
+_CODED_REFUSALS = frozenset(
+    {
+        # An archived record: ask an administrator to restore it.
+        "record_inactive",
+        # A negative claim about a third party: cite their own words instead.
+        "competitor_negative_claim",
+    }
+)
+
 
 def api_exception_handler(exc, context):
     """Keep DRF defaults, and add two machine-readable codes.
@@ -26,15 +36,15 @@ def api_exception_handler(exc, context):
             status=409,
         )
 
-    # An archived record is a state conflict the client can act on (ask an
-    # administrator), so it gets the same code/message envelope as a constraint
-    # conflict instead of a bare detail string. Matched on the declared code
-    # rather than the class, to keep this module free of app imports.
-    if isinstance(exc, APIException) and getattr(exc, "default_code", "") == (
-        "record_inactive"
-    ):
+    # A few refusals carry a rule the client has to explain to a person, so they
+    # get the same code/message envelope as a constraint conflict instead of a
+    # bare detail string. Matched on the declared code rather than the class, to
+    # keep this module free of app imports.
+    if isinstance(exc, APIException) and getattr(
+        exc, "default_code", ""
+    ) in _CODED_REFUSALS:
         return Response(
-            {"code": "record_inactive", "message": str(exc.detail)},
+            {"code": exc.default_code, "message": str(exc.detail)},
             status=exc.status_code,
         )
 

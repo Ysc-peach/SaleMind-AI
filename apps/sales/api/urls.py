@@ -25,6 +25,11 @@ from .follow_up_views import (
     OpportunityFollowUpViewSet,
 )
 from .case_study_views import CaseStudyMatchAPIView, CaseStudyViewSet
+from .competitor_views import (
+    CompetitorStatementDecisionViewSet,
+    CompetitorStatementViewSet,
+    CompetitorViewSet,
+)
 
 
 customer_create_view = CustomerViewSet.as_view({"post": "create"})
@@ -57,6 +62,21 @@ case_study_detail_view = CaseStudyViewSet.as_view({"patch": "partial_update"})
 case_study_archive_view = CaseStudyViewSet.as_view({"post": "archive"})
 case_study_restore_view = CaseStudyViewSet.as_view({"post": "restore"})
 case_study_match_view = CaseStudyMatchAPIView.as_view()
+competitor_collection_view = CompetitorViewSet.as_view(
+    {"get": "list_competitors", "post": "create_competitor"}
+)
+competitor_detail_view = CompetitorViewSet.as_view({"patch": "partial_update"})
+competitor_archive_view = CompetitorViewSet.as_view({"post": "archive"})
+competitor_restore_view = CompetitorViewSet.as_view({"post": "restore"})
+competitor_statement_view = CompetitorStatementViewSet.as_view(
+    {"get": "list_statements", "post": "create_statement"}
+)
+competitor_statement_approve_view = CompetitorStatementDecisionViewSet.as_view(
+    {"post": "approve"}
+)
+competitor_statement_reject_view = CompetitorStatementDecisionViewSet.as_view(
+    {"post": "reject"}
+)
 solution_draft_collection_view = SolutionDraftCollectionViewSet.as_view(
     {"get": "list_drafts", "post": "create_draft"}
 )
@@ -192,6 +212,41 @@ urlpatterns = [
         "case-studies/match/",
         case_study_match_view,
         name="case-study-match",
+    ),
+    path(
+        "competitors/",
+        competitor_collection_view,
+        name="competitor-list",
+    ),
+    path(
+        "competitors/<int:pk>/",
+        competitor_detail_view,
+        name="competitor-detail",
+    ),
+    path(
+        "competitors/<int:pk>/archive/",
+        competitor_archive_view,
+        name="competitor-archive",
+    ),
+    path(
+        "competitors/<int:pk>/restore/",
+        competitor_restore_view,
+        name="competitor-restore",
+    ),
+    path(
+        "competitors/<int:competitor_id>/statements/",
+        competitor_statement_view,
+        name="competitor-statement-list",
+    ),
+    path(
+        "competitor-statements/<int:pk>/approve/",
+        competitor_statement_approve_view,
+        name="competitor-statement-approve",
+    ),
+    path(
+        "competitor-statements/<int:pk>/reject/",
+        competitor_statement_reject_view,
+        name="competitor-statement-reject",
     ),
     path(
         "case-studies/<int:pk>/",
