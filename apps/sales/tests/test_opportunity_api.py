@@ -595,3 +595,21 @@ def test_opportunity_put_and_delete_methods_remain_unavailable(
     assert put_response.status_code == 405
     assert delete_response.status_code == 405
     assert Opportunity.objects.get(pk=opportunity.id).project_name == "Platform rollout"
+
+
+def test_the_detail_exposes_the_customer_industry(
+    api_client, user_factory, customer_factory, opportunity_factory
+):
+    actor = user_factory(UserRole.SALES)
+    opportunity = opportunity_factory(sales_owner=actor)
+    # This module's factory builds its own customer, so set the industry on it.
+    opportunity.customer.industry = "manufacturing"
+    opportunity.customer.save(update_fields=["industry"])
+    api_client.force_authenticate(user=actor)
+
+    response = api_client.get(f"{OPPORTUNITIES_URL}{opportunity.id}/")
+
+    # The workspace ranks similar cases on this field; without it the panel
+    # would need a second request just to learn the industry.
+    assert response.status_code == 200
+    assert response.data["customer_industry"] == "manufacturing"

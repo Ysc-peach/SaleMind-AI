@@ -3,6 +3,7 @@ export const labels: Record<string, string> = {
   known: '已确认', unknown: '信息缺失', unclear: '尚不明确', conflict: '信息冲突',
   draft: '草稿', pending_review: '等待售前审核', approved: '技术审核已通过', needs_revision: '需要处理退回意见', pending: '审核中', returned: '已退回',
   customer_info_required: '需要补充客户信息', technical_revision_required: '需要修改技术方案',
+  small: '小型（200 人以下）', medium: '中型（200-1000 人）', large: '大型（1000 人以上）',
   newer_requirement_analysis: '存在更新的需求分析', grounding_fact_invalid: '企业事实已失效', grounding_provenance_invalid: '证据来源已失效',
   customer_fact: '客户事实', enterprise_fact: '企业事实', proposal: '方案建议', unresolved: '待确认',
   business_goal: '业务目标', use_scenario: '使用场景', user_scale: '用户规模', deployment_requirement: '部署要求', data_security_requirement: '数据安全', existing_environment: '现有环境', integration_requirement: '系统集成', timeline: '时间计划', budget: '预算', technical_constraints: '技术约束',

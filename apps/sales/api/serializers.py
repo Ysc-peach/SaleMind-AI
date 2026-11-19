@@ -159,6 +159,12 @@ class OpportunityListSerializer(OpportunityDisplaySerializer):
 class OpportunityDetailSerializer(OpportunityDisplaySerializer):
     """Full read shape for an Opportunity visible to an authorized user."""
 
+    # Copied from the customer so the workspace can suggest cases without a
+    # second request; industry is the field the case library ranks on.
+    customer_industry = serializers.CharField(
+        source="customer.industry", read_only=True
+    )
+
     class Meta:
         model = Opportunity
         fields = (
@@ -166,6 +172,7 @@ class OpportunityDetailSerializer(OpportunityDisplaySerializer):
             "project_name",
             "customer",
             "customer_name",
+            "customer_industry",
             "sales_owner",
             "sales_owner_name",
             "presales_owner",
