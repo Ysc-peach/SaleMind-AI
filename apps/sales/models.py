@@ -662,3 +662,75 @@ class SolutionGenerationJob(models.Model):
         ]
         verbose_name = _("方案生成任务")
         verbose_name_plural = _("方案生成任务")
+
+
+class FollowUpTaskStatus(models.TextChoices):
+    OPEN = "open", _("待跟进")
+    DONE = "done", _("已完成")
+
+
+class FollowUpTask(models.Model):
+    """One dated action someone owes on an opportunity.
+
+    Kept separate from the draft and review tables because it is the only thing
+    here that is about the *future*: "call the customer back", "send the POC
+    plan". Without a dated record the workspace can only show what already
+    happened.
+    """
+
+    opportunity = models.ForeignKey(
+        Opportunity,
+        on_delete=models.CASCADE,
+        related_name="follow_up_tasks",
+        verbose_name=_("商机"),
+    )
+    title = models.CharField(_("事项"), max_length=200)
+    due_on = models.DateField(_("到期日"))
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="owned_follow_up_tasks",
+        verbose_name=_("负责人"),
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_follow_up_tasks",
+        verbose_name=_("创建人"),
+    )
+    status = models.CharField(
+        _("状态"),
+        max_length=16,
+        choices=FollowUpTaskStatus.choices,
+        default=FollowUpTaskStatus.OPEN,
+    )
+    completed_at = models.DateTimeField(_("完成时间"), null=True, blank=True)
+    created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
+    updated_at = models.DateTimeField(_("更新时间"), auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                # The same rule the generation queue follows: a terminal state
+                # and its timestamp are recorded together or not at all.
+                condition=(
+                    models.Q(status="open", completed_at__isnull=True)
+                    | models.Q(status="done", completed_at__isnull=False)
+                ),
+                name="sales_followup_completed_when_done",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["status", "due_on"], name="sales_followup_due_idx"
+            ),
+            models.Index(
+                fields=["owner", "status"], name="sales_followup_owner_idx"
+            ),
+        ]
+        ordering = ["due_on", "id"]
+        verbose_name = _("跟进事项")
+        verbose_name_plural = _("跟进事项")
+
+    def __str__(self) -> str:
+        return f"{self.title} ({self.due_on})"

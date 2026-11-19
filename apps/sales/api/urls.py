@@ -19,6 +19,11 @@ from .workspace_views import (
     SalesWorkspaceAPIView,
 )
 from .solution_export_views import SolutionExportAPIView
+from .follow_up_views import (
+    FollowUpTaskViewSet,
+    MyFollowUpAPIView,
+    OpportunityFollowUpViewSet,
+)
 
 
 customer_create_view = CustomerViewSet.as_view({"post": "create"})
@@ -37,6 +42,13 @@ opportunity_detail_view = OpportunityViewSet.as_view(
 )
 opportunity_disable_view = OpportunityViewSet.as_view({"post": "disable"})
 opportunity_enable_view = OpportunityViewSet.as_view({"post": "enable"})
+opportunity_follow_up_view = OpportunityFollowUpViewSet.as_view(
+    {"get": "list_tasks", "post": "create_task"}
+)
+follow_up_detail_view = FollowUpTaskViewSet.as_view({"patch": "partial_update"})
+follow_up_complete_view = FollowUpTaskViewSet.as_view({"post": "complete"})
+follow_up_reopen_view = FollowUpTaskViewSet.as_view({"post": "reopen"})
+my_follow_up_view = MyFollowUpAPIView.as_view()
 solution_draft_collection_view = SolutionDraftCollectionViewSet.as_view(
     {"get": "list_drafts", "post": "create_draft"}
 )
@@ -157,6 +169,23 @@ urlpatterns = [
     ),
     path("customers/<int:pk>/enable/", customer_enable_view, name="customer-enable"),
     path("customers/", customer_create_view, name="customer-create"),
+    path(
+        "opportunities/<int:opportunity_id>/follow-ups/",
+        opportunity_follow_up_view,
+        name="opportunity-follow-up-list",
+    ),
+    path("follow-ups/mine/", my_follow_up_view, name="follow-up-mine"),
+    path("follow-ups/<int:pk>/", follow_up_detail_view, name="follow-up-detail"),
+    path(
+        "follow-ups/<int:pk>/complete/",
+        follow_up_complete_view,
+        name="follow-up-complete",
+    ),
+    path(
+        "follow-ups/<int:pk>/reopen/",
+        follow_up_reopen_view,
+        name="follow-up-reopen",
+    ),
     path("opportunities/<int:pk>/", opportunity_detail_view, name="opportunity-detail"),
     path(
         "opportunities/<int:pk>/disable/",
