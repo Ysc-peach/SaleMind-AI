@@ -316,6 +316,19 @@ ALERT_EMAIL_TO=ops@example.internal,sre@example.internal    # 复用上面的 EM
 
 前端入口：侧边栏「竞品库」。三种角色都能看；售前可新建竞品、登记陈述（提交后为「待审批」），只有管理员能看到并点击「批准 / 拒绝」。登记被拒时页面会说明原因（例如否定断言），而不是只显示「400」。
 
+**对照矩阵**（`GET /api/opportunities/{id}/competitor-matrix/?competitor=<招标号>`，可重复传多个；不传则用全部启用竞品，最多 5 个）：
+
+```json
+{"opportunity_id": 7, "formable_rows": 1, "total_rows": 8,
+ "dimensions": [{"dimension": "deployment", "label": "部署形态",
+   "competitors": [{"competitor_id": 3, "competitor_name": "竞品甲",
+     "own_facts": [{"id": 12, "subject_key": "private_deployment", "statement": "..."}],
+     "statements": [{"id": 5, "statement": "...", "source_url": "https://..."}],
+     "can_form": true, "gap": ""}]}]}
+```
+
+每行只有「我方已批准事实 + 竞品已批准陈述」都在时 `can_form` 才为真；否则 `gap` 明确写出缺哪一侧（`missing_both` / `missing_own_fact` / `missing_competitor_statement`）。这一步先让**能不能写**变成可查询的事实，生成接入再据此决定写或留空。矩阵固定两次查询（事实一次、陈述一次），与维度数量无关。
+
 ### 异地备份
 
 `backup` 服务在把 dump 命名为正式文件前会先用 `pg_restore -l` 读一遍目录表；读不通的归档会被丢弃，不会覆盖历史好备份，也不会被同步脚本选中。

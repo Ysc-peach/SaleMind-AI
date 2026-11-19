@@ -6,16 +6,24 @@ service enforces all three, so a view that forgets to check cannot widen them.
 """
 
 from rest_framework import status, viewsets
-from rest_framework.exceptions import APIException, NotFound, PermissionDenied, ValidationError
+from rest_framework.exceptions import (
+    APIException,
+    NotFound,
+    PermissionDenied,
+    ValidationError,
+)
 from rest_framework.parsers import JSONParser
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from config.throttling import ScopedActionThrottleMixin
 
 from apps.accounts.models import UserRole
 from apps.sales.models import Competitor, CompetitorDimension, CompetitorStatement
+from apps.sales.services import competitor_matrix as matrix_service
 from apps.sales.services import competitors as service
 from apps.sales.services.competitors import CompetitorError, CompetitorErrorCode
+from apps.sales.services.visibility import visible_opportunities_for
 
 from .competitor_serializers import (
     CompetitorCreateSerializer,
@@ -207,3 +215,48 @@ class CompetitorStatementDecisionViewSet(viewsets.GenericViewSet):
         except CompetitorError as error:
             _translate(error)
         return Response(CompetitorStatementSerializer(statement).data)
+
+
+MAX_COMPETITORS_PER_MATRIX = 5
+
+
+class CompetitorMatrixAPIView(APIView):
+    """Per-dimension readiness for a comparison section.
+
+    Read-only and cheap: two queries total, whatever the number of dimensions.
+    It exists so a human — and later the generator — can see which rows have
+    evidence on both sides before a single sentence is written.
+    """
+
+    permission_classes = (SolutionDraftPermission,)
+    http_method_names = ["get", "head", "options"]
+
+    def get(self, request, opportunity_id: int):
+        opportunity = visible_opportunities_for(request.user).filter(
+            pk=opportunity_id
+        ).first()
+        if opportunity is None:
+            raise NotFound()
+
+        raw_ids = request.query_params.getlist("competitor")
+        if raw_ids:
+            try:
+                wanted = [int(value) for value in raw_ids]
+            except (TypeError, ValueError):
+                raise ValidationError(
+                    {"competitor": "Expected competitor ids."}
+                ) from None
+            competitors = list(
+                Competitor.objects.filter(pk__in=wanted).order_by("name", "id")
+            )
+            if len(competitors) != len(set(wanted)):
+                raise NotFound()
+        else:
+            competitors = list(
+                Competitor.objects.filter(is_active=True).order_by("name", "id")[
+                    :MAX_COMPETITORS_PER_MATRIX
+                ]
+            )
+
+        payload = matrix_service.build_matrix(competitors=competitors)
+        return Response({"opportunity_id": opportunity.pk, **payload})

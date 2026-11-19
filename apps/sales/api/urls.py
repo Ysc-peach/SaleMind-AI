@@ -26,6 +26,7 @@ from .follow_up_views import (
 )
 from .case_study_views import CaseStudyMatchAPIView, CaseStudyViewSet
 from .competitor_views import (
+    CompetitorMatrixAPIView,
     CompetitorStatementDecisionViewSet,
     CompetitorStatementViewSet,
     CompetitorViewSet,
@@ -77,6 +78,7 @@ competitor_statement_approve_view = CompetitorStatementDecisionViewSet.as_view(
 competitor_statement_reject_view = CompetitorStatementDecisionViewSet.as_view(
     {"post": "reject"}
 )
+competitor_matrix_view = CompetitorMatrixAPIView.as_view()
 solution_draft_collection_view = SolutionDraftCollectionViewSet.as_view(
     {"get": "list_drafts", "post": "create_draft"}
 )
@@ -212,6 +214,11 @@ urlpatterns = [
         "case-studies/match/",
         case_study_match_view,
         name="case-study-match",
+    ),
+    path(
+        "opportunities/<int:opportunity_id>/competitor-matrix/",
+        competitor_matrix_view,
+        name="opportunity-competitor-matrix",
     ),
     path(
         "competitors/",
