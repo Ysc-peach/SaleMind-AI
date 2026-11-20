@@ -38,7 +38,17 @@ class ExportDocument:
     source_index: tuple[ExportSource, ...]
 
 
-def build_export_document(snapshot: ExportSnapshot) -> ExportDocument:
+def build_export_document(
+    snapshot: ExportSnapshot,
+    appendix: tuple[DocumentSection, ...] = (),
+) -> ExportDocument:
+    """The approved draft, plus optional appendices built from approved data.
+
+    Appendices are not part of the reviewed draft, so they are appended after it
+    and describe themselves; leaving the argument empty reproduces the exact
+    document reviewed.
+    """
+
     metadata = tuple((name,str(value)) for name,value in (
         ('方案 ID',snapshot.solution_id),('方案版本',f'V{snapshot.version}'),
         ('Schema',snapshot.schema_version),('分析快照',snapshot.analysis_id),
@@ -53,6 +63,8 @@ def build_export_document(snapshot: ExportSnapshot) -> ExportDocument:
     sources = tuple(ExportSource(label,doc_id,title,tuple(sorted(ids)))
         for (label,doc_id,title),ids in sorted(grouped.items()))
     sections = _v1(snapshot.domain) if isinstance(snapshot.domain,SolutionDraft) else _v2(snapshot.domain)
+    if appendix:
+        sections = (*sections, *appendix)
     return ExportDocument(snapshot.title,metadata,DISCLAIMER,sections,sources)
 
 
