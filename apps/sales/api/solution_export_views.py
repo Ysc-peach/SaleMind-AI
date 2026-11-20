@@ -9,8 +9,13 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.sales.api.permissions import SolutionDraftPermission
-from apps.sales.models import Competitor
+from apps.sales.models import Competitor, Quote, SolutionDraftRecord
+from apps.sales.services import quotes as quote_service
 from apps.sales.services.competitor_appendix import build_comparison_appendix
+from apps.sales.services.quote_document import build_quote_section
+from apps.sales.services.quotes import QuoteError, QuoteErrorCode
+
+from .quote_views import QuoteMissing, QuoteOutdated
 from apps.sales.services.solution_export_guard import (
     load_export_snapshot, revalidate_export_snapshot, SolutionExportError,
 )
@@ -22,6 +27,33 @@ MIMES = {'pdf':'application/pdf','docx':'application/vnd.openxmlformats-officedo
 
 
 MAX_APPENDIX_COMPETITORS = 5
+
+
+def _quote_section(request, solution_id: int):
+    """The quote page is opt-in, and only for the draft it was priced against."""
+
+    wanted = (request.query_params.get("quote") or "").strip().lower()
+    if wanted not in {"1", "true", "yes"}:
+        return ()
+    opportunity_id = (
+        SolutionDraftRecord.objects.filter(pk=solution_id)
+        .values_list("opportunity_id", flat=True)
+        .first()
+    )
+    if opportunity_id is None:
+        raise NotFound()
+    quote = Quote.objects.filter(opportunity_id=opportunity_id).first()
+    if quote is None:
+        raise QuoteMissing()
+    try:
+        quote_service.quote_for_export(
+            quote=quote, solution_draft_id=solution_id
+        )
+    except QuoteError as error:
+        if error.code == QuoteErrorCode.OUTDATED:
+            raise QuoteOutdated() from None
+        raise
+    return build_quote_section(quote)
 
 
 def _comparison_appendix(request):
@@ -62,8 +94,11 @@ class SolutionExportAPIView(APIView):
             if len(request.query_params.getlist('file_type')) != 1 or file_type not in MIMES:
                 raise SolutionExportError('solution_export_unsupported_format')
             appendix = _comparison_appendix(request)
+            quote_section = _quote_section(request, solution_id)
             try:
-                document = build_export_document(snapshot, appendix)
+                document = build_export_document(
+                    snapshot, appendix, quote_section
+                )
                 content = render_export(document,file_type=file_type)
             except SolutionExportError:
                 raise
@@ -81,7 +116,13 @@ class SolutionExportAPIView(APIView):
             logger.info('solution_export actor=%s solution=%s version=%s file_type=%s result=success time=%s',
                 request.user.pk,solution_id,version,file_type,now.isoformat())
             return response
-        except (NotFound,PermissionDenied,ValidationError):
+        except (
+            NotFound,
+            PermissionDenied,
+            ValidationError,
+            QuoteMissing,
+            QuoteOutdated,
+        ):
             raise
         except Exception as error:
             code = error.code if isinstance(error,SolutionExportError) else 'solution_export_unavailable'

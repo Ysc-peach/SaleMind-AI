@@ -32,6 +32,7 @@ from .competitor_views import (
     CompetitorViewSet,
 )
 from .price_book_views import PriceBookAPIView
+from .quote_views import OpportunityQuoteViewSet, QuoteLineViewSet
 
 
 customer_create_view = CustomerViewSet.as_view({"post": "create"})
@@ -81,6 +82,17 @@ competitor_statement_reject_view = CompetitorStatementDecisionViewSet.as_view(
 )
 competitor_matrix_view = CompetitorMatrixAPIView.as_view()
 price_book_view = PriceBookAPIView.as_view()
+opportunity_quote_view = OpportunityQuoteViewSet.as_view(
+    {"get": "retrieve_quote", "patch": "update_quote"}
+)
+opportunity_quote_lines_view = OpportunityQuoteViewSet.as_view(
+    {"post": "add_line"}
+)
+opportunity_quote_rebind_view = OpportunityQuoteViewSet.as_view(
+    {"post": "rebind"}
+)
+quote_line_detail_view = QuoteLineViewSet.as_view({"patch": "partial_update"})
+quote_line_remove_view = QuoteLineViewSet.as_view({"post": "remove"})
 solution_draft_collection_view = SolutionDraftCollectionViewSet.as_view(
     {"get": "list_drafts", "post": "create_draft"}
 )
@@ -221,6 +233,31 @@ urlpatterns = [
         "price-book/",
         price_book_view,
         name="price-book",
+    ),
+    path(
+        "opportunities/<int:opportunity_id>/quote/",
+        opportunity_quote_view,
+        name="opportunity-quote",
+    ),
+    path(
+        "opportunities/<int:opportunity_id>/quote/lines/",
+        opportunity_quote_lines_view,
+        name="opportunity-quote-lines",
+    ),
+    path(
+        "opportunities/<int:opportunity_id>/quote/rebind/",
+        opportunity_quote_rebind_view,
+        name="opportunity-quote-rebind",
+    ),
+    path(
+        "quote-lines/<int:pk>/",
+        quote_line_detail_view,
+        name="quote-line-detail",
+    ),
+    path(
+        "quote-lines/<int:pk>/remove/",
+        quote_line_remove_view,
+        name="quote-line-remove",
     ),
     path(
         "opportunities/<int:opportunity_id>/competitor-matrix/",

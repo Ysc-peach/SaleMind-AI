@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.core.validators import MinValueValidator
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
@@ -1001,3 +1001,131 @@ class PriceBookEntry(models.Model):
 
     def __str__(self) -> str:
         return f"{self.sku} · {self.name} · {self.unit_price}"
+
+
+class Quote(models.Model):
+    """One commercial quote per opportunity, priced against one draft version.
+
+    The draft link is what makes a quote reproducible: if the solution is
+    regenerated, this quote still points at the version it was priced for, and
+    exporting it is refused until someone re-prices against the new version.
+    """
+
+    opportunity = models.OneToOneField(
+        Opportunity,
+        on_delete=models.CASCADE,
+        related_name="quote",
+        verbose_name=_("商机"),
+    )
+    solution_draft = models.ForeignKey(
+        "SolutionDraftRecord",
+        on_delete=models.PROTECT,
+        related_name="quotes",
+        null=True,
+        blank=True,
+        verbose_name=_("对应方案版本"),
+    )
+    discount_percent = models.DecimalField(
+        _("整体折扣（%）"),
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal("0"),
+        validators=[
+            MinValueValidator(Decimal("0")),
+            MaxValueValidator(Decimal("100")),
+        ],
+    )
+    note = models.TextField(_("备注"), blank=True, default="")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_quotes",
+        verbose_name=_("创建人"),
+    )
+    created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
+    updated_at = models.DateTimeField(_("更新时间"), auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(
+                    discount_percent__gte=0, discount_percent__lte=100
+                ),
+                name="sales_quote_discount_range",
+            ),
+        ]
+        verbose_name = _("报价")
+        verbose_name_plural = _("报价")
+
+    def __str__(self) -> str:
+        return f"quote(opportunity={self.opportunity_id})"
+
+
+class QuoteLine(models.Model):
+    """A priced row. The unit price is copied here and never read again.
+
+    Reading the price book at render time would silently re-price an old quote
+    the moment the book changes, which is exactly the kind of quiet mutation this
+    project refuses elsewhere.
+    """
+
+    quote = models.ForeignKey(
+        Quote,
+        on_delete=models.CASCADE,
+        related_name="lines",
+        verbose_name=_("报价"),
+    )
+    price_book_entry = models.ForeignKey(
+        PriceBookEntry,
+        on_delete=models.PROTECT,
+        related_name="quote_lines",
+        verbose_name=_("价目条目"),
+    )
+    sku = models.CharField(_("物料编码快照"), max_length=64)
+    name = models.CharField(_("名称快照"), max_length=200)
+    unit = models.CharField(_("单位"), max_length=32, default="套")
+    quantity = models.DecimalField(
+        _("数量"),
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.01"))],
+    )
+    unit_price = models.DecimalField(
+        _("单价快照（未含税）"),
+        max_digits=12,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0"))],
+    )
+    currency = models.CharField(_("币种"), max_length=3, default="CNY")
+    # Removed rows stay for the audit trail; totals skip them.
+    removed_at = models.DateTimeField(_("移除时间"), null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_quote_lines",
+        verbose_name=_("创建人"),
+    )
+    created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(quantity__gt=0),
+                name="sales_quoteline_quantity_positive",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(unit_price__gte=0),
+                name="sales_quoteline_price_non_negative",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["quote", "removed_at"], name="sales_quoteline_active_idx"
+            ),
+        ]
+        ordering = ["id"]
+        verbose_name = _("报价行")
+        verbose_name_plural = _("报价行")
+
+    def __str__(self) -> str:
+        return f"{self.sku} × {self.quantity}"

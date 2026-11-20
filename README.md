@@ -505,4 +505,30 @@ GET /api/price-book/?q=企业&as_of=2026-06-01
 
 金额在 JSON 里是**字符串**（`"1200.00"`），避免浮点在路上把它四舍五入；币种默认 `CNY`，第一版不支持多币种换算。停用（`is_active=false`）的条目默认不返回，`include_inactive=1` 仅管理员可用。
 
-下一轮才会把价目接进报价行：报价行会**冻结**当时单价，方案重新生成后旧报价单拒绝导出。
+### 报价（第二轮）
+
+每个商机一份报价，绑定**一个方案版本**：
+
+```
+GET   /api/opportunities/{id}/quote/            # 条目 + 小计/折扣/合计
+POST  /api/opportunities/{id}/quote/lines/      # {price_book_entry, quantity}
+PATCH /api/opportunities/{id}/quote/            # {discount_percent, note}
+POST  /api/opportunities/{id}/quote/rebind/     # 改价到最新方案版本
+PATCH /api/quote-lines/{id}/                    # {quantity}
+POST  /api/quote-lines/{id}/remove/             # 撤下（保留行，不计入合计）
+```
+
+四条硬规则：
+
+1. **单价在加行时冻结**——之后改价目表，旧报价单的金额不会变；
+2. **绑定方案版本**——方案重新生成后，旧报价单**不能再改也不能导出**（`409 quote_outdated`），要显式调 `rebind` 才继续；
+3. **撤下不删除**——移除的行保留 `removed_at`，审计时能回答「这条为什么不见了」；
+4. **不含税**——金额按未含税存储，导出页写明「正式报价以商务合同为准」；表里没有成本与毛利字段。
+
+折扣暂时只是**记录**（0–100%），审批闸门在第三轮：超过阈值时导出应被拒绝，而不是让任何人自己填 8 折。
+
+导出时加 `&quote=1` 才会附上报价页（不带则与审核版本一致）：
+
+```
+GET /api/solution-drafts/{id}/export/?file_type=pdf&quote=1
+```

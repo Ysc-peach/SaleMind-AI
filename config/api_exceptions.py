@@ -12,6 +12,12 @@ _CODED_REFUSALS = frozenset(
         "record_inactive",
         # A negative claim about a third party: cite their own words instead.
         "competitor_negative_claim",
+        # A quote priced against a superseded draft version: re-price first.
+        "quote_outdated",
+        # A quote was asked for on an opportunity that has none.
+        "quote_missing",
+        # Nothing to price yet: generate a solution version first.
+        "quote_no_draft",
     }
 )
 
