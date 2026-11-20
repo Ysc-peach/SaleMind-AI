@@ -938,3 +938,66 @@ class CompetitorStatement(models.Model):
 
     def __str__(self) -> str:
         return f"{self.competitor.name} · {self.get_dimension_display()}"
+
+
+class PriceBookEntry(models.Model):
+    """One price, valid from a date. Append-only on purpose.
+
+    A quote must be reproducible years later, so a price change adds a row
+    instead of overwriting one: the old row still explains what a past quote was
+    built on, and `current_price` reads the newest row that has already started.
+    Cost and margin are deliberately absent — nothing here should be able to leak
+    them into an export.
+    """
+
+    sku = models.CharField(_("物料编码"), max_length=64)
+    name = models.CharField(_("名称"), max_length=200)
+    category = models.CharField(
+        _("分类"), max_length=64, blank=True, default=""
+    )
+    unit = models.CharField(_("单位"), max_length=32, default="套")
+    unit_price = models.DecimalField(
+        _("单价（未含税）"),
+        max_digits=12,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0"))],
+    )
+    currency = models.CharField(_("币种"), max_length=3, default="CNY")
+    effective_from = models.DateField(_("生效日期"))
+    is_active = models.BooleanField(_("是否启用"), default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_price_book_entries",
+        verbose_name=_("创建人"),
+    )
+    created_at = models.DateTimeField(_("创建时间"), auto_now_add=True)
+    updated_at = models.DateTimeField(_("更新时间"), auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["sku", "effective_from"],
+                name="sales_pricebook_sku_effective_unique",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(unit_price__gte=0),
+                name="sales_pricebook_price_non_negative",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["sku", "-effective_from"],
+                name="sales_pricebook_current_idx",
+            ),
+            models.Index(
+                fields=["is_active", "effective_from"],
+                name="sales_pricebook_active_idx",
+            ),
+        ]
+        ordering = ["sku", "-effective_from"]
+        verbose_name = _("价目条目")
+        verbose_name_plural = _("价目条目")
+
+    def __str__(self) -> str:
+        return f"{self.sku} · {self.name} · {self.unit_price}"

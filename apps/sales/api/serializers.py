@@ -4,7 +4,7 @@ from rest_framework import serializers
 
 from apps.accounts.models import User, UserRole
 
-from ..models import Customer, Opportunity
+from ..models import Customer, Opportunity, PriceBookEntry
 
 
 def user_display_name(user) -> str:
@@ -99,6 +99,27 @@ class CustomerSearchSerializer(_CustomerReadSerializer):
 
 class CustomerDetailSerializer(_CustomerReadSerializer):
     """Safe Customer shape returned from retrieve."""
+
+
+class PriceBookEntrySerializer(serializers.ModelSerializer):
+    """Read shape for the price book; money stays a string on the wire."""
+
+    class Meta:
+        model = PriceBookEntry
+        fields = (
+            "id",
+            "sku",
+            "name",
+            "category",
+            "unit",
+            "unit_price",
+            "currency",
+            "effective_from",
+            "is_active",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields
 
 
 class RejectForbiddenFieldsMixin:

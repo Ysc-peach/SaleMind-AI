@@ -31,6 +31,7 @@ from .competitor_views import (
     CompetitorStatementViewSet,
     CompetitorViewSet,
 )
+from .price_book_views import PriceBookAPIView
 
 
 customer_create_view = CustomerViewSet.as_view({"post": "create"})
@@ -79,6 +80,7 @@ competitor_statement_reject_view = CompetitorStatementDecisionViewSet.as_view(
     {"post": "reject"}
 )
 competitor_matrix_view = CompetitorMatrixAPIView.as_view()
+price_book_view = PriceBookAPIView.as_view()
 solution_draft_collection_view = SolutionDraftCollectionViewSet.as_view(
     {"get": "list_drafts", "post": "create_draft"}
 )
@@ -214,6 +216,11 @@ urlpatterns = [
         "case-studies/match/",
         case_study_match_view,
         name="case-study-match",
+    ),
+    path(
+        "price-book/",
+        price_book_view,
+        name="price-book",
     ),
     path(
         "opportunities/<int:opportunity_id>/competitor-matrix/",
