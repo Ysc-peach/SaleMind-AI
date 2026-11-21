@@ -15,6 +15,8 @@ from rest_framework.views import APIView
 
 from apps.accounts.models import UserRole
 from apps.sales.models import (
+    QuoteDiscountApproval,
+    RecordStateChange,
     SolutionGenerationJob,
     SolutionGenerationJobStatus,
     SolutionReview,
@@ -118,6 +120,64 @@ def _generations(*, actor: str, status: str, start, end):
     return queryset.order_by("-created_at", "-id")
 
 
+def _archives(*, actor: str, start, end):
+    """Archiving and restoring, which the flag alone cannot explain.
+
+    No status filter applies here: these rows have a state, not a review decision,
+    so the shared status parameter is deliberately ignored.
+    """
+
+    queryset = RecordStateChange.objects.select_related("actor")
+    if actor:
+        queryset = queryset.filter(_actor_q("actor", actor))
+    if start is not None:
+        queryset = queryset.filter(changed_at__date__gte=start)
+    if end is not None:
+        queryset = queryset.filter(changed_at__date__lte=end)
+    return queryset.order_by("-changed_at", "-id")
+
+
+def _discount_decisions(*, actor: str, status: str, start, end):
+    queryset = QuoteDiscountApproval.objects.select_related(
+        "quote__opportunity", "decided_by"
+    )
+    if actor:
+        queryset = queryset.filter(_actor_q("decided_by", actor))
+    if status:
+        queryset = queryset.filter(status=status.lower())
+    if start is not None:
+        queryset = queryset.filter(decided_at__date__gte=start)
+    if end is not None:
+        queryset = queryset.filter(decided_at__date__lte=end)
+    return queryset.order_by("-decided_at", "-id")
+
+
+def _archive_row(event) -> dict:
+    return {
+        "id": event.pk,
+        "kind": event.kind,
+        "kind_label": event.get_kind_display(),
+        "record_id": event.record_id,
+        "record_name": event.record_name,
+        "is_active": event.is_active,
+        "actor": user_display_name(event.actor),
+        "changed_at": event.changed_at,
+    }
+
+
+def _discount_row(decision) -> dict:
+    return {
+        "id": decision.pk,
+        "opportunity_id": decision.quote.opportunity_id,
+        "project_name": decision.quote.opportunity.project_name,
+        "status": decision.status.upper(),
+        "discount_percent": str(decision.discount_percent),
+        "decided_by": user_display_name(decision.decided_by),
+        "decided_at": decision.decided_at,
+        "comment": decision.comment,
+    }
+
+
 def _review_row(review) -> dict:
     return {
         "id": review.pk,
@@ -169,6 +229,10 @@ class AuditEventsAPIView(APIView):
         generations = _generations(
             actor=actor, status=status, start=start, end=end
         )
+        archives = _archives(actor=actor, start=start, end=end)
+        discounts = _discount_decisions(
+            actor=actor, status=status, start=start, end=end
+        )
 
         return Response(
             {
@@ -194,6 +258,22 @@ class AuditEventsAPIView(APIView):
                     "results": [
                         _generation_row(job)
                         for job in generations[offset:offset + page_size]
+                    ],
+                },
+                # Archiving and discount approvals are decisions too, and they
+                # were the two the audit could not answer before.
+                "archives": {
+                    "count": archives.count(),
+                    "results": [
+                        _archive_row(event)
+                        for event in archives[offset:offset + page_size]
+                    ],
+                },
+                "discount_decisions": {
+                    "count": discounts.count(),
+                    "results": [
+                        _discount_row(decision)
+                        for decision in discounts[offset:offset + page_size]
                     ],
                 },
             }

@@ -23,6 +23,28 @@ export interface AuditGeneration {
   finished_at: string | null
 }
 
+export interface AuditArchive {
+  id: number
+  kind: 'customer' | 'opportunity'
+  kind_label: string
+  record_id: number
+  record_name: string
+  is_active: boolean
+  actor: string
+  changed_at: string
+}
+
+export interface AuditDiscountDecision {
+  id: number
+  opportunity_id: number
+  project_name: string
+  status: string
+  discount_percent: string
+  decided_by: string
+  decided_at: string
+  comment: string
+}
+
 export interface AuditPage<T> {
   count: number
   results: T[]
@@ -41,6 +63,8 @@ export interface AuditEvents {
   filters: Required<AuditFilters> & { date_from: string | null; date_to: string | null }
   reviews: AuditPage<AuditReview>
   generations: AuditPage<AuditGeneration>
+  archives: AuditPage<AuditArchive>
+  discount_decisions: AuditPage<AuditDiscountDecision>
 }
 
 export const auditEvents = async (

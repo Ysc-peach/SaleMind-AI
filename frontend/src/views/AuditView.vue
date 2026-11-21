@@ -52,7 +52,10 @@ const hasNext = computed(() => {
   if (!data.value) return false
   const reached = page.value * PAGE_SIZE
   return (
-    reached < data.value.reviews.count || reached < data.value.generations.count
+    reached < data.value.reviews.count ||
+    reached < data.value.generations.count ||
+    reached < data.value.archives.count ||
+    reached < data.value.discount_decisions.count
   )
 })
 
@@ -122,6 +125,43 @@ onMounted(load)
           <td>{{ item.error_code || '—' }}</td>
           <td>{{ dateTime(item.created_at) }}</td>
           <td>{{ item.finished_at ? dateTime(item.finished_at) : '进行中' }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="panel" data-test="audit-archives">
+    <h2>归档记录<span v-if="data" class="muted">（共 {{ data.archives.count }} 条）</span></h2>
+    <p v-if="data && !data.archives.count" class="empty">没有符合条件的归档记录。</p>
+    <table v-else-if="data" class="audit-table">
+      <thead>
+        <tr><th>类型</th><th>记录</th><th>动作</th><th>操作人</th><th>时间</th></tr>
+      </thead>
+      <tbody>
+        <tr v-for="item in data.archives.results" :key="`archive-${item.id}`" :data-test="`archive-${item.id}`">
+          <td>{{ item.kind_label }}</td>
+          <td>{{ item.record_name }}</td>
+          <td>{{ item.is_active ? '恢复' : '停用' }}</td>
+          <td>{{ item.actor }}</td>
+          <td>{{ dateTime(item.changed_at) }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="panel" data-test="audit-discounts">
+    <h2>折扣审批<span v-if="data" class="muted">（共 {{ data.discount_decisions.count }} 条）</span></h2>
+    <p v-if="data && !data.discount_decisions.count" class="empty">没有符合条件的折扣审批。</p>
+    <table v-else-if="data" class="audit-table">
+      <thead>
+        <tr><th>商机</th><th>决定</th><th>折扣</th><th>审批人</th><th>说明</th><th>时间</th></tr>
+      </thead>
+      <tbody>
+        <tr v-for="item in data.discount_decisions.results" :key="`discount-${item.id}`" :data-test="`discount-${item.id}`">
+          <td><RouterLink :to="`/opportunities/${item.opportunity_id}`">{{ item.project_name }}</RouterLink></td>
+          <td>{{ item.status === 'APPROVED' ? '已批准' : '已拒绝' }}</td>
+          <td>{{ item.discount_percent }}%</td>
+          <td>{{ item.decided_by }}</td>
+          <td>{{ item.comment || '—' }}</td>
+          <td>{{ dateTime(item.decided_at) }}</td>
         </tr>
       </tbody>
     </table>

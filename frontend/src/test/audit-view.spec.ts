@@ -36,6 +36,8 @@ beforeEach(() => {
     filters: { actor: '', status: '', date_from: null, date_to: null },
     reviews: page(0, []),
     generations: page(0, []),
+    archives: page(0, []),
+    discount_decisions: page(0, []),
   }
   http.defaults.adapter = adapter
 })
@@ -67,6 +69,26 @@ describe('audit view', () => {
         created_at: '2026-11-14T01:00:00Z',
         finished_at: '2026-11-14T01:02:00Z',
       }]),
+      archives: page(1, [{
+        id: 11,
+        kind: 'customer',
+        kind_label: '客户',
+        record_id: 3,
+        record_name: 'Archived Co',
+        is_active: false,
+        actor: 'Dana Wu',
+        changed_at: '2026-11-14T02:00:00Z',
+      }]),
+      discount_decisions: page(1, [{
+        id: 12,
+        opportunity_id: 4,
+        project_name: 'Audit project',
+        status: 'APPROVED',
+        discount_percent: '20.00',
+        decided_by: 'Dana Wu',
+        decided_at: '2026-11-14T02:30:00Z',
+        comment: '首单让利',
+      }]),
     }
     const wrapper = view()
     await flushPromises()
@@ -74,6 +96,13 @@ describe('audit view', () => {
     const reviews = wrapper.get('[data-test="audit-reviews"]')
     expect(reviews.text()).toContain('Audit project')
     expect(reviews.text()).toContain('Alice Chen')
+    // The two decision histories that used to be invisible here.
+    expect(wrapper.get('[data-test="audit-archives"]').text()).toContain('Archived Co')
+    expect(wrapper.get('[data-test="audit-archives"]').text()).toContain('停用')
+    const discounts = wrapper.get('[data-test="audit-discounts"]')
+    expect(discounts.text()).toContain('20.00%')
+    expect(discounts.text()).toContain('已批准')
+    expect(discounts.text()).toContain('首单让利')
     expect(reviews.text()).toContain('Pat Lee')
     expect(reviews.text()).toContain('已退回')
     expect(reviews.text()).toContain('需要修改技术方案')
@@ -101,6 +130,8 @@ describe('audit view', () => {
       filters: { actor: '', status: '', date_from: null, date_to: null },
       reviews: page(45, []),
       generations: page(0, []),
+      archives: page(0, []),
+      discount_decisions: page(0, []),
     }
     const wrapper = view()
     await flushPromises()
@@ -128,6 +159,8 @@ describe('audit view', () => {
       filters: { actor: '', status: '', date_from: null, date_to: null },
       reviews: page(20, []),
       generations: page(3, []),
+      archives: page(0, []),
+      discount_decisions: page(0, []),
     }
     const wrapper = view()
     await flushPromises()

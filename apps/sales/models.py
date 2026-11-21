@@ -1191,3 +1191,45 @@ class QuoteDiscountApproval(models.Model):
 
     def __str__(self) -> str:
         return f"{self.status} {self.discount_percent}% (quote={self.quote_id})"
+
+
+class RecordStateChange(models.Model):
+    """Who archived or restored a record, and what it was called then.
+
+    The boolean on the row says what is true now; it cannot say who made it true,
+    and a renamed record no longer explains what the person saw at the time. Both
+    are what gets asked three months later: "who took this customer away?"
+    """
+
+    class Kind(models.TextChoices):
+        CUSTOMER = "customer", _("客户")
+        OPPORTUNITY = "opportunity", _("商机")
+
+    kind = models.CharField(_("记录类型"), max_length=32, choices=Kind.choices)
+    record_id = models.PositiveBigIntegerField(_("记录 ID"))
+    # A snapshot on purpose: renaming a customer must not rewrite the audit.
+    record_name = models.CharField(_("记录名称"), max_length=200)
+    # The state the record was moved *to*: False archived, True restored.
+    is_active = models.BooleanField(_("变更后状态"))
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="record_state_changes",
+        verbose_name=_("操作人"),
+    )
+    changed_at = models.DateTimeField(_("变更时间"), auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["kind", "record_id"], name="sales_statechange_record_idx"
+            ),
+            models.Index(fields=["changed_at"], name="sales_statechange_time_idx"),
+        ]
+        ordering = ["-changed_at", "-id"]
+        verbose_name = _("记录状态变更")
+        verbose_name_plural = _("记录状态变更")
+
+    def __str__(self) -> str:
+        action = "恢复" if self.is_active else "停用"
+        return f"{action} {self.record_name}"

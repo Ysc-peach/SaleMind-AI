@@ -24,7 +24,13 @@ from .serializers import (
     OpportunityListSerializer,
     OpportunityUpdateSerializer,
 )
-from ..models import Customer, Opportunity, OpportunityStatus
+from ..models import (
+    Customer,
+    Opportunity,
+    OpportunityStatus,
+    RecordStateChange,
+)
+from ..services.record_lifecycle import set_record_active
 
 
 CUSTOMER_SEARCH_MAX_LENGTH = 200
@@ -125,9 +131,13 @@ class CustomerViewSet(
     def _set_active(self, request, active: bool):
         require_admin(request.user)
         record = self.get_object()
-        if record.is_active != active:
-            record.is_active = active
-            record.save(update_fields=["is_active", "updated_at"])
+        record = set_record_active(
+            record,
+            actor=request.user,
+            active=active,
+            kind=RecordStateChange.Kind.CUSTOMER,
+            name=record.name,
+        )
         return Response(self.get_serializer(record).data)
 
     def search(self, request, *args, **kwargs):
@@ -192,7 +202,11 @@ class OpportunityViewSet(
     def _set_active(self, request, active: bool):
         require_admin(request.user)
         record = self.get_object()
-        if record.is_active != active:
-            record.is_active = active
-            record.save(update_fields=["is_active", "updated_at"])
+        record = set_record_active(
+            record,
+            actor=request.user,
+            active=active,
+            kind=RecordStateChange.Kind.OPPORTUNITY,
+            name=record.project_name,
+        )
         return Response(self.get_serializer(record).data)
