@@ -66,6 +66,7 @@ class Command(BaseCommand):
                     "unit": unit,
                     "unit_price": Decimal(price),
                     "currency": "CNY",
+                    "is_sample": True,
                     "created_by": owner,
                 },
             )

@@ -20,6 +20,8 @@ _CODED_REFUSALS = frozenset(
         "quote_no_draft",
         # A discount above the authorised threshold has no administrator decision.
         "discount_not_approved",
+        # The quote was priced from placeholder rows and may not leave the company.
+        "quote_contains_sample_data",
     }
 )
 

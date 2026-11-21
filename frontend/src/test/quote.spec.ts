@@ -47,6 +47,7 @@ function makeQuote(overrides: Record<string, unknown> = {}) {
       approved_by_name: '',
       approved_at: null,
     },
+    contains_sample_data: false,
     note: '',
     currency: 'CNY',
     lines: [line],
@@ -237,6 +238,17 @@ describe('quote panel', () => {
         .disabled,
     ).toBe(true)
     expect(wrapper.text()).toContain('SKU-1')
+    wrapper.unmount()
+  })
+
+  it('warns that a sample-priced quote cannot be exported', async () => {
+    quote = makeQuote({ contains_sample_data: true })
+    signIn('sales')
+    const wrapper = await mountPanel()
+
+    expect(wrapper.get('[data-test="quote-sample"]').text()).toContain(
+      '不能对外导出',
+    )
     wrapper.unmount()
   })
 })

@@ -116,6 +116,7 @@ class PriceBookEntrySerializer(serializers.ModelSerializer):
             "currency",
             "effective_from",
             "is_active",
+            "is_sample",
             "created_at",
             "updated_at",
         )

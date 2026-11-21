@@ -520,6 +520,10 @@ CSV 表头：`sku,name,unit_price,effective_from[,category,unit,currency]`。同
 
 占位条目一律带 `DEMO-` 前缀，就是为了不被当成真价发出去。
 
+**示例数据发不出去**：`seed_price_book` 写入的每条都带 `is_sample=true`。只要报价里有任何一行来自示例条目，报价应答里的 `contains_sample_data` 就是 `true`，**导出报价页会被拒绝**（`409 quote_contains_sample_data`），页面同时显示「当前报价使用了示例价目条目，不能对外导出」。
+
+这条闸门查的是**价目表里的标记**，不是 SKU 文本——命名规范是累了就会失效的东西。换成真实条目的做法：`import_price_book` 导入真价，删掉示例行（或在 Admin 里停用），重新报价；旧报价单保留原来的示例行，仍然发不出去，这正是它应有的状态。
+
 ### 报价（第二轮）
 
 每个商机一份报价，绑定**一个方案版本**：

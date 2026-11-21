@@ -965,6 +965,10 @@ class PriceBookEntry(models.Model):
     currency = models.CharField(_("币种"), max_length=3, default="CNY")
     effective_from = models.DateField(_("生效日期"))
     is_active = models.BooleanField(_("是否启用"), default=True)
+    # A placeholder is a row nobody may quote from. The flag exists so the system
+    # can say "this is sample data" instead of trusting a naming convention: a
+    # sample price that reaches a customer is worse than an empty price book.
+    is_sample = models.BooleanField(_("示例数据"), default=False)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,

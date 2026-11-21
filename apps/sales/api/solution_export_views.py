@@ -16,6 +16,7 @@ from apps.sales.services.quote_document import build_quote_section
 from apps.sales.services.quotes import QuoteError, QuoteErrorCode
 
 from .quote_views import (
+    QuoteContainsSampleData,
     QuoteDiscountNotApproved,
     QuoteMissing,
     QuoteOutdated,
@@ -55,12 +56,14 @@ def _quote_section(request, solution_id: int):
         )
         # The discount gate belongs here, not in the UI: a quote page that leaves
         # the building with an unapproved discount cannot be recalled.
-        quote_service.ensure_discount_exportable(quote)
+        quote_service.ensure_quote_exportable(quote)
     except QuoteError as error:
         if error.code == QuoteErrorCode.OUTDATED:
             raise QuoteOutdated() from None
         if error.code == QuoteErrorCode.DISCOUNT_NOT_APPROVED:
             raise QuoteDiscountNotApproved() from None
+        if error.code == QuoteErrorCode.SAMPLE_DATA:
+            raise QuoteContainsSampleData() from None
         raise
     return build_quote_section(quote)
 
@@ -132,6 +135,7 @@ class SolutionExportAPIView(APIView):
             QuoteMissing,
             QuoteOutdated,
             QuoteDiscountNotApproved,
+            QuoteContainsSampleData,
         ):
             raise
         except Exception as error:

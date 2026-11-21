@@ -270,3 +270,45 @@ def test_an_empty_quote_produces_no_page(persistence_context):
     )
 
     assert build_quote_section(quote) == ()
+
+
+def test_a_sample_price_marks_the_quote_and_blocks_the_export(
+    api_client, persistence_context
+):
+    owner, _customer, opportunity, analysis, _ = persistence_context
+    _draft(owner, opportunity, analysis)
+    sample = PriceBookEntry.objects.create(
+        sku="DEMO-PLATFORM",
+        name="平台基础版",
+        unit="套",
+        unit_price=Decimal("380000.00"),
+        effective_from=timezone.localdate() - timedelta(days=1),
+        is_sample=True,
+        created_by=owner,
+    )
+    api_client.force_authenticate(user=owner)
+    _add_line(api_client, opportunity, sample, quantity=1)
+
+    payload = api_client.get(_quote_url(opportunity)).data
+    quote = Quote.objects.get(opportunity=opportunity)
+
+    # The screen must be able to say "this is a sample" without guessing from
+    # the SKU text.
+    assert payload["contains_sample_data"] is True
+    with pytest.raises(QuoteError) as blocked:
+        quote_service.ensure_quote_exportable(quote)
+    assert blocked.value.code == QuoteErrorCode.SAMPLE_DATA
+
+
+def test_a_real_row_is_exportable(api_client, persistence_context):
+    owner, _customer, opportunity, analysis, _ = persistence_context
+    _draft(owner, opportunity, analysis)
+    api_client.force_authenticate(user=owner)
+    _add_line(api_client, opportunity, _entry(owner), quantity=1)
+    quote = Quote.objects.get(opportunity=opportunity)
+
+    payload = api_client.get(_quote_url(opportunity)).data
+
+    assert payload["contains_sample_data"] is False
+    # Discount is 0, below the threshold, so the only remaining gate passes.
+    quote_service.ensure_quote_exportable(quote)

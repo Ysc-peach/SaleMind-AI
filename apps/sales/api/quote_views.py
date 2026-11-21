@@ -37,6 +37,15 @@ class QuoteMissing(APIException):
     default_code = "quote_missing"
 
 
+class QuoteContainsSampleData(APIException):
+    status_code = 409
+    default_detail = (
+        "报价中包含示例价目条目（示例数据），不能对外导出。"
+        "请改用真实价目后重新报价；系统内仍可查看。"
+    )
+    default_code = "quote_contains_sample_data"
+
+
 class QuoteDiscountNotApproved(APIException):
     status_code = 409
     default_detail = (
@@ -101,6 +110,7 @@ def serialize_quote(quote) -> dict:
             ),
             "approved_at": state["approved_at"],
         },
+        "contains_sample_data": service.contains_sample_data(quote),
         "note": quote.note,
         "currency": totals["currency"],
         "lines": [

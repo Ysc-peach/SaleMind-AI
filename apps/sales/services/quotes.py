@@ -38,6 +38,7 @@ class QuoteErrorCode(StrEnum):
     OUTDATED = "quote_outdated"
     DISCOUNT_NOT_APPROVED = "discount_not_approved"
     DISCOUNT_ALREADY_DECIDED = "discount_already_decided"
+    SAMPLE_DATA = "quote_contains_sample_data"
 
 
 class QuoteError(Exception):
@@ -304,6 +305,28 @@ def ensure_discount_exportable(quote: Quote) -> dict:
     if not state["approved"]:
         raise QuoteError(QuoteErrorCode.DISCOUNT_NOT_APPROVED)
     return state
+
+
+def contains_sample_data(quote: Quote) -> bool:
+    """True when any live line was priced from a placeholder row.
+
+    Checked against the price book rather than the SKU text, because a naming
+    convention is something a tired person can defeat.
+    """
+
+    return quote.lines.filter(
+        removed_at__isnull=True, price_book_entry__is_sample=True
+    ).exists()
+
+
+def ensure_quote_exportable(quote: Quote) -> dict:
+    """Everything a quote page needs before it may leave the building."""
+
+    if contains_sample_data(quote):
+        # A sample price that reaches a customer is worse than no quote page:
+        # it is a number someone will treat as an offer.
+        raise QuoteError(QuoteErrorCode.SAMPLE_DATA)
+    return ensure_discount_exportable(quote)
 
 
 def quote_for_export(*, quote: Quote, solution_draft_id: int) -> Quote:

@@ -163,6 +163,9 @@ onMounted(load)
     </p>
     <p v-if="error" role="alert">{{ error }}</p>
     <p v-if="feedback" role="status">{{ feedback }}</p>
+    <p v-if="quote && quote.contains_sample_data" class="notice" role="alert" data-test="quote-sample">
+      当前报价使用了示例价目条目，不能对外导出；换成真实价目后重新报价即可。
+    </p>
     <div v-if="outdated" role="alert" data-test="quote-outdated">
       报价对应的是旧方案版本。
       <el-button v-if="write" text data-test="quote-rebind" :loading="busy" @click="rebind">
