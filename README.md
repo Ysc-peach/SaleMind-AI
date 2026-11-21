@@ -505,6 +505,21 @@ GET /api/price-book/?q=企业&as_of=2026-06-01
 
 金额在 JSON 里是**字符串**（`"1200.00"`），避免浮点在路上把它四舍五入；币种默认 `CNY`，第一版不支持多币种换算。停用（`is_active=false`）的条目默认不返回，`include_inactive=1` 仅管理员可用。
 
+还没有真实价目表时，两个命令足够把流程跑起来：
+
+```bash
+# 1) 8 条 DEMO- 前缀的占位条目（幂等，可重复执行）
+python manage.py seed_price_book
+
+# 2) 有清单后用 CSV 批量导入（追加式，不覆盖历史）
+python manage.py import_price_book prices.csv --dry-run
+python manage.py import_price_book prices.csv
+```
+
+CSV 表头：`sku,name,unit_price,effective_from[,category,unit,currency]`。同一 `(sku, effective_from)` 已存在则跳过；**改价请用更晚的生效日期新增一行**，不要覆盖——旧报价单靠旧行解释自己。任何一行非法（负价、日期格式错、缺字段）整批拒绝，不会半途写入。
+
+占位条目一律带 `DEMO-` 前缀，就是为了不被当成真价发出去。
+
 ### 报价（第二轮）
 
 每个商机一份报价，绑定**一个方案版本**：
