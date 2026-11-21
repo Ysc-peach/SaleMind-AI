@@ -15,7 +15,11 @@ from apps.sales.services.competitor_appendix import build_comparison_appendix
 from apps.sales.services.quote_document import build_quote_section
 from apps.sales.services.quotes import QuoteError, QuoteErrorCode
 
-from .quote_views import QuoteMissing, QuoteOutdated
+from .quote_views import (
+    QuoteDiscountNotApproved,
+    QuoteMissing,
+    QuoteOutdated,
+)
 from apps.sales.services.solution_export_guard import (
     load_export_snapshot, revalidate_export_snapshot, SolutionExportError,
 )
@@ -49,9 +53,14 @@ def _quote_section(request, solution_id: int):
         quote_service.quote_for_export(
             quote=quote, solution_draft_id=solution_id
         )
+        # The discount gate belongs here, not in the UI: a quote page that leaves
+        # the building with an unapproved discount cannot be recalled.
+        quote_service.ensure_discount_exportable(quote)
     except QuoteError as error:
         if error.code == QuoteErrorCode.OUTDATED:
             raise QuoteOutdated() from None
+        if error.code == QuoteErrorCode.DISCOUNT_NOT_APPROVED:
+            raise QuoteDiscountNotApproved() from None
         raise
     return build_quote_section(quote)
 
@@ -122,6 +131,7 @@ class SolutionExportAPIView(APIView):
             ValidationError,
             QuoteMissing,
             QuoteOutdated,
+            QuoteDiscountNotApproved,
         ):
             raise
         except Exception as error:

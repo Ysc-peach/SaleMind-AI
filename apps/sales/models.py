@@ -1129,3 +1129,61 @@ class QuoteLine(models.Model):
 
     def __str__(self) -> str:
         return f"{self.sku} × {self.quantity}"
+
+
+class QuoteDiscountDecisionStatus(models.TextChoices):
+    APPROVED = "approved", _("已批准")
+    REJECTED = "rejected", _("已拒绝")
+
+
+class QuoteDiscountApproval(models.Model):
+    """One administrator's decision on one discount level.
+
+    Append-only. A later, larger discount needs its own decision: the record says
+    which percentage was authorised, so raising 10% to 20% after an approval of
+    10% cannot inherit it. Rejections are stored too, because "who refused 25%
+    and why" is the question asked after the deal is lost.
+    """
+
+    quote = models.ForeignKey(
+        Quote,
+        on_delete=models.CASCADE,
+        related_name="discount_approvals",
+        verbose_name=_("报价"),
+    )
+    discount_percent = models.DecimalField(
+        _("批准的折扣（%）"), max_digits=5, decimal_places=2
+    )
+    status = models.CharField(
+        _("决定"), max_length=16, choices=QuoteDiscountDecisionStatus.choices
+    )
+    comment = models.TextField(_("说明"), blank=True, default="")
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="decided_quote_discounts",
+        verbose_name=_("决定人"),
+    )
+    decided_at = models.DateTimeField(_("决定时间"), auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(
+                    discount_percent__gte=0, discount_percent__lte=100
+                ),
+                name="sales_quotediscount_range",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["quote", "status", "-decided_at"],
+                name="sales_quotediscount_lookup_idx",
+            ),
+        ]
+        ordering = ["-decided_at", "-id"]
+        verbose_name = _("折扣审批")
+        verbose_name_plural = _("折扣审批")
+
+    def __str__(self) -> str:
+        return f"{self.status} {self.discount_percent}% (quote={self.quote_id})"

@@ -173,6 +173,12 @@ DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="salesmind@example.intern
 # reviews solutions.
 ALERT_WEBHOOK_URL = env("ALERT_WEBHOOK_URL", default="")
 REVIEW_WEBHOOK_URL = env("REVIEW_WEBHOOK_URL", default="")
+# A discount above this percentage needs an administrator's written approval
+# before the quote page may leave the building. 15% is a starting point, not a
+# truth: it is here so the number is configuration, not code.
+QUOTE_DISCOUNT_APPROVAL_THRESHOLD_PERCENT = env.int(
+    "QUOTE_DISCOUNT_APPROVAL_THRESHOLD_PERCENT", default=15
+)
 WEBHOOK_TIMEOUT_SECONDS = env.int("WEBHOOK_TIMEOUT_SECONDS", default=5)
 # Comma separated recipients; the transport is EMAIL_* above, so a working mail
 # server is still required for this channel to do anything.

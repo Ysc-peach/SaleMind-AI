@@ -14,6 +14,7 @@ from apps.sales.services.visibility import visible_opportunities_for
 
 from .opportunity_access import OpportunityVisibilityMixin
 from .permissions import SolutionDraftPermission
+from .serializers import user_display_name
 
 CENT = Decimal("0.01")
 
@@ -36,6 +37,15 @@ class QuoteMissing(APIException):
     default_code = "quote_missing"
 
 
+class QuoteDiscountNotApproved(APIException):
+    status_code = 409
+    default_detail = (
+        "折扣超过授权阈值且尚未获得管理员批准，报价页不能对外导出。"
+        "报价仍可在系统内查看。"
+    )
+    default_code = "discount_not_approved"
+
+
 def _translate(error: QuoteError):
     if error.code == QuoteErrorCode.FORBIDDEN:
         raise PermissionDenied("只有该商机的销售负责人或管理员可以修改报价。")
@@ -43,6 +53,8 @@ def _translate(error: QuoteError):
         raise QuoteNoDraft()
     if error.code == QuoteErrorCode.OUTDATED:
         raise QuoteOutdated()
+    if error.code == QuoteErrorCode.DISCOUNT_NOT_APPROVED:
+        raise QuoteDiscountNotApproved()
     raise ValidationError({"detail": "报价参数不符合要求。"})
 
 
@@ -67,11 +79,28 @@ def serialize_line(line: QuoteLine) -> dict:
 
 def serialize_quote(quote) -> dict:
     totals = service.totals(quote)
+    state = service.discount_state(quote)
     return {
         "id": quote.pk,
         "opportunity": quote.opportunity_id,
         "solution_draft": quote.solution_draft_id,
         "discount_percent": str(quote.discount_percent),
+        "discount_approval": {
+            "threshold_percent": str(state["threshold_percent"]),
+            "required": state["required"],
+            "approved": state["approved"],
+            "approved_percent": (
+                str(state["approved_percent"])
+                if state["approved_percent"] is not None
+                else None
+            ),
+            "approved_by_name": (
+                user_display_name(state["approved_by"])
+                if state["approved_by"]
+                else ""
+            ),
+            "approved_at": state["approved_at"],
+        },
         "note": quote.note,
         "currency": totals["currency"],
         "lines": [
@@ -157,6 +186,37 @@ class OpportunityQuoteViewSet(
             raise NotFound()
         try:
             quote = service.rebind(quote, actor=request.user)
+        except QuoteError as error:
+            _translate(error)
+        return Response(serialize_quote(quote))
+
+    def approve_discount(self, request, *args, **kwargs):
+        opportunity = self.get_object()
+        quote = service.get_quote(opportunity)
+        if quote is None:
+            raise NotFound()
+        payload = request.data or {}
+        try:
+            service.approve_discount(
+                quote,
+                actor=request.user,
+                percent=payload.get("percent"),
+                comment=payload.get("comment", ""),
+            )
+        except QuoteError as error:
+            _translate(error)
+        return Response(serialize_quote(quote))
+
+    def reject_discount(self, request, *args, **kwargs):
+        opportunity = self.get_object()
+        quote = service.get_quote(opportunity)
+        if quote is None:
+            raise NotFound()
+        payload = request.data or {}
+        try:
+            service.reject_discount(
+                quote, actor=request.user, comment=payload.get("comment", "")
+            )
         except QuoteError as error:
             _translate(error)
         return Response(serialize_quote(quote))

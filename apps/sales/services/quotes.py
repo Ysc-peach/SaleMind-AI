@@ -14,6 +14,7 @@ from __future__ import annotations
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -21,6 +22,8 @@ from apps.accounts.models import UserRole
 from apps.sales.models import (
     Opportunity,
     Quote,
+    QuoteDiscountApproval,
+    QuoteDiscountDecisionStatus,
     QuoteLine,
     SolutionDraftRecord,
 )
@@ -33,6 +36,8 @@ class QuoteErrorCode(StrEnum):
     FORBIDDEN = "quote_forbidden"
     NO_DRAFT = "quote_no_draft"
     OUTDATED = "quote_outdated"
+    DISCOUNT_NOT_APPROVED = "discount_not_approved"
+    DISCOUNT_ALREADY_DECIDED = "discount_already_decided"
 
 
 class QuoteError(Exception):
@@ -211,6 +216,94 @@ def rebind(quote: Quote, *, actor) -> Quote:
         quote.solution_draft = newest
         quote.save(update_fields=["solution_draft", "updated_at"])
     return quote
+
+
+def discount_threshold() -> Decimal:
+    # Quantised so the API reports "15.00" rather than "15": a percentage and a
+    # money amount should not disagree about how many decimals they carry.
+    return Decimal(
+        str(settings.QUOTE_DISCOUNT_APPROVAL_THRESHOLD_PERCENT)
+    ).quantize(CENT)
+
+
+def _covering_approval(quote: Quote) -> QuoteDiscountApproval | None:
+    """An approval covers the current discount only if it authorised at least it."""
+
+    return (
+        quote.discount_approvals.filter(
+            status=QuoteDiscountDecisionStatus.APPROVED,
+            discount_percent__gte=quote.discount_percent,
+        )
+        .order_by("-decided_at", "-id")
+        .first()
+    )
+
+
+def discount_state(quote: Quote) -> dict:
+    threshold = discount_threshold()
+    required = quote.discount_percent > threshold
+    covering = _covering_approval(quote)
+    return {
+        "threshold_percent": threshold,
+        "required": required,
+        "approved": (not required) or covering is not None,
+        "approved_percent": covering.discount_percent if covering else None,
+        "approved_by": covering.decided_by if covering else None,
+        "approved_at": covering.decided_at if covering else None,
+    }
+
+
+def approve_discount(
+    quote: Quote,
+    *,
+    actor,
+    percent=None,
+    comment: str = "",
+) -> QuoteDiscountApproval:
+    """An administrator authorises a discount level; only upward, never below ask."""
+
+    if actor is None or actor.role != UserRole.ADMIN:
+        raise QuoteError(QuoteErrorCode.FORBIDDEN)
+    asked = quote.discount_percent
+    try:
+        authorised = Decimal(str(percent)) if percent is not None else asked
+    except (ArithmeticError, ValueError):
+        raise QuoteError(QuoteErrorCode.INVALID_INPUT) from None
+    if authorised < asked or authorised > 100 or authorised < 0:
+        # Approving less than the quote asks for would look like a green light.
+        raise QuoteError(QuoteErrorCode.INVALID_INPUT)
+    with transaction.atomic():
+        return QuoteDiscountApproval.objects.create(
+            quote=quote,
+            discount_percent=authorised,
+            status=QuoteDiscountDecisionStatus.APPROVED,
+            comment=(comment or "").strip()[:2000],
+            decided_by=actor,
+        )
+
+
+def reject_discount(
+    quote: Quote, *, actor, comment: str = ""
+) -> QuoteDiscountApproval:
+    if actor is None or actor.role != UserRole.ADMIN:
+        raise QuoteError(QuoteErrorCode.FORBIDDEN)
+    with transaction.atomic():
+        return QuoteDiscountApproval.objects.create(
+            quote=quote,
+            discount_percent=quote.discount_percent,
+            status=QuoteDiscountDecisionStatus.REJECTED,
+            comment=(comment or "").strip()[:2000],
+            decided_by=actor,
+        )
+
+
+def ensure_discount_exportable(quote: Quote) -> dict:
+    """The gate: an unapproved discount keeps the quote page inside the company."""
+
+    state = discount_state(quote)
+    if not state["approved"]:
+        raise QuoteError(QuoteErrorCode.DISCOUNT_NOT_APPROVED)
+    return state
 
 
 def quote_for_export(*, quote: Quote, solution_draft_id: int) -> Quote:

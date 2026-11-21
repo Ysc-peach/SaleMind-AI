@@ -18,6 +18,8 @@ _CODED_REFUSALS = frozenset(
         "quote_missing",
         # Nothing to price yet: generate a solution version first.
         "quote_no_draft",
+        # A discount above the authorised threshold has no administrator decision.
+        "discount_not_approved",
     }
 )
 

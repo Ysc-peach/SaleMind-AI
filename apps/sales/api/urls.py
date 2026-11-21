@@ -91,6 +91,12 @@ opportunity_quote_lines_view = OpportunityQuoteViewSet.as_view(
 opportunity_quote_rebind_view = OpportunityQuoteViewSet.as_view(
     {"post": "rebind"}
 )
+opportunity_quote_discount_approve_view = OpportunityQuoteViewSet.as_view(
+    {"post": "approve_discount"}
+)
+opportunity_quote_discount_reject_view = OpportunityQuoteViewSet.as_view(
+    {"post": "reject_discount"}
+)
 quote_line_detail_view = QuoteLineViewSet.as_view({"patch": "partial_update"})
 quote_line_remove_view = QuoteLineViewSet.as_view({"post": "remove"})
 solution_draft_collection_view = SolutionDraftCollectionViewSet.as_view(
@@ -248,6 +254,16 @@ urlpatterns = [
         "opportunities/<int:opportunity_id>/quote/rebind/",
         opportunity_quote_rebind_view,
         name="opportunity-quote-rebind",
+    ),
+    path(
+        "opportunities/<int:opportunity_id>/quote/discount-approval/",
+        opportunity_quote_discount_approve_view,
+        name="opportunity-quote-discount-approve",
+    ),
+    path(
+        "opportunities/<int:opportunity_id>/quote/discount-rejection/",
+        opportunity_quote_discount_reject_view,
+        name="opportunity-quote-discount-reject",
     ),
     path(
         "quote-lines/<int:pk>/",
