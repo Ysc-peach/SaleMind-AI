@@ -12,11 +12,18 @@ import SolutionList from '../components/SolutionList.vue'
 import PresalesAssignment from '../components/PresalesAssignment.vue'
 import FollowUpPanel from '../components/FollowUpPanel.vue'
 import SimilarCasesPanel from '../components/SimilarCasesPanel.vue'
+import QuotePanel from '../components/QuotePanel.vue'
 const route = useRoute(), router = useRouter(), auth = useAuthStore()
 const record = ref<Opportunity>(), requirement = ref(''), loading = ref(false), saving = ref(false), error = ref(''), saved = ref(false)
-const tabs = [{key:'overview', name:'概览'}, {key:'requirement', name:'客户需求'}, {key:'analysis', name:'AI需求分析'}, {key:'solutions', name:'技术方案'}, {key:'review', name:'审核'}, {key:'follow_up', name:'跟进'}]
+const tabs = [{key:'overview', name:'概览'}, {key:'requirement', name:'客户需求'}, {key:'analysis', name:'AI需求分析'}, {key:'solutions', name:'技术方案'}, {key:'review', name:'审核'}, {key:'follow_up', name:'跟进'}, {key:'quote', name:'报价'}]
 const tab = computed(() => tabs.some(t => t.key === route.query.tab) ? String(route.query.tab) : 'overview')
 const editable = computed(() => auth.user?.role === 'sales' && auth.user.id === record.value?.sales_owner)
+// Mirrors the server rule for quotes: the sales owner or an administrator.
+const canManageQuote = computed(() => {
+  if (!record.value) return false
+  if (auth.user?.role === 'admin') return true
+  return auth.user?.id === record.value.sales_owner
+})
 // Follow-ups follow the same rule the server enforces: the two owners and an
 // administrator may write, and an archived opportunity takes nothing new.
 const canManageFollowUps = computed(() => {
@@ -52,6 +59,7 @@ watch(() => route.params.id, load, { immediate: true })
 <!-- v-if, not v-show: a hidden panel still mounts and would fire its request on every visit. -->
 <section v-if="tab === 'overview' && record.customer_industry" class="panel"><SimilarCasesPanel :industry="record.customer_industry || ''" /></section>
 <section v-if="tab === 'requirement'" class="panel"><h2>客户需求事实</h2><p class="muted">需求分析保留独立快照。更新事实后，请重新执行分析并生成新的方案版本。</p><template v-if="editable"><label for="raw-requirement">原始需求</label><textarea id="raw-requirement" v-model="requirement" rows="10" /><el-button type="primary" :loading="saving" :disabled="!dirty" @click="save">保存客户需求</el-button><p v-if="saved" role="status">客户需求已保存。</p></template><p v-else class="preserve">{{ record.raw_requirement || '暂无客户需求。' }}</p></section>
+<QuotePanel v-if="tab==='quote'" :key="record.id" :opportunity-id="record.id" :can-write="canManageQuote" />
 <FollowUpPanel v-if="tab==='follow_up'" :key="record.id" :opportunity-id="record.id" :read-only="!canManageFollowUps" />
 <AnalysisPanel v-if="tab==='analysis'" :opportunity-id="record.id" />
 <SolutionList v-if="tab==='solutions'||tab==='review'" :key="tab" :opportunity-id="record.id" :review-mode="tab==='review'" />
