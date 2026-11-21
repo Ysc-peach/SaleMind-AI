@@ -1,7 +1,6 @@
 """Views for account APIs."""
 
 from django.contrib.auth import get_user_model
-from django.utils import timezone
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from rest_framework.generics import ListAPIView, RetrieveAPIView
@@ -10,10 +9,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
-from rest_framework_simplejwt.token_blacklist.models import (
-    BlacklistedToken,
-    OutstandingToken,
-)
+from apps.accounts.services.tokens import revoke_outstanding_tokens
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
@@ -87,17 +83,8 @@ class ChangePasswordView(APIView):
         user = request.user
         user.set_password(serializer.validated_data["new_password"])
         user.save(update_fields=["password"])
-        _revoke_outstanding_tokens(user)
+        revoke_outstanding_tokens(user)
         return Response(status=status.HTTP_204_NO_CONTENT)
-
-
-def _revoke_outstanding_tokens(user) -> None:
-    now = timezone.now()
-    outstanding = OutstandingToken.objects.filter(
-        user=user, expires_at__gt=now,
-    )
-    for token in outstanding:
-        BlacklistedToken.objects.get_or_create(token=token)
 
 
 class CurrentUserView(RetrieveAPIView):

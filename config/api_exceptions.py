@@ -22,6 +22,9 @@ _CODED_REFUSALS = frozenset(
         "discount_not_approved",
         # The quote was priced from placeholder rows and may not leave the company.
         "quote_contains_sample_data",
+        # Account management refusals a screen has to explain, not just reject.
+        "user_last_admin",
+        "user_self_deactivation",
     }
 )
 

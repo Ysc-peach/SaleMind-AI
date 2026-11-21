@@ -418,7 +418,7 @@ Webhook 收到的是这样一份 JSON，聊天机器人可以直接贴成一条�
 | 知识库上传、重新索引、事实审批 | `/admin/` → 知识库 |
 | 队列是否积压 / 近期失败 | `manage.py check_generation_health`（见上文） |
 | 备份是否正常 | `docker compose logs backup`、`backups/` 目录 |
-| 用户离职或换设备 | Admin 停用账号；用户自助改密会让所有会话立即失效 |
+| 招人、换角色、离职 | `/api/users/`（业务管理员）或 Admin 停用账号；见下方「账号管理」 |
 
 角色边界（后端强制，不是前端隐藏按钮）：
 
@@ -435,9 +435,30 @@ Webhook 收到的是这样一份 JSON，聊天机器人可以直接贴成一条�
 | 停用 / 恢复客户与商机 | ❌ | ❌ | ✅ |
 | 查看已停用记录 | ❌ | ❌ | ✅ |
 | 审计视图 | ❌ | ❌ | ✅ |
+| 账号管理（建号 / 改角色 / 重置密码 / 停用） | ❌ | ❌ | ✅ |
 | 知识库写入、事实审批 | ❌ | ❌ | ✅（需同时是 Django 员工账号） |
 
 「自己不能审自己」是硬约束，不是前端隐藏：服务端在决定环节返回 `solution_review_self_review`。
+
+### 账号管理
+
+业务管理员可以不开 `/admin/` 就把人管起来：
+
+```
+GET   /api/users/?role=&q=&include_inactive=
+POST  /api/users/                     {username, email, role, password, first_name?, last_name?}
+PATCH /api/users/{id}/                {role?, email?, first_name?, last_name?}
+POST  /api/users/{id}/deactivate/     停用（不是删除）
+POST  /api/users/{id}/activate/
+POST  /api/users/{id}/password/       重置密码（走同一套密码强度校验）
+```
+
+四条安全规则（都在服务层，不在视图里）：
+
+1. **不能停用自己**——`409 user_self_deactivation`；
+2. **最后一名有效管理员不能停用或降级**——`409 user_last_admin`，否则系统再没人能给你升回来；
+3. **改角色、停用、重置密码都会立即吊销该用户所有未过期的 refresh token**——否则旧设备会带着旧权限活到七天后；
+4. **不提供删除**，也不接受 `is_superuser` / `is_staff`：Django 员工权限是部署层面的事（谁能进 `/admin/`），业务角色是岗位层面的事，混在一起只会让人权限越给越大。
 
 **停用不是删除。** 客户和商机都没有物理删除接口，因为方案、审核记录与逐条 provenance 都指向它们。停用后的语义是三条：
 
