@@ -1,0 +1,129 @@
+{
+  "generated_on": "2026-11-21",
+  "purpose": "Reference price book derived from publicly listed prices of comparable products. Not a company price list: every row is marked 参考价 in its name and must be replaced by the real catalogue before it is quoted to a customer.",
+  "method": "Each anchor is a price actually published by a vendor. Where a row has no direct anchor, the derivation is written out below; no number here was invented without a stated basis.",
+  "anchors": [
+    {
+      "id": "maxkb-professional",
+      "product": "MaxKB 专业版（企业知识库/智能体平台，私有化部署）",
+      "figure": "48,000 元/套",
+      "scope": "每套软件授权对应 1 个最终客户、1 个部署实例；含基础级 5×8 原厂支持",
+      "publisher": "杭州飞致云信息科技有限公司（阿里云市场）",
+      "url": "https://market.aliyun.com/detail/cmgj00067078",
+      "used_for": "SM-PLATFORM 平台基础版的直接锚点（同类产品、同为私有化单实例授权）"
+    },
+    {
+      "id": "lanling-implementation",
+      "product": "蓝凌 智慧办公平台实施与集成服务",
+      "figure": "1 人天实施服务 3,000 元；2 人天远程包 5,000 元；15 人天现场包 37,500 元；邮件/短信集成服务费 5,000 元/次",
+      "publisher": "阿里云智能科技（江苏）有限公司（阿里云市场）",
+      "url": "https://market.aliyun.com/detail/cmgj033645",
+      "used_for": "SM-IMPL 实施人天（取 1 人天包单价 3,000 元）；SM-SSO / SM-OA 集成（5,000 元/次 + 3 人天）"
+    },
+    {
+      "id": "lewell-service",
+      "product": "乐维智能监控平台配套服务",
+      "figure": "部署实施 15,000 元/次；培训赋能 7,000 元/次（1 天，含课件）；定制开发 3,500 元/人天",
+      "publisher": "阿里云市场",
+      "url": "https://market.aliyun.com/detail/cmfw00059610",
+      "used_for": "SM-CUSTOM 定制开发人天（3,500）；SM-TRAIN 培训（7,000 元/天）"
+    },
+    {
+      "id": "aliyun-docmind",
+      "product": "阿里云文档智能（文档解析）按量付费",
+      "figure": "电子文档解析 0.005 元/页；文档解析（大模型版·图文）0.02 元/页；文档智能解析 0.25 元/页起，阶梯最低 0.1 元/页",
+      "publisher": "阿里云",
+      "url": "https://help.aliyun.com/document_detail/470808.html",
+      "used_for": "SM-PARSER 复杂版式解析（10 万页 × 0.1 元/页 = 10,000 元）"
+    },
+    {
+      "id": "aliyun-pdf-ocr",
+      "product": "阿里云市场 PDF 文字识别资源包",
+      "figure": "1,500 元/1 万次；12,000 元/10 万次（0.15 / 0.12 元每次）",
+      "publisher": "阿里云市场",
+      "url": "https://market.aliyun.com/detail/cmapi00043678",
+      "used_for": "SM-OCR-MOD 扫描件 OCR 模块（10 万次 × 0.15 元 = 15,000 元）"
+    },
+    {
+      "id": "aliyun-design-service",
+      "product": "阿里云设计服务包",
+      "figure": "￥2,000 元 = 5,000 万 Token + 2 个服务人天（1 人天按 8 小时计）",
+      "publisher": "阿里云",
+      "url": "https://help.aliyun.com/zh/document_detail/3050793.html",
+      "used_for": "SM-AIDESIGN 方案设计服务人天下限（1,000 元/人天）"
+    }
+  ],
+  "rows": [
+    {
+      "sku": "SM-PLATFORM",
+      "basis": "direct",
+      "anchor": "maxkb-professional",
+      "note": "同类私有化知识库平台的单实例授权价，原值采用，未加价"
+    },
+    {
+      "sku": "SM-KB-200",
+      "basis": "derived",
+      "anchor": "maxkb-professional",
+      "note": "按平台授权 50% 的档位推算。同类产品通常把并发/账号档作为许可的附加项，公开报价里没有单列，此比例是我们的假设"
+    },
+    {
+      "sku": "SM-OCR-MOD",
+      "basis": "derived",
+      "anchor": "aliyun-pdf-ocr",
+      "note": "10 万次识别额度按 0.15 元/次计价；作为模块转售，未计毛利"
+    },
+    {
+      "sku": "SM-PARSER",
+      "basis": "derived",
+      "anchor": "aliyun-docmind",
+      "note": "10 万页按阶梯最低单价 0.1 元/页；若按首档 0.25 元/页则为 25,000 元，报价时按实际文档量选择档位"
+    },
+    {
+      "sku": "SM-SSO",
+      "basis": "derived",
+      "anchor": "lanling-implementation",
+      "note": "集成服务费 5,000 元/次 + 3 人天 × 3,000 元 = 14,000 元"
+    },
+    {
+      "sku": "SM-OA",
+      "basis": "derived",
+      "anchor": "lanling-implementation",
+      "note": "同 SSO：5,000 + 3 × 3,000 = 14,000 元；钉钉/企微/飞书的适配工作量相近"
+    },
+    {
+      "sku": "SM-IMPL",
+      "basis": "direct",
+      "anchor": "lanling-implementation",
+      "note": "1 人天实施服务 3,000 元；现场 15 人天包折算约 2,500 元/人天，此处取 1 人天包单价"
+    },
+    {
+      "sku": "SM-CUSTOM",
+      "basis": "direct",
+      "anchor": "lewell-service",
+      "note": "定制开发 3,500 元/人天"
+    },
+    {
+      "sku": "SM-TRAIN",
+      "basis": "direct",
+      "anchor": "lewell-service",
+      "note": "培训赋能 7,000 元/次（1 天，含课件）；按“次”定价，价目表里以“人天”承载便于按场次开行"
+    },
+    {
+      "sku": "SM-SUPPORT",
+      "basis": "derived",
+      "anchor": "maxkb-professional",
+      "note": "按许可价 20% 的年维护费推算（行业常见区间 15%–20%，取上限）；公开报价中没有同类年费的可比值"
+    },
+    {
+      "sku": "SM-AIDESIGN",
+      "basis": "derived",
+      "anchor": "aliyun-design-service",
+      "note": "2,000 元 / 2 人天 = 1,000 元/人天，作为 AI 辅助方案设计的服务下限"
+    }
+  ],
+  "caveats": [
+    "这是参考价，不是本公司的报价口径：折扣、税费、地区差异、客户规模均未计入。",
+    "锚点是 2024–2026 年公开挂牌价，厂商调价后需要重新采样。",
+    "SM-KB-200 的 50% 比例与 SM-SUPPORT 的 20% 年费是本文件的两个假设，其余均为直接公开价或明确的四则运算。"
+  ]
+}

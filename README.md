@@ -516,6 +516,14 @@ python manage.py import_price_book prices.csv --dry-run
 python manage.py import_price_book prices.csv
 ```
 
+仓库里带了一套**按公开挂牌价推导**的参考价目：[`knowledge-seed/price-book-2026-11/`](knowledge-seed/price-book-2026-11/)。11 个条目，锚点来自阿里云市场（MaxKB 专业版 48,000 元/套、蓝凌实施 3,000 元/人天、乐维培训 7,000 元/次）与阿里云文档智能按量价（0.1–0.25 元/页），每个数字的推导都写在 `sources.json` 里。直接导入即可跑通报价：
+
+```bash
+python manage.py import_price_book knowledge-seed/price-book-2026-11/prices.csv
+```
+
+它们按真实条目导入（`is_sample=False`），但名称与分类都带「参考价」，会一路显示到导出的报价页上；换成公司真价后把这些行停用即可。
+
 CSV 表头：`sku,name,unit_price,effective_from[,category,unit,currency]`。同一 `(sku, effective_from)` 已存在则跳过；**改价请用更晚的生效日期新增一行**，不要覆盖——旧报价单靠旧行解释自己。任何一行非法（负价、日期格式错、缺字段）整批拒绝，不会半途写入。
 
 占位条目一律带 `DEMO-` 前缀，就是为了不被当成真价发出去。
