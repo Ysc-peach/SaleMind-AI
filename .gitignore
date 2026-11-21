@@ -39,6 +39,10 @@ htmlcov/
 # negation below cannot match.
 knowledge-seed/*/*
 !knowledge-seed/*/sources.json
+# A derived price book is our own data, not third-party document text, so it is
+# tracked: the numbers and the method are what a reader needs to judge them.
+!knowledge-seed/price-book-*/prices.csv
+!knowledge-seed/price-book-*/README.md
 
 # Superpowers execution workspace
 .superpowers/
