@@ -9,8 +9,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.sales.api.permissions import SolutionDraftPermission
-from apps.sales.models import Competitor, Quote, SolutionDraftRecord
+from apps.sales.models import Competitor, Opportunity, Quote, SolutionDraftRecord
 from apps.sales.services import quotes as quote_service
+from apps.sales.services.case_appendix import build_case_section
+from apps.sales.services.case_studies import match_cases
 from apps.sales.services.competitor_appendix import build_comparison_appendix
 from apps.sales.services.quote_document import build_quote_section
 from apps.sales.services.quotes import QuoteError, QuoteErrorCode
@@ -32,6 +34,29 @@ MIMES = {'pdf':'application/pdf','docx':'application/vnd.openxmlformats-officedo
 
 
 MAX_APPENDIX_COMPETITORS = 5
+MAX_APPENDIX_CASES = 3
+
+
+def _case_section(request, solution_id: int):
+    """The related-cases page is opt-in and only meaningful when an industry exists."""
+
+    wanted = (request.query_params.get("cases") or "").strip().lower()
+    if wanted not in {"1", "true", "yes"}:
+        return ()
+    opportunity = (
+        Opportunity.objects.select_related("customer")
+        .filter(solution_drafts__pk=solution_id)
+        .first()
+    )
+    if opportunity is None:
+        raise NotFound()
+    industry = (opportunity.customer.industry or "").strip()
+    if not industry:
+        # Without an industry there is no "related"; a generic list would read
+        # like a match that was never made.
+        return ()
+    cases = match_cases(industry=industry, limit=MAX_APPENDIX_CASES)
+    return build_case_section(cases)
 
 
 def _quote_section(request, solution_id: int):
@@ -107,9 +132,10 @@ class SolutionExportAPIView(APIView):
                 raise SolutionExportError('solution_export_unsupported_format')
             appendix = _comparison_appendix(request)
             quote_section = _quote_section(request, solution_id)
+            case_section = _case_section(request, solution_id)
             try:
                 document = build_export_document(
-                    snapshot, appendix, quote_section
+                    snapshot, appendix, quote_section, case_section
                 )
                 content = render_export(document,file_type=file_type)
             except SolutionExportError:

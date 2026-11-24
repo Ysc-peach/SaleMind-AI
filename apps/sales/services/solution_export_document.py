@@ -42,6 +42,7 @@ def build_export_document(
     snapshot: ExportSnapshot,
     appendix: tuple[DocumentSection, ...] = (),
     quote_section: tuple[DocumentSection, ...] = (),
+    case_section: tuple[DocumentSection, ...] = (),
 ) -> ExportDocument:
     """The approved draft, plus optional appendices built from approved data.
 
@@ -66,6 +67,8 @@ def build_export_document(
     sections = _v1(snapshot.domain) if isinstance(snapshot.domain,SolutionDraft) else _v2(snapshot.domain)
     if quote_section:
         sections = (*sections, *quote_section)
+    if case_section:
+        sections = (*sections, *case_section)
     if appendix:
         sections = (*sections, *appendix)
     return ExportDocument(snapshot.title,metadata,DISCLAIMER,sections,sources)
