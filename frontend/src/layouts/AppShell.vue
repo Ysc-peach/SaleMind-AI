@@ -29,6 +29,7 @@ const nav = computed<NavItem[]>(() => auth.user?.role === 'sales' ? [
   {to:'/cases',label:'案例库'},
   {to:'/competitors',label:'竞品库'},
   {to:'/audit',label:'审计'},
+  {to:'/team',label:'团队'},
 ])
 onMounted(loadPendingReviews)
 // Reviews are decided elsewhere, so refresh the badge whenever the user moves
