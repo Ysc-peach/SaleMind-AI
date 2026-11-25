@@ -69,6 +69,11 @@ class KnowledgeDocument(models.Model):
         default="",
     )
     error_message = models.TextField(_("错误信息"), blank=True, default="")
+    # Orthogonal to status, which describes the indexing pipeline. This says
+    # whether the document may still influence retrieval: a wrong upload is
+    # archived rather than deleted, because approved facts and past drafts point
+    # at it and deleting would orphan their provenance.
+    is_active = models.BooleanField(_("是否启用"), default=True)
     embedding_provider = models.CharField(
         _("向量提供方"),
         max_length=64,
@@ -147,7 +152,12 @@ class KnowledgeDocument(models.Model):
                 name="knowledge_document_ready_has_last_indexed_at",
             ),
         ]
-        indexes = [models.Index(fields=["status", "document_type"])]
+        indexes = [
+            models.Index(fields=["status", "document_type"]),
+            # Retrieval always asks for active, ready documents; the pair is the
+            # filter every search applies.
+            models.Index(fields=["is_active", "status"], name="knowledge_doc_active_idx"),
+        ]
         verbose_name = _("知识库文档")
         verbose_name_plural = _("知识库文档")
 

@@ -10,6 +10,8 @@ document_collection_view = KnowledgeDocumentViewSet.as_view(
 )
 document_detail_view = KnowledgeDocumentViewSet.as_view({"get": "retrieve"})
 document_reindex_view = KnowledgeDocumentViewSet.as_view({"post": "reindex"})
+document_archive_view = KnowledgeDocumentViewSet.as_view({"post": "archive"})
+document_restore_view = KnowledgeDocumentViewSet.as_view({"post": "restore"})
 
 
 urlpatterns = [
@@ -22,6 +24,16 @@ urlpatterns = [
         "knowledge/documents/<int:pk>/reindex/",
         document_reindex_view,
         name="knowledge-document-reindex",
+    ),
+    path(
+        "knowledge/documents/<int:pk>/archive/",
+        document_archive_view,
+        name="knowledge-document-archive",
+    ),
+    path(
+        "knowledge/documents/<int:pk>/restore/",
+        document_restore_view,
+        name="knowledge-document-restore",
     ),
     path(
         "knowledge/documents/<int:pk>/",

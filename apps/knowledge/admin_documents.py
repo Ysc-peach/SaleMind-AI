@@ -1,9 +1,11 @@
 """Read-only document Admin with explicit, separately authorized operations."""
 from urllib.parse import urlencode
 
-from django.contrib import admin
+from django.contrib import admin, messages
+from django.core.exceptions import PermissionDenied
 from django.db.models import Count, F, OuterRef, Q, Subquery
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.html import format_html
 
 from .models import GroundingFactExtractionAttempt
@@ -49,11 +51,16 @@ class FactExtractionAttemptInline(admin.TabularInline):
 
 
 class KnowledgeDocumentAdmin(DocumentOperationsMixin, admin.ModelAdmin):
-    list_display = ('title', 'document_type', 'status', 'extraction_overview', 'fact_review_link')
-    list_filter = ('status', 'document_type')
+    list_display = (
+        'title', 'document_type', 'status', 'is_active',
+        'extraction_overview', 'fact_review_link',
+    )
+    list_filter = ('status', 'document_type', 'is_active')
     search_fields = ('title', 'original_filename')
     ordering = ('-created_at', '-pk')
-    actions = None
+    # Two reversible operations, so they are actions rather than a review page:
+    # neither one touches the file, the chunks or any approved fact.
+    actions = ('archive_selected_documents', 'restore_selected_documents')
     inlines = (FactExtractionAttemptInline,)
     fields = ('title', 'document_type', 'original_filename', 'mime_type', 'file_size',
               'status', 'indexing_error', 'chunk_count', 'last_indexed_at', 'created_by', 'created_at',
@@ -76,6 +83,35 @@ class KnowledgeDocumentAdmin(DocumentOperationsMixin, admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+    def _require_reviewer(self, request):
+        # `permissions=[]` on an action skips Django's own check, so the module's
+        # reviewer rule is enforced here instead of being silently dropped.
+        if not actor_can_review_grounding_facts(request.user):
+            raise PermissionDenied
+
+    @admin.action(description='停用选中的文档（不再参与检索）', permissions=[])
+    def archive_selected_documents(self, request, queryset):
+        self._require_reviewer(request)
+        archived = queryset.filter(is_active=True).update(
+            is_active=False, updated_at=timezone.now()
+        )
+        self.message_user(
+            request,
+            f'已停用 {archived} 份文档：它们不再被检索引用；'
+            '已批准事实与已生成的方案不受影响。',
+            messages.SUCCESS,
+        )
+
+    @admin.action(description='恢复选中的文档', permissions=[])
+    def restore_selected_documents(self, request, queryset):
+        self._require_reviewer(request)
+        restored = queryset.filter(is_active=False).update(
+            is_active=True, updated_at=timezone.now()
+        )
+        self.message_user(
+            request, f'已恢复 {restored} 份文档，它们重新参与检索。', messages.SUCCESS
+        )
 
     def get_queryset(self, request):
         latest = GroundingFactExtractionAttempt.objects.filter(

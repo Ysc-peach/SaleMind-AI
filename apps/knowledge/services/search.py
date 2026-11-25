@@ -39,6 +39,9 @@ def search_knowledge(
 
     chunks = KnowledgeChunk.objects.select_related("document").filter(
         document__status=KnowledgeDocument.Status.READY,
+        # An archived document is out of retrieval everywhere at once: search
+        # API, RAG answers and solution generation all read through here.
+        document__is_active=True,
         document__embedding_provider=active_provider.provider_name,
         document__embedding_model=active_provider.model_name,
         document__embedding_dimensions=active_provider.dimensions,

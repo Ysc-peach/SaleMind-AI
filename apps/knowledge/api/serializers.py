@@ -42,6 +42,7 @@ class KnowledgeDocumentReadSerializer(serializers.ModelSerializer):
             "mime_type",
             "file_size",
             "status",
+            "is_active",
             "error_code",
             "error_message",
             "embedding_provider",

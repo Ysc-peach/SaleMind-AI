@@ -2,6 +2,7 @@
 
 from django.conf import settings
 from rest_framework import mixins, status, viewsets
+from rest_framework.exceptions import NotFound
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -79,7 +80,20 @@ class KnowledgeDocumentViewSet(
     scoped_throttle_actions = {
         "create": "knowledge_write",
         "reindex": "knowledge_write",
+        "archive": "knowledge_write",
+        "restore": "knowledge_write",
     }
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        # Archived documents stay readable by id, but a listing that still shows
+        # them would look like archiving did nothing.
+        include = (
+            self.request.query_params.get("include_inactive") or ""
+        ).strip().lower() in {"1", "true", "yes"}
+        if not include:
+            queryset = queryset.filter(is_active=True)
+        return queryset
 
     def get_serializer_class(self):
         if getattr(self, "action", None) == "create":
@@ -123,6 +137,27 @@ class KnowledgeDocumentViewSet(
             )
             raise KnowledgeAPIError(error, status_code=error_status) from None
 
+        output = KnowledgeDocumentReadSerializer(
+            document,
+            context=self.get_serializer_context(),
+        )
+        return Response(output.data, status=status.HTTP_200_OK)
+
+    def archive(self, request, *args, **kwargs):
+        return self._set_active(request, False)
+
+    def restore(self, request, *args, **kwargs):
+        return self._set_active(request, True)
+
+    def _set_active(self, request, active: bool):
+        # Looked up without the active filter on purpose: restoring an archived
+        # document would otherwise answer 404 and look like a broken feature.
+        document = KnowledgeDocument.objects.filter(pk=self.kwargs["pk"]).first()
+        if document is None:
+            raise NotFound()
+        if document.is_active != active:
+            document.is_active = active
+            document.save(update_fields=["is_active", "updated_at"])
         output = KnowledgeDocumentReadSerializer(
             document,
             context=self.get_serializer_context(),

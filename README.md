@@ -28,7 +28,7 @@ Sales 维护商机与客户需求；Presales 负责技术判断和审核。`APPR
 
 - JWT 登录及 `admin / sales / presales` 业务权限，商机按所有者或指派关系隔离。
 - 十个固定需求维度及 `known / unknown / unclear / conflict` 状态；分析历史不可覆盖。
-- 企业文档解析、分块、BGE-M3 向量索引、pgvector 检索与来源引用。
+- 企业文档解析、分块、BGE-M3 向量索引、pgvector 检索与来源引用；文档可**停用**（退出检索而保留文件与历史事实）。
 - Grounding Facts 的提议、人工审批、索引失效与来源有效性校验。
 - 三段 bounded generation 与 generation-only Minimal Semantic IR，避免让模型生成数据库 ID、最终结构枚举或持久化对象。
 - 原子 claim registry、语义化组件名称、独立的依赖/请求流/数据流、阶段/验收/里程碑关联。
@@ -292,6 +292,20 @@ ALERT_EMAIL_TO=ops@example.internal,sre@example.internal    # 复用上面的 EM
 还没做的是「让案例成为可引用的证据」：准入模块要求 sources 严格是 `S1..Sn` 且提案只能引用已批准事实，把案例塞进同一条链会放松「证据不足就拒绝」这条规则。真要做得单开一轮改判据并重跑全部拒绝用例，不是顺手能加的。
 
 前端入口：侧边栏「案例库」（三种角色都能进，只有售前与管理员看得到写操作）。商机详情页的「概览」还会按**客户行业**列出最接近的 5 条案例——按相似度排序，因此近似的也会出现；不可对外引用的案例在列表里显示为「匿名客户」。
+
+### 知识库文档停用
+
+传错文件的正确处置是**停用**，不是删除：`EnterpriseGroundingFact` 与已生成的方案都指向该文档，删掉等于在 provenance 上打洞。
+
+```
+POST /api/knowledge/documents/{id}/archive/     # 退出检索
+POST /api/knowledge/documents/{id}/restore/     # 重新参与检索
+```
+
+- **一个过滤点覆盖全部**：检索入口 `search_knowledge()` 多了一个 `document__is_active=True`，因此搜索接口、RAG 回答、方案生成三条路径同时生效，不会出现"某处还能引到"；
+- **历史仍然可读**：按 id 打开、已批准事实、既有方案的來源引用都不受影响；只是**新的**生成不会再检索到它；
+- **Admin 里两键操作**：文档列表多一列「是否启用」，勾选后执行「停用选中的文档 / 恢复选中的文档」；文件、分块、事实一条都不动；
+- 列表默认只返回启用文档，`?include_inactive=1` 可看全部（该接口本来就只对管理员开放）。
 
 ### 竞品与公开陈述
 
